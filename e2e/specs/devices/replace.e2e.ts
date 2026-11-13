@@ -45,23 +45,30 @@ describe(`a new computer replaces one that is gone, phase ${PHASE}`, () => {
       expect(backup.manifest).toBe("written");
       expect(Number(backup.conversations)).toBeGreaterThan(0);
     } else if (PHASE === "b") {
-      // Refused while A is listed, and A is named.
-      const refused = await invokeLong<unknown>("vault_restore_conversations", {}, 300_000).then(() => "", (e) => String(e));
-      console.log(`e2e: first restore: ${refused.slice(0, 240)}`);
-      expect(refused).toContain("siblings_hold_data:");
-      const rest = refused.slice(refused.indexOf("siblings_hold_data:") + "siblings_hold_data:".length);
-      let list: { id: string; name: string | null }[] = [];
-      for (let end = rest.indexOf("]"); end >= 0; end = rest.indexOf("]", end + 1)) {
-        try { list = JSON.parse(rest.slice(0, end + 1)); break; } catch { /* not complete yet */ }
-      }
-      console.log(`e2e: named: ${JSON.stringify(list)}`);
-      expect(list.length).toBe(1);
-      // "A is gone: restore here": stop waiting for it, then the restore again.
-      await invoke("line_stop_waiting", { device: list[0].id });
-      const stats = await invokeLong<Record<string, number>>("vault_restore_conversations", {}, 600_000);
-      console.log(`e2e: restore after stopping the wait ${JSON.stringify(stats).slice(0, 300)}`);
-      expect(stats.conversations_restored).toBeGreaterThan(0);
-      expect(stats.missing_objects ?? 0).toBe(0);
+      // As a person does it: Settings > Backups & recovery > "Restore
+      // conversations from Vault". Refused while A is listed, and A is named
+      // on the one button that goes on: "<A> is gone: restore here".
+      await browser.url("tauri://localhost/settings/");
+      const restore = await $('[data-testid="restore-conversations"]');
+      await restore.waitForExist({ timeout: 120_000, timeoutMsg: "Settings never showed Restore conversations from Vault" });
+      await restore.scrollIntoView();
+      await restore.click();
+      await (await $('[data-testid="confirm-ok"]')).waitForDisplayed({ timeout: 10_000 });
+      await (await $('[data-testid="confirm-ok"]')).click();
+      const gone = await $('[data-testid="gone-restore-here"]');
+      await gone.waitForDisplayed({ timeout: 300_000, timeoutMsg: "the restore was not refused with a way on (no \"is gone: restore here\" button)" });
+      const label = (await gone.getText()).trim();
+      console.log(`e2e: the button reads: ${label}`);
+      expect(label).toMatch(/ is gone: restore here$/);
+      await gone.scrollIntoView();
+      await shot("replace-b-gone-offer");
+      // The button stops waiting for A and runs the same restore again.
+      await gone.click();
+      await browser.waitUntil(async () => !(await $('[data-testid="gone-restore-here"]').isExisting()), { timeout: 30_000, timeoutMsg: "the offer stayed after it was taken" });
+      await browser.waitUntil(async () => !(await (await $('[data-testid="restore-conversations"]')).getText()).includes("Restoring"), { timeout: 600_000, interval: 5_000, timeoutMsg: "the restore never finished" });
+      const stopped = await invoke<{ stopped_waiting: string[] }>("line_status");
+      console.log(`e2e: no longer waited for: ${JSON.stringify(stopped.stopped_waiting)}`);
+      expect(stopped.stopped_waiting.length).toBe(1);
       await browser.waitUntil(() => inOwnRecords("Replace test"), { timeout: 300_000, interval: 10_000, timeoutMsg: "A's conversation never reached B's own records" });
       console.log("e2e: A's conversation is in B's own records");
       await shot("replace-b-restored");

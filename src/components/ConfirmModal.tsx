@@ -73,6 +73,7 @@ export default component$<ConfirmModalProps>(
             </LiquidMetalButton>
             <LiquidMetalButton
               variant={danger ? "danger" : "primary"}
+              testId="confirm-ok"
               onClick$={onConfirm$}
               disabled={busy}
               class="px-4 py-2 text-sm"

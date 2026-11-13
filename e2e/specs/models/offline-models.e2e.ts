@@ -172,6 +172,7 @@ describe("offline models", () => {
     await browser.waitUntil(async () => (await source()) === "Automatic", { timeout: 5_000 });
     await shot("49-tune-automatic");
     await saveAndClose();
+    console.log(`e2e: kept after going back to automatic: ${JSON.stringify(await invoke("tuning_get", { model }))}`);
     await browser.waitUntil(async () => !(await rowDetail(model)).includes("fine-tuned"), {
       timeout: 30_000,
       timeoutMsg: "the row still said fine-tuned after going back to automatic",

@@ -76,7 +76,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Settings > Devices names a computer that is still on an older version
   of Your Own AI (with How to update), and one that is still moving. For
   a computer you no longer have, Stop waiting for this computer; its
-  conversations stay here.
+  conversations stay here. The wait starts again only when that computer
+  writes something new.
 - Backups, restores, imports and joining a computer that you used before
   signing in all work during and after the move. Backups keep their
   names, so the history is not uploaded again.
@@ -132,6 +133,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   background service is still starting.
 
 ### Models
+- Fine-tune: a model's row on the Offline Models page shows a saved change
+  at once. A change saved within a few seconds of opening the page showed
+  only after the page was opened again.
 - **Granite 4.0 Tiny drives projects** (Codes with you), on the evidence
   of a new set of project tasks every chat model is tested on.
 - Codes with you picks only from the models that can drive projects.
@@ -233,7 +237,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   engine starts on a free port instead. Before, Your Own AI stopped that
   program to take the port, or, when it could not, sent every message to it
   and answered with empty replies. Only Your Own AI's own engine is ever
-  restarted.
+  restarted, and nothing is sent to port 8080 while Your Own AI has no
+  engine of its own running there.
 
 ## [0.9.0] - 2026-10-22
 

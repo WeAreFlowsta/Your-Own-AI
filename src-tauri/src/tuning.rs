@@ -179,8 +179,10 @@ pub async fn tuning_set(app: AppHandle, model: String, tuning: ModelTuning) -> R
         all.insert(model.clone(), tuning);
     }
     let p = path(&app).ok_or("cannot resolve app data dir")?;
-    std::fs::write(&p, serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("cannot write {}: {e}", p.display()))
+    let written = std::fs::write(&p, serde_json::to_string_pretty(&all).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("cannot write {}: {e}", p.display()));
+    crate::fit::forget_assessment();
+    written
 }
 
 #[tauri::command]

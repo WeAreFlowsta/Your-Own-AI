@@ -55,7 +55,9 @@ prelink() {  # <home> <port> <label>
   folder="$(python3 -c 'import sys,base64,hashlib; k=sys.argv[1][1:]; raw=base64.urlsafe_b64decode(k+"="*(-len(k)%4)); print(hashlib.sha256(raw).hexdigest()[:16])' "$vkey")"
   local prof
   for prof in "$home/.local/share/com.solar.yourowai/profiles/$folder" "$home/.local/share/com.solar.yourowai/profiles/local"; do
-    mkdir -p "$prof"; printf '{"link_done":true,"app_link_key":"%s"}\n' "$key" > "$prof/flowsta-auth.json"
+    # Signed in as well as linked (the identity's key, as a sign-in stores
+    # it): Settings offers "Restore conversations from Vault" only then.
+    mkdir -p "$prof"; printf '{"link_done":true,"app_link_key":"%s","agent_pub_key":"%s"}\n' "$key" "$vkey" > "$prof/flowsta-auth.json"
   done
   dev "$port" "{\"op\":\"connect\",\"client_id\":\"$CID\",\"app_name\":\"Your Own AI ($label)\",\"origin\":\"yoai://app\",\"app_agent_pub_key\":\"$key\"}" >/dev/null
 }
