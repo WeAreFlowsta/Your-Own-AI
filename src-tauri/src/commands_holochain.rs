@@ -1974,6 +1974,9 @@ async fn written_elsewhere_07(app: &tauri::AppHandle, manager: &crate::holochain
 static ARRIVED: std::sync::Mutex<std::collections::BTreeMap<String, (u32, u32, std::time::Instant)>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
 const ARRIVED_KEPT: std::time::Duration = std::time::Duration::from_secs(120);
 
+/// See `conversation_arrival` (debug builds only).
+const TEST_ARRIVING_HASH: &str = "uhCkkArrivalWaitTest";
+
 #[tauri::command]
 pub async fn conversation_arrival(
     app: tauri::AppHandle,
@@ -1981,6 +1984,12 @@ pub async fn conversation_arrival(
     conversation_hash: String,
     hc_state: State<'_, Arc<HolochainState>>,
 ) -> Result<ConversationArrival, String> {
+    // A debug build's UI test (e2e/specs/models/arrival-wait.e2e.ts): one
+    // made-up conversation reads as written on another device with three
+    // messages still to arrive, so the wait is seen without a second device.
+    if cfg!(debug_assertions) && conversation_hash == TEST_ARRIVING_HASH {
+        return Ok(ConversationArrival { listed: 3, not_here: 3, device: Some("Test computer".into()), elsewhere: true, copy_label: None, copy_device: None });
+    }
     // The read that just opened it counted both.
     let counted = ARRIVED.lock().ok().and_then(|h| h.get(&conversation_hash).filter(|(_, _, at)| at.elapsed() < ARRIVED_KEPT).map(|(l, n, _)| (*l, *n)));
     let manager = hc_state.get()?;
