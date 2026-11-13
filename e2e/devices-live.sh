@@ -161,6 +161,9 @@ for d in A B; do
   echo "== device $d: marker $([ -n "$marker" ] && echo present || echo "absent (a release before the move has none)"); passes:"
   { cat "$logs"/*.log 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '\[0\.7\] pass: ' | sed -E 's/.*\[0\.7\] /   /' | head -6; } || true
 done
+# B joined an identity that already had its chains on A: neither device's
+# conductors may have forked a chain or lost a chain head doing it.
+e2e/no-fork-check.sh "$A" "$B" || { echo "FAIL: a conductor reported a fork or a moved chain head (above)" >&2; exit 1; }
 echo "== all four phases passed; profiles kept at $ROOT"
 
 # DEVICES_TWINS=1: the household whose two computers each hold both copies of

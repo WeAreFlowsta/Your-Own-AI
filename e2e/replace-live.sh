@@ -100,4 +100,7 @@ echo "   B's Vault holds A's backup; A is not started again"
 run b "$THIS" "$B" "$P2" e2e/specs/devices/replace.e2e.ts REPLACE_PHASE=b
 sed -E 's/\x1b\[[0-9;]*m//g' "$B"/.local/share/com.solar.yourowai/logs/*.log > "$LOGS/b-all.log"
 grep -E "before the first start|\[lines\]|restoring the one held for|\[restore\] [0-9]+ conversation" "$LOGS/b-all.log" | head -6 | sed 's/^/   /' || true
+# The restore wrote A's conversations into B's own records: no chain of B's
+# may have forked or lost its head doing it, on either line.
+e2e/no-fork-check.sh "$A" "$B" || fail "a conductor reported a fork or a moved chain head (above)"
 echo "== a new computer replaced one that is gone: passed (logs kept at $LOGS)"

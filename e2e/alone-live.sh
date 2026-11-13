@@ -126,4 +126,5 @@ launch 5 "$(pwd)" e2e/specs/alone/alone.e2e.ts ALONE_PHASE=restore ALONE_MIN_CON
 [ "$(lines_said 5)" = "0.7 leads" ] || fail "launch 5: a reinstall on an identity that has moved started '$(lines_said 5)', not on 0.7 alone"
 grep -q "before the first start: 0 other device(s) read from the Vault" "$LOGS/launch-5.log" || grep -m2 "before the first start" "$LOGS/launch-5.log" >&2
 grep -oE "e2e: after the restore: [0-9]+ conversation\(s\) listed, [0-9]+ expected" "$LOGS/launch-5.out" | sed 's/^/   launch 5: /'
+e2e/no-fork-check.sh "$H" || { echo "FAIL: a conductor reported a fork or a moved chain head (above)" >&2; exit 1; }
 echo "== one computer with a Vault, the update, the stop and 0.7 alone: passed (logs kept at $LOGS)"
