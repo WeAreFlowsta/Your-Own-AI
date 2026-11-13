@@ -565,6 +565,12 @@ static WEBVIEW_FIX: std::sync::OnceLock<flowsta_hc_lines::webview::Outcome> = st
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Started as the library's stop helper (`--hc-lines-interrupt <pid>`,
+    // Windows): raise Ctrl-C in that sidecar's console and exit, before
+    // anything of the app starts. Otherwise this notes that the executable
+    // can be that helper, and a conductor is asked to shut down before it
+    // is ended on Windows too.
+    flowsta_hc_lines::process::interrupt_helper_or_continue();
     // First, before anything starts a thread: on Linux with the NVIDIA driver
     // loaded, WebKitGTK 2.52 segfaults on a page change when NVIDIA's EGL
     // draws the window. The fix sets one or two environment variables for
