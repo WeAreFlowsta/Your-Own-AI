@@ -497,6 +497,7 @@ export default component$<FlowstaAccountProps>((props) => {
       {goneOffer.value && (
         <button
           type="button"
+          data-testid="gone-restore-here"
           class="mb-4 rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
           onClick$={handleGone}
         >
@@ -936,6 +937,7 @@ export default component$<FlowstaAccountProps>((props) => {
               variant="secondary"
               class="px-3 py-1.5 text-xs"
               disabled={restoreDataBusy.value}
+              testId="restore-conversations"
               onClick$={() => (confirmAction.value = "restore_data")}
             >
               {restoreDataBusy.value
@@ -968,6 +970,7 @@ export default component$<FlowstaAccountProps>((props) => {
             {goneOffer.value && section === "backups" && (
               <button
                 type="button"
+                data-testid="gone-restore-here"
                 class="mt-2 rounded-full border border-[var(--border-subtle)] px-5 py-2 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:border-[var(--text-muted)]"
                 onClick$={handleGone}
               >
