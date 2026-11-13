@@ -547,6 +547,13 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
         }
     }
     if backup_only {
+        // The same test build can make the install itself fail, so the
+        // notice's words for that are seen without stopping a conductor
+        // (e2e/specs/locked/vault-closed.e2e.ts).
+        if std::env::var_os("YOAI_TEST_UPDATE_INSTALL_FAILS").is_some() {
+            log::warn!("[update] the install failed (the test build was asked to fail it)");
+            return Err("the install failed (the test build was asked to fail it)".into());
+        }
         return Ok(());
     }
     let data_dir = device_root(&app);
