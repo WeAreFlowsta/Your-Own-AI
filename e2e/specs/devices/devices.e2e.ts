@@ -262,8 +262,17 @@ describe(`devices, phase ${PHASE}`, () => {
           const hit = items.find((d) => d.innerText.includes("Devices test") && d.getAttribute("data-copy") === "1");
           (hit?.querySelector("button") as HTMLElement | null)?.click();
         });
-        await (await $('[data-testid="chat-readonly-reason"]')).waitForDisplayed({ timeout: 60_000 });
-        console.log("e2e: not in the drawer within a minute - the copy is open read-only; waiting for it to open by itself");
+        // Read-only with its reason, or already B's own: the record can
+        // arrive while the copy is being fetched from the Vault (it did,
+        // 2026-11-13: 15 s after the click), and then no reason ever shows.
+        await browser.waitUntil(
+          async () =>
+            (await $('[data-testid="chat-readonly-reason"]').isDisplayed().catch(() => false)) ||
+            ((await browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length)) > 0 &&
+              (await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")) !== "false"),
+          { timeout: 120_000, interval: 1_000, timeoutMsg: "the copy opened neither read-only nor as B's own conversation" },
+        );
+        console.log("e2e: not in the drawer within a minute - the copy was opened; waiting for it to be B's own");
         await browser.waitUntil(
           async () =>
             !(await $('[data-testid="chat-readonly-reason"]').isExisting()) &&

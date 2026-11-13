@@ -40,6 +40,17 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - On Linux, installing asks for your computer's password.
 - A copy installed with the Windows Installer (MSI) says when a new
   version is out and does not replace itself.
+- "Restart to update" does not wait for a Vault backup when nothing has
+  been written on this computer since the last complete one, also when
+  the app was closed in between. On a long-used profile that wait was
+  several minutes, or the full fifteen.
+- A Vault backup no longer lists the conversations of an AI nothing was
+  written to since its last backup, and starting the app no longer
+  counts as a change. On a long-used profile each backup spent minutes
+  listing every conversation, also when nothing had changed.
+- Each Holochain version the app ships is set aside in the app's data
+  folder (about 45 MB), so a later version of Your Own AI can still open
+  what an older one wrote, with no download.
 - Setup no longer asks about updates; Settings has the switch.
 - Restart to update backs up to your Vault before it installs, and does
   not make you wait for a backup that has nothing new to save. When one
@@ -158,6 +169,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- A starter AI that showed twice (on computers linked before 0.9.1) is one
+  AI again: one entry in every list, with the conversations and the
+  memory of both. Every computer of yours picks the same one, and nothing
+  is deleted. An AI you renamed or gave new instructions stays its own.
 - **A message sent in a new install's first half minute is kept.** While
   the AIs were still being set up, a message could be answered without
   being saved as a conversation. It now waits in the box and is sent as

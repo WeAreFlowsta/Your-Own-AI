@@ -308,8 +308,8 @@ export function initConversationNotes(): Promise<void> {
         const raw = localStorage.getItem(LAST_CONVERSATION_KEY);
         const p = raw ? JSON.parse(raw) : null;
         if (p && typeof p.hash === "string") {
-          const { getLocalCustomAis } = await import("./localAiStorage");
-          const mine = (await getLocalCustomAis()).some((ai) => ai.agentPubKey === p.agentKey);
+          const { getStoredCustomAis } = await import("./localAiStorage");
+          const mine = (await getStoredCustomAis()).some((ai) => ai.agentPubKey === p.agentKey);
           if (mine) {
             localStorage.setItem(scoped(LAST_CONVERSATION_KEY)!, raw!);
             localStorage.removeItem(LAST_CONVERSATION_KEY);

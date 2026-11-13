@@ -111,6 +111,147 @@ pub(crate) fn starter_slots(list: &[serde_json::Value]) -> Vec<Option<u64>> {
         .collect()
 }
 
+/// The settings of an AI that follow the newest edit when twins fold: the
+/// synced fields less the three that make it the AI it is (those are equal
+/// in a group by definition) and its status.
+const FOLDED_SETTINGS: &[&str] = &["description", "emoji", "askBlurb", "lengthDisposition", "defaultMode", "useEmojis", "skills", "mcp", "mcpOff", "skillsOff", "sampling"];
+
+/// The starter an AI is, by its personality (a retired duplicate id counts
+/// as its twin).
+fn starter_of(ai: &serde_json::Value) -> Option<&'static str> {
+    let base = ai["baseArchetypeId"].as_str()?;
+    let base = RETIRED_STARTER_IDS.iter().find(|(old, _)| *old == base).map(|(_, twin)| *twin).unwrap_or(base);
+    STARTER_ARCHETYPES.iter().find(|a| **a == base).copied()
+}
+
+/// Whether two entries are one AI to the person: the same starter under the
+/// same name, and either neither was ever edited or their instructions are
+/// the same.
+fn same_ai(a: &serde_json::Value, b: &serde_json::Value) -> bool {
+    starter_of(a).is_some()
+        && starter_of(a) == starter_of(b)
+        && a["name"].as_str().is_some()
+        && a["name"] == b["name"]
+        && ((updated_at(a) == 0 && updated_at(b) == 0) || a["systemPrompt"] == b["systemPrompt"])
+}
+
+fn is_active(ai: &serde_json::Value) -> bool {
+    ai["status"].as_str().map(|s| s == "active").unwrap_or(true)
+}
+
+/// Starter AIs that stand twice become one. A household that added its
+/// second computer before a joining device's starters folded into the
+/// identity's (0.9.0 to 0.9.1-beta.7) has two real AIs per starter, each
+/// with its own founding key, on every device. Of each group that is one AI
+/// to the person (`same_ai`), the one with the smallest founding key leads,
+/// on every device alike; each other takes `foldedInto: <the leader's
+/// founding key>`. A folded twin stays in the list with its cell, so the
+/// move, the backup and the restore treat it as before; what the person
+/// sees leaves it out, and the leader's lists and memory read it too
+/// (`folded_into`). The newest settings of the group go to the leader.
+/// An entry that no longer belongs to a group (renamed, new instructions)
+/// loses the mark. Returns how many marks changed.
+pub(crate) fn fold_twins(list: &mut [serde_json::Value]) -> u32 {
+    let mut changed = 0u32;
+    let mut lead_of: Vec<Option<String>> = vec![None; list.len()];
+    for i in 0..list.len() {
+        if !is_active(&list[i]) || founding_of(&list[i]).is_none() {
+            continue;
+        }
+        let group: Vec<usize> = (0..list.len()).filter(|j| is_active(&list[*j]) && founding_of(&list[*j]).is_some() && same_ai(&list[i], &list[*j])).collect();
+        if group.len() < 2 {
+            continue;
+        }
+        let leader = *group.iter().min_by_key(|j| founding_of(&list[**j]).unwrap_or_default()).expect("not empty");
+        if i == leader {
+            // The starter's place in the list (a per-device stamp the twin
+            // may hold alone) goes with the AI the person sees.
+            if list[leader]["seedSlot"].is_null() {
+                if let Some(slot) = group.iter().find_map(|j| list[*j]["seedSlot"].as_u64()) {
+                    list[leader]["seedSlot"] = serde_json::json!(slot);
+                }
+            }
+            // The newest settings of the group, once per group.
+            let newest = *group.iter().max_by_key(|j| updated_at(&list[**j])).expect("not empty");
+            if newest != leader && updated_at(&list[newest]) > updated_at(&list[leader]) {
+                let from = list[newest].clone();
+                for f in FOLDED_SETTINGS {
+                    match from.get(*f) {
+                        Some(v) => list[leader][*f] = v.clone(),
+                        None => {
+                            if let Some(obj) = list[leader].as_object_mut() {
+                                obj.remove(*f);
+                            }
+                        }
+                    }
+                }
+                list[leader]["updatedAt"] = from["updatedAt"].clone();
+            }
+        } else {
+            lead_of[i] = founding_of(&list[leader]);
+        }
+    }
+    for (ai, lead) in list.iter_mut().zip(lead_of) {
+        let now = ai["foldedInto"].as_str().map(String::from);
+        if now != lead {
+            match lead {
+                Some(l) => ai["foldedInto"] = serde_json::json!(l),
+                None => {
+                    if let Some(obj) = ai.as_object_mut() {
+                        obj.remove("foldedInto");
+                    }
+                }
+            }
+            changed += 1;
+        }
+    }
+    changed
+}
+
+/// `fold_twins` on a stored list, and what a new fold brings with it on this
+/// device: the documents the twin may read, the leader may read; a picture
+/// the person gave the twin shows on a leader that has none of its own; and
+/// the leader's search and recall index is rebuilt once, so it takes in the
+/// twin's earlier conversations. Returns how many marks changed.
+pub(crate) fn fold_and_carry(app: &tauri::AppHandle, list: &mut [serde_json::Value]) -> u32 {
+    let already: std::collections::HashSet<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["id"].as_str().map(String::from)).collect();
+    let changed = fold_twins(list);
+    if changed == 0 {
+        return 0;
+    }
+    let thumb_dir = crate::profile::root(app).ok().map(|r| r.join("thumbnails"));
+    let mut new_folds = 0;
+    for twin in list.iter().filter(|ai| ai["foldedInto"].is_string()) {
+        let (Some(twin_id), Some(lead_founding)) = (twin["id"].as_str(), twin["foldedInto"].as_str()) else { continue };
+        if already.contains(twin_id) {
+            continue;
+        }
+        let Some(leader_id) = list.iter().find(|ai| !ai["foldedInto"].is_string() && founding_of(ai).as_deref() == Some(lead_founding)).and_then(|ai| ai["id"].as_str()) else { continue };
+        new_folds += 1;
+        match crate::corpus::share_grants(app, twin_id, leader_id) {
+            Ok(n) if n > 0 => log::info!("[config-sync] {} document(s) its twin could read, {} can read", n, twin["name"].as_str().unwrap_or("the AI")),
+            Ok(_) => {}
+            Err(e) => log::warn!("[config-sync] the twin's documents could not be shared: {e}"),
+        }
+        if let Some(dir) = &thumb_dir {
+            if has_own_picture(dir, twin_id) && !has_own_picture(dir, leader_id) && std::fs::copy(dir.join(format!("{twin_id}.jpg")), dir.join(format!("{leader_id}.jpg"))).is_ok() {
+                mark_picture(dir, leader_id, false);
+            }
+        }
+    }
+    if new_folds > 0 {
+        crate::vault_escrow::set_reembed_pending(app);
+    }
+    let names: Vec<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
+    log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", changed, names.len(), names.join(", "));
+    changed
+}
+
+/// The entries folded into the AI whose founding key is `leader`.
+pub(crate) fn folded_into<'a>(list: &'a [serde_json::Value], leader: &str) -> Vec<&'a serde_json::Value> {
+    list.iter().filter(|ai| ai["foldedInto"].as_str() == Some(leader)).collect()
+}
+
 /// Merge one sibling's AI list into ours. Returns the merged list, how many
 /// were updated, how many added, and (sibling id → local id) for every AI
 /// that was updated or added - the key the sibling's thumbnails are under.
@@ -774,14 +915,45 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
         crate::line_facts::take_round(&root, seen)?;
     }
     save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
-    if total_updated + total_added > 0 {
+    // Starters that stand twice (a second computer added before joins
+    // folded) become one, the same one on every device.
+    let folded = fold_and_carry(app, &mut local);
+    if total_updated + total_added + folded > 0 {
         store.set("custom-ais", serde_json::json!(local));
         store.save().map_err(|e| e.to_string())?;
-        log::info!("[config-sync] AIs from the other devices: {} updated, {} added", total_updated, total_added);
-        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added }));
+        if total_updated + total_added > 0 {
+            log::info!("[config-sync] AIs from the other devices: {} updated, {} added", total_updated, total_added);
+        }
+        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": total_updated, "added": total_added, "folded": folded }));
     }
     *LAST_STAMPS.lock().unwrap() = Some(stamps);
     Ok((total_updated, total_added))
+}
+
+/// Fold the stored list's twins with no other device asked: the doubles are
+/// in this device's own list, and the other computer may be off or gone.
+/// Returns how many marks changed.
+pub(crate) fn fold_stored_twins(app: &tauri::AppHandle) -> Result<u32, String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store(crate::profile::store_path(app, "ai-data.json")).map_err(|e| e.to_string())?;
+    let mut list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => return Ok(0),
+    };
+    let folded = fold_and_carry(app, &mut list);
+    if folded > 0 {
+        store.set("custom-ais", serde_json::json!(list));
+        store.save().map_err(|e| e.to_string())?;
+        let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "folded": folded }));
+    }
+    Ok(folded)
+}
+
+/// `fold_stored_twins` now (the start of the app, tests).
+#[tauri::command]
+pub fn fold_twins_now(app: tauri::AppHandle) -> Result<u32, String> {
+    fold_stored_twins(&app)
 }
 
 /// One round now (Settings, tests). The same answer the background round
@@ -805,6 +977,10 @@ pub fn start_config_sync_rounds(app: &tauri::AppHandle) {
         loop {
             tokio::time::sleep(wait).await;
             wait = std::time::Duration::from_secs(60);
+            // With or without a Vault: this device's own list.
+            if let Err(e) = fold_stored_twins(&app) {
+                log::warn!("[config-sync] the stored AIs could not be checked for twins: {e}");
+            }
             if flowsta::find_vault().await.port.is_none() {
                 continue;
             }
@@ -913,6 +1089,91 @@ mod tests {
         // A second round finds them by founding key and adds nothing.
         let (again, _, added, _) = merge_sibling_configs(merged, &sibling);
         assert_eq!((again.len(), added), (3, 0));
+    }
+
+    #[test]
+    fn starters_that_stand_twice_become_one_under_the_smaller_founding_key() {
+        use super::{fold_twins, folded_into};
+        let starter = |id: &str, founding: &str, base: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "baseArchetypeId": base, "name": name, "systemPrompt": "p", "status": "active" });
+        // This device's own Veebo and Teresa, and the other device's, each
+        // provisioned here under an agent of its own.
+        let mut list = vec![
+            starter("b-veebo", "b-veebo", "veebo", "Veebo"),
+            starter("b-teresa", "b-teresa", "teresa", "Teresa"),
+            starter("k1", "a-veebo", "veebo", "Veebo"),
+            starter("k2", "a-teresa", "mhJ4WU8bn34In1lJUuHH", "Teresa"),
+        ];
+        assert_eq!(fold_twins(&mut list), 2);
+        assert_eq!(list[0]["foldedInto"], "a-veebo", "the smaller founding key leads");
+        assert_eq!(list[1]["foldedInto"], "a-teresa", "a retired duplicate id is its twin");
+        assert!(list[2].get("foldedInto").is_none() && list[3].get("foldedInto").is_none());
+        assert_eq!(folded_into(&list, "a-veebo").len(), 1);
+        // The starter's place in the list goes to the AI the person sees.
+        let mut stamped = vec![
+            { let mut t = starter("b-veebo", "b-veebo", "veebo", "Veebo"); t["seedSlot"] = serde_json::json!(1); t },
+            starter("k1", "a-veebo", "veebo", "Veebo"),
+        ];
+        fold_twins(&mut stamped);
+        assert_eq!(stamped[1]["seedSlot"], 1);
+        // The other device, holding the same four under its own agents,
+        // makes the same choice.
+        let mut other = vec![
+            starter("a-veebo", "a-veebo", "veebo", "Veebo"),
+            starter("a-teresa", "a-teresa", "teresa", "Teresa"),
+            starter("k3", "b-veebo", "veebo", "Veebo"),
+            starter("k4", "b-teresa", "teresa", "Teresa"),
+        ];
+        fold_twins(&mut other);
+        assert_eq!(other[2]["foldedInto"], "a-veebo");
+        assert_eq!(other[3]["foldedInto"], "a-teresa");
+        // A second round changes nothing.
+        assert_eq!(fold_twins(&mut list), 0);
+    }
+
+    #[test]
+    fn a_twin_that_was_made_its_own_ai_stays_and_a_fold_is_undone_when_it_becomes_one() {
+        use super::{fold_twins, folded_into};
+        let starter = |id: &str, name: &str, prompt: &str, updated: i64| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": name, "systemPrompt": prompt, "updatedAt": updated, "status": "active" });
+        // Renamed on one computer: two AIs.
+        let mut renamed = vec![starter("a", "Veebo", "p", 0), starter("b", "Max", "p", 5)];
+        assert_eq!(fold_twins(&mut renamed), 0);
+        // New instructions under the old name: two AIs.
+        let mut rewritten = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "be brief", 5)];
+        assert_eq!(fold_twins(&mut rewritten), 0);
+        // Only a setting changed (the instructions are the same): one AI.
+        let mut setting = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "p", 5)];
+        assert_eq!(fold_twins(&mut setting), 1);
+        // An archived twin is left alone, and so is its pair.
+        let mut archived = vec![starter("a", "Veebo", "p", 0), { let mut t = starter("b", "Veebo", "p", 0); t["status"] = serde_json::json!("archived"); t }];
+        assert_eq!(fold_twins(&mut archived), 0);
+        // Folded, then renamed (its edit arrives from the other device): the mark goes.
+        let mut list = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "p", 0)];
+        fold_twins(&mut list);
+        assert_eq!(list[1]["foldedInto"], "a");
+        list[1]["name"] = serde_json::json!("Max");
+        assert_eq!(fold_twins(&mut list), 1);
+        assert!(list[1].get("foldedInto").is_none());
+        // Two AIs of the person's own making on one base are never starters' twins unless they are the same AI.
+        let custom = |id: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "reeves", "name": name, "systemPrompt": name, "updatedAt": 3, "status": "active" });
+        let mut customs = vec![custom("s", "Sterling"), custom("n", "Newstalicious")];
+        assert_eq!(fold_twins(&mut customs), 0);
+    }
+
+    #[test]
+    fn the_newest_settings_of_a_folded_group_go_to_the_leader() {
+        use super::{fold_twins, folded_into};
+        let starter = |id: &str, updated: i64, length: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": "Veebo", "systemPrompt": "p", "updatedAt": updated, "lengthDisposition": length, "model": format!("{id}.gguf"), "status": "active" });
+        let mut list = vec![starter("a", 10, "conversational"), starter("b", 20, "brief")];
+        fold_twins(&mut list);
+        assert_eq!(list[1]["foldedInto"], "a");
+        assert_eq!(list[0]["lengthDisposition"], "brief", "the twin's newer setting");
+        assert_eq!(list[0]["updatedAt"], 20);
+        assert_eq!(list[0]["model"], "a.gguf", "the model file is per device and per entry");
+        assert_eq!(list[0]["foundingKey"], "a");
+        // The leader's own newer setting stays.
+        let mut list = vec![starter("a", 30, "conversational"), starter("b", 20, "brief")];
+        fold_twins(&mut list);
+        assert_eq!(list[0]["lengthDisposition"], "conversational");
     }
 
     #[test]

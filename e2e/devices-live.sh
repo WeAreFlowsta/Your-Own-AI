@@ -9,6 +9,7 @@
 # DEVICES_VAULT_WRAP: a command the two test Vaults start under (e.g. their
 # own memory scope: `systemd-run --user --scope -q -p MemoryMax=4G`), so a
 # Vault conductor that grows fails the run, not the desktop.
+# DEVICES_TWINS=1: after the four phases, the doubled-starters phases e and f.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE/.."
@@ -161,3 +162,61 @@ for d in A B; do
   { cat "$logs"/*.log 2>/dev/null | sed -E 's/\x1b\[[0-9;]*m//g' | grep -E '\[0\.7\] pass: ' | sed -E 's/.*\[0\.7\] /   /' | head -6; } || true
 done
 echo "== all four phases passed; profiles kept at $ROOT"
+
+# DEVICES_TWINS=1: the household whose two computers each hold both copies of
+# a starter (linked before a joining device's starters folded into the
+# identity's). With both apps stopped, each stored list is given what such
+# a household has: on B, its own starter founded on itself again, and a copy
+# of A's; on A, a copy of B's. Then specs/devices/twins.e2e.ts, phases e and f.
+[ "${DEVICES_TWINS:-}" = 1 ] || exit 0
+TWINS_NAME="${TWINS_NAME:-Teresa}"
+planted="$(python3 - "$A" "$B" "$TWINS_NAME" <<'PY'
+import glob, json, sys
+a_home, b_home, name = sys.argv[1:4]
+def load(home):
+    for path in glob.glob(home + "/.local/share/com.solar.yourowai/profiles/*/ai-data.json"):
+        d = json.load(open(path))
+        raw = d.get("custom-ais")
+        ais = json.loads(raw) if isinstance(raw, str) else (raw or [])
+        if any(x.get("name") == name and x.get("agentPubKey") for x in ais):
+            return path, d, ais, isinstance(raw, str)
+    raise SystemExit("no stored list holds " + name + " under " + home)
+def save(path, d, ais, as_text):
+    d["custom-ais"] = json.dumps(ais) if as_text else ais
+    json.dump(d, open(path, "w"))
+KEEP = ("name", "description", "baseArchetypeId", "systemPrompt", "emoji", "askBlurb", "status", "lengthDisposition", "defaultMode", "useEmojis")
+pa, da, aa, ta = load(a_home)
+pb, db, ab, tb = load(b_home)
+mine_a = next(x for x in aa if x.get("name") == name)
+mine_b = next(x for x in ab if x.get("name") == name)
+fa = mine_a.get("foundingKey") or mine_a["agentPubKey"]
+kb = mine_b["agentPubKey"]
+if mine_b.get("foundingKey") != fa:
+    raise SystemExit("B's %s is not the identity's (founded %s, A's is %s)" % (name, mine_b.get("foundingKey"), fa))
+copy = lambda src, founding: dict({k: src[k] for k in KEEP if k in src}, id=founding, foundingKey=founding, model="auto:offline")
+mine_b["foundingKey"] = kb
+ab.append(copy(mine_a, fa))
+aa.append(copy(mine_b, kb))
+save(pa, da, aa, ta); save(pb, db, ab, tb)
+print(min(fa, kb), kb)
+PY
+)"
+read -r TWINS_LEADER TWINS_OWN_AGENT <<< "$planted"
+[ -n "${TWINS_OWN_AGENT:-}" ] || { echo "the doubled starters could not be written into the stored lists"; exit 1; }
+export TWINS_NAME TWINS_LEADER TWINS_OWN_AGENT TWINS_STAMP="$(date +%s)"
+echo "== twins: both stored lists hold two ${TWINS_NAME}s; ${TWINS_LEADER:0:14} should lead on both"
+
+echo "== phase e: A unattended, B driven: B stands them as one and writes under its own copy"
+env "${a_auth[@]}" YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$A_TREE/e2e/launch-app.sh" > "$LOGS/device-a-phase-e.log" 2>&1 &
+for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
+curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device A never came up for phase e"; exit 1; }
+(cd "$B_TREE" && FLOWSTA_AUTH_MATERIAL="$B_AUTH" YOAI_E2E_LONG=1 YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 TWINS_PHASE=e node e2e/run.mjs models --spec e2e/specs/devices/twins.e2e.ts)
+killA; gone || { echo "device A did not stop after phase e"; exit 1; }
+
+echo "== phase f: B unattended, A driven: A stands them as one, and lists what B wrote under the other copy"
+FLOWSTA_AUTH_MATERIAL="$B_AUTH" YOAI_E2E_HOME="$B" YOAI_VAULT_PORT="$P2" YOAI_E2E_WITH_MODELS=1 YOAI_E2E_MODELS_DIR="$LOGS/no-models" YOAI_E2E_WITH_RENDEZVOUS=1 TAURI_WEBDRIVER_PORT=4446 "$B_TREE/e2e/launch-app.sh" > "$LOGS/device-b-phase-f.log" 2>&1 &
+for _ in $(seq 1 60); do curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' && break; sleep 2; done
+curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || { echo "device B never came up for phase f"; exit 1; }
+(cd "$A_TREE" && env "${a_auth[@]}" YOAI_E2E_LONG=1 YOAI_E2E_HOME="$A" YOAI_VAULT_PORT="$P1" YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1 TWINS_PHASE=f node e2e/run.mjs models --spec e2e/specs/devices/twins.e2e.ts)
+killB; gone || true
+echo "== doubled starters: one AI on both devices, the same one; B's conversation under its own copy shows on A"

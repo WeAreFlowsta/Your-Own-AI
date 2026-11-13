@@ -846,7 +846,8 @@ async fn vault_escrow_sync_inner(app: &tauri::AppHandle) -> EscrowStatus {
             Err(e) => EscrowStatus::error(e),
         },
         Ok(Some(ref m)) if *m == local => {
-            schedule_full_backup(app);
+            // Nothing was written: the check that a backup is there.
+            schedule_backup_check(app);
             EscrowStatus::state("synced")
         }
         Ok(Some(_)) => {
@@ -1591,7 +1592,7 @@ pub(crate) async fn island_merge_start(app: &tauri::AppHandle, identity: &Recove
     // A refusal says which step refused, in the log: the join's caller shows
     // the person a plain line, and the reason used to be nowhere.
     let expected = count_local_conversations(app).await.map_err(|e| { log::warn!("[escrow] island: this device's conversations could not be counted: {e}"); e })?;
-    let (convs, _carried) = collect_conversations(app).await.map_err(|e| { log::warn!("[escrow] island: this device's conversations could not be read: {e}"); e })?;
+    let (convs, _carried) = collect_conversations(app, false).await.map_err(|e| { log::warn!("[escrow] island: this device's conversations could not be read: {e}"); e })?;
     if convs.len() as u64 != expected {
         log::warn!("[escrow] island: {} of {} conversation(s) read; nothing is swapped", convs.len(), expected);
         return Err(format!("island_export_incomplete:{}/{}", convs.len(), expected));
@@ -1841,6 +1842,91 @@ fn load_last_index(app: &tauri::AppHandle) -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// The AIs whose conversations a pass listed, and nothing written to since:
+/// agent → what the list was. A pass lists such an AI from the previous
+/// backup without asking its cell (a person's Linux box, 11-11: one AI's
+/// 1,046 conversations took 14 minutes to list, none of them read).
+const CELLS_LISTED_FILE: &str = "backup-cells-listed.json";
+
+/// A listing holds for a day at most, so what only another device wrote
+/// (seen here when its list is next read) is never missed for longer.
+const CELL_LISTING_HOLDS_SECS: u64 = 24 * 60 * 60;
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct CellListed {
+    /// The AI's founding key: a write by any of its cells ends the listing.
+    founding: String,
+    /// The local list of its conversations, as it was (`list_fingerprint`).
+    fingerprint: String,
+    at_secs: u64,
+}
+
+fn cells_listed_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|d| d.join(CELLS_LISTED_FILE))
+}
+
+fn load_cells_listed(app: &tauri::AppHandle) -> std::collections::HashMap<String, CellListed> {
+    cells_listed_path(app)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_cells_listed(app: &tauri::AppHandle, cells: &std::collections::HashMap<String, CellListed>) {
+    if let (Some(p), Ok(json)) = (cells_listed_path(app), serde_json::to_string(cells)) {
+        let _ = std::fs::write(p, json);
+    }
+}
+
+/// Pure: what is left of the listings after a write by `agent`, whose AI's
+/// founding key is `founding`.
+pub(crate) fn listings_after_write(mut cells: std::collections::HashMap<String, CellListed>, agent: &str, founding: &str) -> std::collections::HashMap<String, CellListed> {
+    cells.retain(|a, c| a != agent && c.founding != founding && c.founding != agent);
+    cells
+}
+
+/// Something was written through `agent_key`'s cell: its AI is listed
+/// again by the next pass.
+fn note_cell_written(app: &tauri::AppHandle, agent_key: &str) {
+    let cells = load_cells_listed(app);
+    if cells.is_empty() {
+        return;
+    }
+    let founding = crate::commands_holochain::founding_key_for(app, agent_key);
+    let left = listings_after_write(cells.clone(), agent_key, &founding);
+    if left.len() != cells.len() {
+        save_cells_listed(app, &left);
+    }
+}
+
+/// Something was written and its AI is not known here: every AI is listed
+/// again by the next pass.
+fn note_every_cell_written(app: &tauri::AppHandle) {
+    if let Some(p) = cells_listed_path(app) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// The local list of an AI's conversations as one value: which there are,
+/// when each was last continued, and what each is called.
+pub(crate) fn list_fingerprint(list: &[crate::commands_holochain::ConversationInfo]) -> String {
+    use sha2::Digest as _;
+    let mut rows: Vec<String> = list
+        .iter()
+        .map(|c| format!("{}\t{}\t{}\t{}", c.hash, c.started_at, c.last_active_at.unwrap_or(0), c.title.as_deref().unwrap_or("")))
+        .collect();
+    rows.sort();
+    hex::encode(sha2::Sha256::digest(rows.join("\n").as_bytes()))
+}
+
+/// Pure: a listing still stands for an AI when nothing was written to it
+/// since (its record is still there), its local list is as it was, and the
+/// listing is no older than `max_age_secs`.
+pub(crate) fn listing_holds(prev: Option<&CellListed>, founding: &str, fingerprint: &str, now_secs: u64, max_age_secs: u64) -> bool {
+    prev.map(|c| c.founding == founding && c.fingerprint == fingerprint && c.at_secs <= now_secs && now_secs - c.at_secs <= max_age_secs)
+        .unwrap_or(false)
+}
+
 /// When a pass last left every conversation covered (read in full or
 /// listed from a stamped entry), in micros. Written only by such a pass.
 const FULL_READ_FILE: &str = "backup-full-read-at";
@@ -1868,7 +1954,11 @@ fn save_last_index(app: &tauri::AppHandle, index: &[serde_json::Value]) {
 /// entries of any agent whose cell could not be read this time (a cell
 /// past what one read returns in time). One unreadable cell used to fail
 /// the whole backup, for weeks, silently except for a log line.
-async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle>, Vec<serde_json::Value>), String> {
+///
+/// `listings_stand`: an AI nothing was written to since a pass last listed
+/// it is carried from the previous backup without asking its cell. Off for
+/// a caller that needs the conversations themselves (the island's join).
+async fn collect_conversations(app: &tauri::AppHandle, listings_stand: bool) -> Result<(Vec<ConvBundle>, Vec<serde_json::Value>), String> {
     let hc = app
         .try_state::<Arc<HolochainState>>()
         .ok_or("holochain state missing")?;
@@ -1917,6 +2007,9 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
     // A conversation listed through two cells (two generations of one AI
     // both read its founding key) is backed up once.
     let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut cells_listed = load_cells_listed(app);
+    let previous_index = if listings_stand && !cells_listed.is_empty() { load_last_index(app) } else { Vec::new() };
+    let mut listings_kept = 0usize;
     for (agent_key, installed_app_id, source) in agents {
         let started = std::time::Instant::now();
         // Where this AI's conversations are listed: its founding key, where
@@ -1927,6 +2020,26 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         // list that stops part way counts as unread, so a partial list never
         // drops conversations from the backup.
         let founding = crate::commands_holochain::founding_key_for(app, &agent_key);
+        let cached_list = crate::conversation_cache::read_cache(app, &agent_key).unwrap_or_default();
+        let fingerprint = list_fingerprint(&cached_list);
+        if listings_stand && listing_holds(cells_listed.get(&agent_key), &founding, &fingerprint, unix_now_secs(), CELL_LISTING_HOLDS_SECS) {
+            // Its entries in the previous backup stand as they are. Every
+            // conversation of its local list must be among them, or the
+            // cell is asked after all (a list that grew with no write here).
+            let mine: Vec<&serde_json::Value> = previous_index.iter().filter(|e| e["role_name"].as_str() == Some(installed_app_id.as_str())).collect();
+            let labels: std::collections::HashSet<&str> = mine.iter().filter_map(|e| e["label"].as_str()).collect();
+            let label_of = |hash: &str| format!("conv-{}", &hash[..hash.len().min(24)]);
+            if cached_list.iter().all(|c| labels.contains(label_of(&c.hash).as_str()) && sync.contains_key(&label_of(&c.hash))) {
+                for c in &cached_list {
+                    listed.insert(c.hash.clone());
+                }
+                log::info!("[escrow] {}: nothing written since it was last listed - its {} conversation(s) stand as backed up", installed_app_id, mine.len());
+                carried.extend(mine.into_iter().cloned());
+                listings_kept += 1;
+                continue;
+            }
+        }
+        let unread_before = conv_unreadable;
         let mut conv_records: Vec<Sealed> = match list_sealed(&manager, &key, &agent_key, &founding, &source).await {
             Ok(r) => r,
             Err(e) => {
@@ -1951,11 +2064,7 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
         // activity stamp; its start is then its last activity (every turn
         // the app records touches the stamp).
         let activity: std::collections::HashMap<String, i64> =
-            crate::conversation_cache::read_cache(app, &agent_key)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|c| (c.hash, c.last_active_at.unwrap_or(c.started_at)))
-                .collect();
+            cached_list.iter().map(|c| (c.hash.clone(), c.last_active_at.unwrap_or(c.started_at))).collect();
         let mut unchanged_skipped = 0usize;
         let mut read_here = 0usize;
         let mut stalled_in_a_row = 0u32;
@@ -2105,6 +2214,22 @@ async fn collect_conversations(app: &tauri::AppHandle) -> Result<(Vec<ConvBundle
             installed_app_id,
             started.elapsed().as_secs()
         );
+        // Listed in full with nothing left unread, and the local list names
+        // exactly what the cell listed: the listing stands until something
+        // is written to this AI (`note_cell_written`) or a day has passed.
+        let cell_ids: std::collections::HashSet<&str> = conv_records.iter().map(|c| c.id.as_str()).collect();
+        let same_list = cached_list.len() == cell_ids.len() && cached_list.iter().all(|c| cell_ids.contains(c.hash.as_str()));
+        if conv_unreadable == unread_before && same_list {
+            cells_listed.insert(agent_key.clone(), CellListed { founding: founding.clone(), fingerprint: fingerprint.clone(), at_secs: unix_now_secs() });
+        } else {
+            cells_listed.remove(&agent_key);
+        }
+    }
+    if listings_stand {
+        save_cells_listed(app, &cells_listed);
+        if listings_kept > 0 {
+            log::info!("[escrow] {} AI(s) not listed again: nothing was written to them since their last listing", listings_kept);
+        }
     }
     if !unreadable.is_empty() {
         let previous = load_last_index(app);
@@ -2849,9 +2974,56 @@ pub(crate) struct Freshness {
 static CHANGES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static COVERED: std::sync::Mutex<Option<(u64, u64)>> = std::sync::Mutex::new(None);
 
-/// A change that wants a backup (every scheduling call counts one).
-fn note_change() {
+/// A change that wants a backup (every scheduling call counts one). It
+/// also leaves a mark in the profile that outlives the app: until a complete
+/// pass has covered it, the backup in the Vault is not this profile's
+/// latest (`settled_backup_age_secs`).
+fn note_change(app: &tauri::AppHandle) {
     CHANGES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if let Some(p) = backup_owed_path(app) {
+        if !p.exists() {
+            if let Err(e) = std::fs::write(&p, b"") {
+                log::warn!("[escrow] could not mark a backup as owed: {e}");
+            }
+        }
+    }
+}
+
+/// Present from the first write that wants a backup until a complete pass
+/// that began after it ends.
+const BACKUP_OWED_FILE: &str = "backup-owed";
+/// When the last complete pass with nothing owed after it finished (unix seconds).
+const BACKUP_SETTLED_FILE: &str = "backup-settled-at";
+
+fn backup_owed_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|d| d.join(BACKUP_OWED_FILE))
+}
+
+/// A complete pass ended having seen every change asked for so far: nothing
+/// is owed, and the time is kept.
+fn note_backup_settled(app: &tauri::AppHandle) {
+    let Ok(root) = crate::profile::root(app) else { return };
+    let _ = std::fs::write(root.join(BACKUP_SETTLED_FILE), unix_now_secs().to_string());
+    let _ = std::fs::remove_file(root.join(BACKUP_OWED_FILE));
+}
+
+/// Pure: nothing is owed and a complete pass is on record, no older than
+/// `max_age_secs`. Returns its age.
+pub(crate) fn settled_age(owed: bool, settled_at_secs: Option<u64>, now_secs: u64, max_age_secs: u64) -> Option<u64> {
+    let at = settled_at_secs.filter(|at| *at > 0 && *at <= now_secs)?;
+    let age = now_secs - at;
+    (!owed && age <= max_age_secs).then_some(age)
+}
+
+/// How long ago the last complete backup finished, when nothing has been
+/// written on this computer since (also across restarts of the app). A pass
+/// then would list every conversation to write nothing: on a long-used
+/// profile the list alone takes minutes (a person's Linux box, 11-11: 14
+/// minutes for one AI's 1,046 conversations, none read).
+pub(crate) fn settled_backup_age_secs(app: &tauri::AppHandle, max_age_secs: u64) -> Option<u64> {
+    let root = crate::profile::root(app).ok()?;
+    let at = std::fs::read_to_string(root.join(BACKUP_SETTLED_FILE)).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    settled_age(root.join(BACKUP_OWED_FILE).exists(), at, unix_now_secs(), max_age_secs)
 }
 
 pub(crate) fn freshness() -> Freshness {
@@ -2908,12 +3080,20 @@ pub async fn write_full_backup_with(app: &tauri::AppHandle, now: bool) -> Result
         }
     }
     let seen = CHANGES.load(Ordering::SeqCst);
+    let began_micros = unix_now_secs() as i64 * 1_000_000;
     let result = write_full_backup_inner(app, now).await;
     if let Ok(v) = &result {
         // A held pass wrote nothing and is not a backup of this moment.
         if v.get("skipped").is_none() {
             if let Ok(mut c) = COVERED.lock() {
                 *c = Some((seen, unix_now_secs()));
+            }
+            // Nothing asked for a backup while it ran, and the pass left
+            // nothing unread (its own marker, written at its end): the Vault
+            // holds this profile as it is now.
+            let read_everything = load_full_read_at(app).map(|at| at >= began_micros).unwrap_or(false);
+            if CHANGES.load(Ordering::SeqCst) == seen && read_everything {
+                note_backup_settled(app);
             }
         }
     }
@@ -2990,7 +3170,7 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
     // Belief vs truth before deciding what is unchanged: a conversation the
     // Vault no longer holds must be read and uploaded, not listed.
     reconcile_sync_state(app, port).await;
-    let (convs, carried) = collect_conversations(app).await?;
+    let (convs, carried) = collect_conversations(app, true).await?;
     // Conversations listed without a read are local conversations too: the
     // empty-device gate below must see them, or a pass that skipped every
     // unchanged conversation reads as an empty device and refuses to write
@@ -3069,10 +3249,32 @@ async fn write_full_backup_inner(app: &tauri::AppHandle, now: bool) -> Result<se
 
 /// Debounced trigger: transcript writes call this freely; one backup runs
 /// ~60s after the last write. Silent no-op when not linked / Vault away.
+/// The write's AI is not named, so every AI is listed again by that pass;
+/// a caller that knows the cell uses `schedule_full_backup_for`.
 pub fn schedule_full_backup(app: &tauri::AppHandle) {
+    note_change(app);
+    note_every_cell_written(app);
+    schedule_backup_pass(app);
+}
+
+/// As `schedule_full_backup`, for a write through `agent_key`'s cell: only
+/// that AI is listed again.
+pub fn schedule_full_backup_for(app: &tauri::AppHandle, agent_key: &str) {
+    note_change(app);
+    note_cell_written(app, agent_key);
+    schedule_backup_pass(app);
+}
+
+/// A pass in about a minute with nothing written: to make sure the Vault
+/// holds a backup (after the recovery material is checked at a start). It
+/// asks for no backup of its own: nothing becomes owed, no listing ends.
+pub fn schedule_backup_check(app: &tauri::AppHandle) {
+    schedule_backup_pass(app);
+}
+
+fn schedule_backup_pass(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
-    note_change();
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3102,7 +3304,7 @@ pub fn schedule_full_backup(app: &tauri::AppHandle) {
 pub fn schedule_ai_backup(app: &tauri::AppHandle) {
     use std::sync::atomic::{AtomicU64, Ordering};
     static GENERATION: AtomicU64 = AtomicU64::new(0);
-    note_change();
+    note_change(app);
     let my_gen = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3850,6 +4052,61 @@ mod network_decision_tests {
 #[cfg(test)]
 mod freshness_tests {
     use super::*;
+
+    #[test]
+    fn a_listing_stands_until_its_ai_is_written_to_its_list_changes_or_a_day_passes() {
+        let c = CellListed { founding: "F".into(), fingerprint: "fp".into(), at_secs: 1_000 };
+        assert!(listing_holds(Some(&c), "F", "fp", 1_000 + 86_400, 86_400));
+        assert!(!listing_holds(Some(&c), "F", "fp", 1_001 + 86_400, 86_400), "a day at most");
+        assert!(!listing_holds(Some(&c), "F", "other", 1_100, 86_400), "its local list changed");
+        assert!(!listing_holds(Some(&c), "G", "fp", 1_100, 86_400), "it folded into another AI");
+        assert!(!listing_holds(None, "F", "fp", 1_100, 86_400), "written to since, or never listed");
+        assert!(!listing_holds(Some(&c), "F", "fp", 900, 86_400), "a clock set back");
+    }
+
+    #[test]
+    fn a_write_ends_the_listing_of_every_cell_of_that_ai_and_of_no_other() {
+        let cell = |f: &str| CellListed { founding: f.into(), fingerprint: "fp".into(), at_secs: 1 };
+        let cells: std::collections::HashMap<String, CellListed> =
+            [("gen1".to_string(), cell("F")), ("gen2".to_string(), cell("F")), ("other".to_string(), cell("O")), ("F".to_string(), cell("F"))].into_iter().collect();
+        // A write by generation 2 of the AI founded as F.
+        let left = listings_after_write(cells.clone(), "gen2", "F");
+        assert_eq!(left.keys().collect::<Vec<_>>(), vec!["other"]);
+        // A write by an AI that is its own founder ends the listings founded on it.
+        let left = listings_after_write(cells, "F", "F");
+        assert_eq!(left.keys().collect::<Vec<_>>(), vec!["other"]);
+    }
+
+    #[test]
+    fn the_list_fingerprint_moves_with_a_new_conversation_a_new_turn_or_a_new_title() {
+        use crate::commands_holochain::ConversationInfo;
+        let conv = |hash: &str, active: Option<i64>, title: &str| {
+            let mut c: ConversationInfo = serde_json::from_value(serde_json::json!({
+                "hash": hash, "ai_personality_id": "a", "ai_personality_name": "A", "model_used": "m", "started_at": 5, "title": title, "source": null, "agent_key": "k"
+            })).expect("a list entry");
+            c.last_active_at = active;
+            c
+        };
+        let base = vec![conv("h1", None, "one"), conv("h2", Some(9), "two")];
+        let same_other_order = vec![conv("h2", Some(9), "two"), conv("h1", None, "one")];
+        assert_eq!(list_fingerprint(&base), list_fingerprint(&same_other_order));
+        assert_ne!(list_fingerprint(&base), list_fingerprint(&[base.clone(), vec![conv("h3", None, "three")]].concat()));
+        assert_ne!(list_fingerprint(&base), list_fingerprint(&vec![conv("h1", Some(7), "one"), conv("h2", Some(9), "two")]));
+        assert_ne!(list_fingerprint(&base), list_fingerprint(&vec![conv("h1", None, "renamed"), conv("h2", Some(9), "two")]));
+    }
+
+    #[test]
+    fn a_settled_backup_counts_until_something_is_written() {
+        // Nothing owed, a complete pass on record: its age, however long the app was closed.
+        assert_eq!(settled_age(false, Some(1_000), 1_000 + 3 * 86_400, 7 * 86_400), Some(3 * 86_400));
+        // A write since: owed, so a pass runs.
+        assert_eq!(settled_age(true, Some(1_000), 1_030, 7 * 86_400), None);
+        // Never backed up, an unreadable or future time, or older than the limit.
+        assert_eq!(settled_age(false, None, 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(0), 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(2_000), 1_000, 7 * 86_400), None);
+        assert_eq!(settled_age(false, Some(1_000), 1_001 + 7 * 86_400, 7 * 86_400), None);
+    }
 
     #[test]
     fn a_pass_that_just_finished_with_nothing_written_since_is_current() {

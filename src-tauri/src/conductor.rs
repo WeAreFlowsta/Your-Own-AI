@@ -651,6 +651,14 @@ impl LineHooks for YoaiLines {
     async fn joined(&self, line: Line, role: Role, _session: u64, admin_port: u16, app_port: u16) {
         self.emit(role, ConductorStatus::Ready { admin_port, app_port });
         log::info!("[{line}] Holochain conductor ready (admin: {}, app: {})", admin_port, app_port);
+        // Once a run, after a line is up: both lines' kits set aside for a
+        // later release that no longer bundles them (kits.rs).
+        if let Some(app) = &self.app {
+            match crate::profile::device_root(app) {
+                Ok(root) => crate::kits::refresh_once(root.clone(), crate::resolve_resource_dir(app, &root)),
+                Err(e) => log::warn!("[kit] no kits cached: {e}"),
+            }
+        }
         // The 0.6 line joined after the 0.7 one (0.7 leads, or 0.6 started
         // again for a device still on it): its coordinators and its agents'
         // connections, which a 0.6-led start does after the start, are done

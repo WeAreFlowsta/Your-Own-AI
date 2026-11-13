@@ -140,6 +140,48 @@ pub(crate) fn founding_from_list(ais: &[serde_json::Value], agent_key: &str) -> 
         .unwrap_or_else(|| agent_key.to_string())
 }
 
+/// The twins folded into the AI whose device agent is `agent_key` (two
+/// starters that are one AI to the person, `config_sync::fold_twins`): each
+/// twin's founding key and, when it has a cell here, its device agent. The
+/// AI's lists and memory read these too.
+pub(crate) fn folded_twins_for(app: &tauri::AppHandle, agent_key: &str) -> Vec<(String, Option<String>)> {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store(crate::profile::store_path(app, "ai-data.json")) else { return Vec::new() };
+    let list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    folded_twins_from_list(&list, agent_key)
+}
+
+/// The founding keys of the twins folded into the AI founded as `founding`.
+pub(crate) fn folded_foundings(app: &tauri::AppHandle, founding: &str) -> Vec<String> {
+    use tauri_plugin_store::StoreExt;
+    let Ok(store) = app.store(crate::profile::store_path(app, "ai-data.json")) else { return Vec::new() };
+    let list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    crate::config_sync::folded_into(&list, founding)
+        .into_iter()
+        .filter_map(|twin| twin["foundingKey"].as_str().or_else(|| twin["agentPubKey"].as_str()).filter(|f| !f.is_empty() && *f != founding).map(String::from))
+        .collect()
+}
+
+pub(crate) fn folded_twins_from_list(ais: &[serde_json::Value], agent_key: &str) -> Vec<(String, Option<String>)> {
+    let leader = founding_from_list(ais, agent_key);
+    crate::config_sync::folded_into(ais, &leader)
+        .into_iter()
+        .filter_map(|twin| {
+            let agent = twin["agentPubKey"].as_str().filter(|a| !a.is_empty()).map(String::from);
+            let founding = twin["foundingKey"].as_str().filter(|f| !f.is_empty()).map(String::from).or_else(|| agent.clone())?;
+            Some((founding, agent))
+        })
+        .collect()
+}
+
 /// Encrypted entry as stored in the zome (cipher + nonce).
 #[derive(Deserialize, Debug)]
 pub(crate) struct EncryptedEntryRaw {
@@ -450,7 +492,7 @@ pub async fn start_conversation(
         crate::hc07::write_start_conversation(&agent_key, &founding, key, &id, plain.clone()).await?;
         id
     };
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     // Write-through: the new conversation is visible in cached lists
     // immediately, even if full reads are struggling on a loaded box.
     crate::conversation_cache::append_to_cache(
@@ -663,7 +705,7 @@ pub async fn record_transcript_entry(
         PROJECT_MEMORY_CACHE.lock().await.clear();
     }
 
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     // The conversation was just continued: it moves to the top of the list.
     let at = now_micros();
     crate::conversation_cache::touch(&app, &conversation_hash, at);
@@ -747,7 +789,7 @@ pub async fn record_grounding_annotation(
         _ => record_on_07(&agent_key, key, &conversation_hash, &plain).await?,
     };
 
-    crate::vault_escrow::schedule_full_backup(&app);
+    crate::vault_escrow::schedule_full_backup_for(&app, &agent_key);
     Ok(id)
 }
 
@@ -1446,6 +1488,21 @@ pub async fn get_conversations(
         anchors.push(founding);
     }
     anchors.extend(lineage.iter().cloned());
+    // A twin folded into this AI: its conversations are this AI's too. They
+    // hang at the twin's founding key and at its own agents on this device.
+    let twins = folded_twins_for(&app, &agent_key);
+    for (twin_founding, twin_agent) in &twins {
+        if !anchors.contains(twin_founding) {
+            anchors.push(twin_founding.clone());
+        }
+        if let Some(agent) = twin_agent {
+            for generation in manager.agent_lineage(agent).await {
+                if !anchors.contains(&generation) {
+                    anchors.push(generation);
+                }
+            }
+        }
+    }
     let reader = if manager.is_provisioned(&agent_key).await { agent_key.clone() } else { lineage[0].clone() };
     let data_key = manager.data_key()?;
     // Deleted on either line, or here: hidden from both lines' lists.
@@ -1528,8 +1585,14 @@ pub async fn get_conversations(
     // conversation it was carried from (its id is that hash), so only what
     // exists on 0.7 alone is added. The 0.7 line hides its tombstoned ones.
     if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
-        let founding_hex = founding_key_for(&app, &agent_key);
-        if let Some(founding_key) = hex::decode(&founding_hex).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39) {
+        let mut founding_hexes = vec![founding_key_for(&app, &agent_key)];
+        for (twin_founding, _) in &twins {
+            if !founding_hexes.contains(twin_founding) {
+                founding_hexes.push(twin_founding.clone());
+            }
+        }
+        for founding_hex in founding_hexes {
+            let Some(founding_key) = hex::decode(&founding_hex).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::AgentPubKey::from_raw_39) else { continue };
             // A cold or stuck 0.7 conductor must not hold the list: its
             // websocket waits up to ten minutes for the long backup reads.
             let read = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().conversations_all_counted(&reader, &founding_key))
@@ -1537,7 +1600,7 @@ pub async fn get_conversations(
                 .unwrap_or_else(|_| Err("no answer within 60 s".to_string()));
             match read {
                 Ok((items, missing)) => {
-                    not_here_07 = Some(missing);
+                    not_here_07 = Some(not_here_07.unwrap_or(0) + missing);
                     for (view, _anchor) in items {
                         let Ok(ee) = view.entry_as::<EncryptedEntryRaw>() else { continue };
                         let Ok(plain_bytes) = crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher) else { continue };
@@ -2404,6 +2467,23 @@ mod order_tests {
 
 #[cfg(test)]
 mod founding_tests {
+    #[test]
+    fn the_twins_folded_into_an_ai_are_found_from_any_of_its_agents() {
+        let ais = vec![
+            serde_json::json!({ "id": "k-lead", "agentPubKey": "k-lead", "foundingKey": "f-lead", "name": "Veebo" }),
+            serde_json::json!({ "id": "k-twin", "agentPubKey": "k-twin", "foundingKey": "k-twin", "foldedInto": "f-lead", "name": "Veebo" }),
+            serde_json::json!({ "id": "f-far", "foundingKey": "f-far", "foldedInto": "f-lead", "name": "Veebo" }),
+            serde_json::json!({ "id": "k-other", "agentPubKey": "k-other", "name": "Teresa" }),
+        ];
+        assert_eq!(
+            super::folded_twins_from_list(&ais, "k-lead"),
+            vec![("k-twin".to_string(), Some("k-twin".to_string())), ("f-far".to_string(), None)],
+            "one with a cell here, one not given an agent yet"
+        );
+        assert!(super::folded_twins_from_list(&ais, "k-other").is_empty());
+        assert!(super::folded_twins_from_list(&ais, "k-twin").is_empty(), "a twin leads nothing");
+    }
+
     #[test]
     fn the_founding_key_is_the_record_s_or_the_agent_itself() {
         let ais = vec![

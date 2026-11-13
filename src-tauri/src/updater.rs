@@ -477,6 +477,11 @@ const BACKUP_BEFORE_INSTALL: Duration = Duration::from_secs(15 * 60);
 /// started, is not repeated before the install.
 const BACKUP_IS_CURRENT_FOR: Duration = Duration::from_secs(10 * 60);
 
+/// A complete backup with nothing written on this computer since counts for
+/// this long, also across restarts of the app. A week, not for ever: what
+/// only another device wrote is listed by a pass here too.
+const BACKUP_IS_SETTLED_FOR: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
 /// "Restart to update". The install runs off the main thread, so the window
 /// keeps drawing (and says each step, as `update-stage`) while the
 /// conductors stop and the package installs.
@@ -502,6 +507,12 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
                 // includes the pass this loop just waited for.
                 if let Some(age) = crate::vault_escrow::current_backup_age_secs(BACKUP_IS_CURRENT_FOR.as_secs()) {
                     log::info!("[update] the Vault backup is current (a pass finished {age} s ago and nothing was written since): not repeated");
+                    break Ok(serde_json::json!({ "current": true }));
+                }
+                // Nothing written on this computer since the last complete
+                // backup, whenever that was: the Vault holds this moment.
+                if let Some(age) = crate::vault_escrow::settled_backup_age_secs(&app, BACKUP_IS_SETTLED_FOR.as_secs()) {
+                    log::info!("[update] the Vault backup is complete (a pass finished {} min ago and nothing was written on this computer since): not repeated", age / 60);
                     break Ok(serde_json::json!({ "current": true }));
                 }
                 // The person's own moment: the manifest's ten-minute hold

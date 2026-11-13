@@ -32,6 +32,7 @@ mod holochain;            // Multi-agent manager
 mod transcript_crypto;    // User data key + per-user seed (Phase A privacy)
 mod transcript_ids;       // record ids, and the 0.7 line's anchors and keys derived from them
 mod hc07;                 // the transcript cells on the 0.7 line (DNA v2)
+mod kits;                 // the kit cache: each bundled Holochain line set aside for a later release
 mod move_07;              // the move of a profile's records to the 0.7 line
 mod line_facts;           // where each of the person's devices is on the move, and the 0.6 stop's facts
 mod watch;                // the lines' watch: dead conductors, offline starts, 0.7 memory
@@ -665,6 +666,7 @@ pub fn run() {
             config_sync::config_sync_status,
             config_sync::devices_view,
             config_sync::config_sync_now,
+            config_sync::fold_twins_now,
             line_facts::line_status,
             line_facts::line_stop_waiting,
             line_facts::line_wait_again,

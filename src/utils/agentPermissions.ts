@@ -95,6 +95,43 @@ export function setPermissionModeForTools(aiId: string, mode: AgentPermissionMod
   write(KEY_BY_TOOLS_AI, JSON.stringify(map));
 }
 
+const CAUTION: AgentPermissionMode[] = ["ask", "auto", "all"];
+
+/** Pure: the tools-in-chat choices after twins folded. For each (twin, leader)
+ *  the leader keeps the level the person chose for either; when both had one
+ *  and they differ, the more cautious. The twin's own entry goes, so a later
+ *  change to the leader is never pulled back by it. */
+export function foldedToolsModes(
+  map: Record<string, AgentPermissionMode>,
+  pairs: { twinId: string; leaderId: string }[],
+): Record<string, AgentPermissionMode> {
+  const out = { ...map };
+  for (const { twinId, leaderId } of pairs) {
+    const twin = asMode(out[twinId]);
+    if (!twin || twinId === leaderId) continue;
+    const leader = asMode(out[leaderId]);
+    out[leaderId] = leader ? CAUTION[Math.min(CAUTION.indexOf(leader), CAUTION.indexOf(twin))] : twin;
+    delete out[twinId];
+  }
+  return out;
+}
+
+/** Carry the tools-in-chat choices of folded twins to the AIs they are folded
+ *  into (`config_sync.rs` `fold_twins`): to the person there was only ever
+ *  one AI to choose a level for. `stored`: every stored AI. */
+export function carryToolsModesOfFoldedTwins(stored: { id: string; foundingKey?: string; agentPubKey?: string; foldedInto?: string }[]): void {
+  const pairs = stored
+    .filter((ai) => ai.foldedInto)
+    .map((twin) => ({ twinId: twin.id, leaderId: stored.find((ai) => !ai.foldedInto && (ai.foundingKey ?? ai.agentPubKey) === twin.foldedInto)?.id ?? "" }))
+    .filter((p) => p.leaderId);
+  if (!pairs.length) return;
+  const before = byToolsAi();
+  const after = foldedToolsModes(before, pairs);
+  if (JSON.stringify(before) !== JSON.stringify(after)) {
+    write(KEY_BY_TOOLS_AI, Object.keys(after).length ? JSON.stringify(after) : null);
+  }
+}
+
 /** One-line description per mode - the same words everywhere. */
 export const PERMISSION_MODE_COPY: Record<AgentPermissionMode, { label: string; hint: string }> = {
   ask: { label: "Ask every time", hint: "Your AI asks before every command and file change." },

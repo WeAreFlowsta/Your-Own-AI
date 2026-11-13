@@ -39,6 +39,10 @@ export interface UserDefinedAI {
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes
    *  there. Stamped once at first provisioning; carried across devices and restores; never edited. */
   foundingKey?: string;
+  /** Set on a twin of another AI (two starters that are one AI to the
+   *  person): the founding key of the AI it is folded into. Per device,
+   *  computed by the config sync; such an AI is stored but never listed. */
+  foldedInto?: string;
   /** ms epoch of the person's last edit to this AI (never set by seeding or by key changes) - the
    *  newest edit wins when the same AI is edited on two devices. */
   updatedAt?: number;

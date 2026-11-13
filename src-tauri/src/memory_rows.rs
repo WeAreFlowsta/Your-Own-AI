@@ -453,6 +453,22 @@ async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainMa
     let mut rows = raw_rows(manager, agent, anchor, &key).await?;
     // What an offline device's backup copy brought stays in the list.
     rows.extend(read_sealed_rows(siblings_path(app, scope), &key));
+    // One memory for an AI and the twins folded into it (two starters that
+    // are one AI to the person): the twin's rows are this AI's too. Each
+    // row keeps its own scope, so a revision of it is written where it is.
+    if let Some(founding) = scope.strip_prefix("ai:") {
+        for twin in crate::commands_holochain::folded_foundings(app, founding) {
+            let twin_scope = format!("ai:{twin}");
+            match scope_anchor(&twin_scope, &key) {
+                Ok(twin_anchor) => match raw_rows(manager, agent, twin_anchor, &key).await {
+                    Ok(more) => rows.extend(more),
+                    Err(e) => log::warn!("[memory] the rows of a folded twin could not be read ({e}); the rest is listed"),
+                },
+                Err(e) => log::warn!("[memory] a folded twin's scope has no anchor ({e})"),
+            }
+            rows.extend(read_sealed_rows(siblings_path(app, &twin_scope), &key));
+        }
+    }
     let reduced = reduce(rows);
     write_cache(app, &key, scope, &reduced);
     Ok(reduced)
