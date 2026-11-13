@@ -92,7 +92,29 @@ pub(crate) fn stamp_ms(s: &Option<String>) -> Option<i64> {
     s.as_deref().and_then(|v| v.trim_matches('"').parse::<i64>().ok())
 }
 
+/// A stamp as a moment on the clock, in ms. The Vault's list has carried
+/// seconds, milliseconds and microseconds over its versions: told apart by
+/// size.
+fn stamp_wall_ms(s: &Option<String>) -> Option<u64> {
+    let v = stamp_ms(s)?;
+    if v <= 0 {
+        return None;
+    }
+    let v = v as u64;
+    Some(if v < 100_000_000_000 { v * 1000 } else if v < 100_000_000_000_000 { v } else { v / 1000 })
+}
+
 impl Stamps {
+    /// Whether these stamps show the device wrote after `at_ms`, given the
+    /// stamps held before. A stamp that changed to a moment before `at_ms`
+    /// is something it wrote earlier and that only now arrived; one that
+    /// cannot be read as a moment counts as a write.
+    fn wrote_after(&self, before: &Stamps, at_ms: u64) -> bool {
+        [(&self.manifest_at, &before.manifest_at), (&self.ais_at, &before.ais_at), (&self.line_at, &before.line_at), (&self.escrow_at, &before.escrow_at)]
+            .into_iter()
+            .any(|(now, was)| now != was && now.is_some() && stamp_wall_ms(now).map_or(true, |t| t > at_ms))
+    }
+
     pub fn of(d: &crate::vault_escrow::SiblingDevice) -> Self {
         Stamps { manifest_at: d.manifest_at.clone(), ais_at: d.ais_at.clone(), line_at: d.line_at.clone(), escrow_at: d.escrow_at.clone() }
     }
@@ -212,16 +234,21 @@ impl LineFacts {
     }
 
     /// Take a round's view of the devices. A wait the person stopped ends
-    /// when that device's stamps change (it is back); a device no longer
-    /// listed keeps its stop.
+    /// when that device writes again after the stop (it is back). Something
+    /// it wrote before the stop and that arrives here afterwards is not a
+    /// return: the stop stays. A device no longer listed keeps its stop.
     pub fn take_round(&mut self, seen: Vec<KnownSibling>, now_ms: u64) -> Vec<String> {
         let mut resumed = Vec::new();
-        self.stopped_waiting.retain(|w| match seen.iter().find(|s| s.id == w.id) {
-            Some(s) if s.stamps != w.stamps => {
+        self.stopped_waiting.retain_mut(|w| match seen.iter().find(|s| s.id == w.id) {
+            Some(s) if s.stamps.wrote_after(&w.stamps, w.at_ms) => {
                 resumed.push(w.id.clone());
                 false
             }
-            _ => true,
+            Some(s) => {
+                w.stamps = s.stamps.clone();
+                true
+            }
+            None => true,
         });
         self.siblings = seen;
         self.checked_at_ms = now_ms;
@@ -709,6 +736,36 @@ mod tests {
         assert_eq!(f.take_round(vec![sib("aaaa", SiblingLine::OnOld, None, "200")], 4), vec!["aaaa".to_string()]);
         assert_eq!(f.holding().len(), 1);
         assert!(f.stop_waiting("nobody", 5).is_err());
+    }
+
+    /// The reattach live test, 2026-11-14: the other device was off, the
+    /// person stopped waiting for it, and its last backup (written two
+    /// minutes before the stop) reached this device's Vault a minute after
+    /// it. That read as "it is back" and the 0.6 line started again.
+    #[test]
+    fn a_backup_written_before_the_stop_and_arriving_after_it_is_not_a_return() {
+        let at = |manifest: &str, ais: Option<&str>| KnownSibling {
+            stamps: Stamps { manifest_at: Some(manifest.into()), ais_at: ais.map(Into::into), ..Default::default() },
+            ..sib("aaaa", SiblingLine::OnOld, None, manifest)
+        };
+        let stop_ms = 1_794_605_354_000; // the stop, on this device's clock
+        let mut f = LineFacts::default();
+        f.take_round(vec![at("1794605174", None)], stop_ms - 5_000);
+        f.stop_waiting("aaaa", stop_ms).unwrap();
+        // Its `ais` object, written 121 s before the stop, arrives now.
+        assert!(f.take_round(vec![at("1794605174", Some("1794605233"))], stop_ms + 51_000).is_empty());
+        assert!(f.holding().is_empty(), "still not waited for");
+        // The same view again: still stopped.
+        assert!(f.take_round(vec![at("1794605174", Some("1794605233"))], stop_ms + 81_000).is_empty());
+        // It starts and backs up after the stop: back. Seconds, milliseconds
+        // and microseconds all read as the same moment.
+        for later in ["1794605500", "1794605500000", "1794605500000000"] {
+            let mut g = f.clone();
+            assert_eq!(g.take_round(vec![at(later, Some("1794605233"))], stop_ms + 200_000), vec!["aaaa".to_string()], "{later}");
+            assert_eq!(g.holding().len(), 1);
+        }
+        // A stamp that is no moment at all counts as a write.
+        assert_eq!(f.clone().take_round(vec![at("soon", Some("1794605233"))], stop_ms + 200_000), vec!["aaaa".to_string()]);
     }
 
     #[test]
