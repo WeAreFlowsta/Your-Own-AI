@@ -190,6 +190,33 @@ describe(`devices, phase ${PHASE}`, () => {
       expect(await (await $('[data-testid="chat-send"]')).getAttribute("title")).toContain("read-only until it arrives");
       await shot("devices-b-read-only-composer");
 
+      // The same copy with this computer's Vault locked and its syncing
+      // stopped: the Vault cannot hand the copy over, so the page says so
+      // where the conversation would be, and opens it by itself once the
+      // Vault is unlocked.
+      const vaultPort = process.env.YOAI_VAULT_PORT;
+      if (vaultPort) {
+        const vaultPost = (path: string) => fetch(`http://127.0.0.1:${vaultPort}${path}`, { method: "POST", headers: { "content-type": "application/json", origin: "https://ourtest.flowsta.com" }, body: "{}" });
+        await (await $('[data-testid="new-chat"]')).click();
+        await (await $('button[title^="Conversations"]')).click();
+        const again = await $('[data-testid="conversation-item"][data-copy="1"]');
+        await again.waitForDisplayed({ timeout: 60_000 });
+        expect((await vaultPost("/dev/lock")).status).toBe(200);
+        await browser.waitUntil(async () => (await invoke<string>("vault_lock_kind")) === "stopped", { timeout: 60_000, interval: 2_000, timeoutMsg: "the Vault never read as locked with syncing stopped" });
+        await (await again.$("button")).click();
+        const waiting = await $('[data-testid="conversation-arriving"]');
+        await waiting.waitForDisplayed({ timeout: 180_000, timeoutMsg: "with the Vault locked the page never said why the copy does not open" });
+        const said = (await waiting.getText()).split(/\s+/).join(" ").trim();
+        console.log(`e2e: the copy with the Vault locked reads: ${said}`);
+        expect(said).toContain("Syncing is stopped on this computer");
+        expect(said).toContain("Unlock Flowsta Vault to start it again. This conversation opens here by itself then.");
+        await shot("devices-b-copy-vault-locked");
+        expect((await vaultPost("/dev/unlock")).status).toBe(200);
+        await browser.waitUntil(async () => (await $$('[data-testid="chat-message"]')).length >= 2, { timeout: 300_000, interval: 3_000, timeoutMsg: "the copy did not open by itself after the Vault was unlocked" });
+        console.log("e2e: unlocked, the copy opened by itself");
+        await shot("devices-b-copy-opened-after-unlock");
+      }
+
       // Settings names the device it synced with - in the signed-in panel.
       // A test identity on the staging API cannot complete the proxy
       // sign-in (only the Vault link is real here), so the panel renders
