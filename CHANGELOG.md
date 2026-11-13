@@ -174,6 +174,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- A program that requires a tool call from a local model gets one more
+  often. Some models write the call as plain text, which came back as an
+  answer in words; it is now read as the call it is, and when there is
+  none the model is asked once more.
 - The diagnostic report shows the end of the last run that did not close
   cleanly. After a crash, the lines that say why were in the run before,
   and the report showed only the newest part of the log.
