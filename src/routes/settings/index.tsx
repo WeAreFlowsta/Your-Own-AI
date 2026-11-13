@@ -166,6 +166,8 @@ const SettingToggle = component$<{
   title: string;
   checked: Signal<boolean>;
   onToggle$: QRL<() => void>;
+  /** For the UI tests: lands on the switch as data-testid. */
+  testId?: string;
 }>((p) => {
   const { theme } = useContext(ThemeContext);
   return (
@@ -189,6 +191,8 @@ const SettingToggle = component$<{
       >
         <button
           onClick$={p.onToggle$}
+          data-testid={p.testId}
+          aria-pressed={p.checked.value}
           class="gradient-border-target relative inline-flex h-6 w-11 items-center rounded-full transition-colors"
           style={{
             backgroundColor: p.checked.value
@@ -1811,6 +1815,7 @@ export default component$(() => {
                   </SettingToggle>
                   <SettingToggle
                     title="Automatic updates"
+                    testId="auto-updates"
                     checked={checkUpdates}
                     onToggle$={toggleCheckUpdates}
                   >
