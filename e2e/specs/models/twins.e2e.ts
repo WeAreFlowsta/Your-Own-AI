@@ -75,6 +75,19 @@ describe("a starter AI that stands twice", () => {
     // Two AIs so far: nothing folds.
     expect(await invoke<number>("fold_twins_now")).toBe(0);
 
+    // A level chosen for tools in chat, for each (kept per computer, per AI):
+    // the planted one "all", the starter "auto".
+    const ids = await storeGet(path);
+    const id1: string = ids.find((x) => x.agentPubKey === K1)!.id;
+    const id2: string = ids.find((x) => x.agentPubKey === K2)!.id;
+    const toolsBefore = await browser.execute((a: string, b: string) => {
+      const before = localStorage.getItem("agentPermissionsByToolsAi");
+      const map = before ? JSON.parse(before) : {};
+      map[a] = "auto"; map[b] = "all";
+      localStorage.setItem("agentPermissionsByToolsAi", JSON.stringify(map));
+      return before;
+    }, id1, id2);
+
     // Now they are the same AI to the person: the same starter, the same name.
     list = await storeGet(path);
     list.find((a) => a.agentPubKey === K2)!.name = name;
@@ -101,6 +114,13 @@ describe("a starter AI that stands twice", () => {
     expect(shown).toBe(1);
     await browser.keys("Escape");
 
+    // The level chosen for its tools in chat: the more cautious of the two,
+    // on the one that leads, and the twin's own entry is gone.
+    const tools = await browser.execute(() => JSON.parse(localStorage.getItem("agentPermissionsByToolsAi") ?? "{}") as Record<string, string>);
+    console.log(`e2e: tools in chat ${JSON.stringify(tools)}`);
+    expect(tools[leader.id]).toBe("auto");
+    expect(tools[folded.id]).toBeUndefined();
+
     // Both histories under it, read through its own agent.
     const convs = await invokeLong<{ hash: string; title: string | null }[]>("get_conversations", { agentKey: leader.agentPubKey, maxAgeSecs: null, caller: "e2e twins" });
     const titles = convs.map((c) => c.title ?? "");
@@ -121,6 +141,7 @@ describe("a starter AI that stands twice", () => {
     list = (await storeGet(path)).filter((x) => x.agentPubKey !== K2);
     await storeSet(path, list);
     await invoke<number>("fold_twins_now");
+    await browser.execute((before: string | null) => { if (before === null) localStorage.removeItem("agentPermissionsByToolsAi"); else localStorage.setItem("agentPermissionsByToolsAi", before); }, toolsBefore);
     const after = await storeGet(path);
     expect(after.find((x) => x.agentPubKey === K1)!.foldedInto).toBeUndefined();
     await reloadToChat();

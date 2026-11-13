@@ -322,7 +322,15 @@ export async function republishStoredPersonas(): Promise<void> {
  *  `fold_twins`). A folded twin stays stored, with its cell and its records;
  *  its conversations and memory show under the AI it is folded into. */
 export async function getLocalCustomAis(): Promise<UserDefinedAI[]> {
-  return (await getStoredCustomAis()).filter((ai) => !ai.foldedInto);
+  const stored = await getStoredCustomAis();
+  if (stored.some((ai) => ai.foldedInto)) {
+    // What was chosen for the twin on this computer was chosen for this AI.
+    try {
+      const { carryToolsModesOfFoldedTwins } = await import("./agentPermissions");
+      carryToolsModesOfFoldedTwins(stored);
+    } catch { /* a convenience; never in the way of the list */ }
+  }
+  return stored.filter((ai) => !ai.foldedInto);
 }
 
 /** Every stored AI, folded twins included: for writing the list back, and

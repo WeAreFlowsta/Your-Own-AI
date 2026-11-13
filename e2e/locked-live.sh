@@ -5,6 +5,7 @@
 # Needs: the Vault's debug TEST binary (flowsta-vault/scripts/build-test-binary.sh),
 # this app's e2e build, the machine's models (YOAI_E2E_MODELS_DIR for a
 # subset), the installed Vault CLOSED, no app up.
+# LOCKED_SPEC: another spec to run in this setup (backup-big-live.sh).
 # LOCKED_VAULT_WRAP: a command the test Vault starts under. Logs and the
 # home are kept in LOCKED_LOGS (default ~/.cache/yoai-locked-live).
 set -euo pipefail
@@ -47,9 +48,12 @@ for prof in "$DATA/profiles/$folder" "$DATA/profiles/local"; do
 done
 dev "$P1" "{\"op\":\"connect\",\"client_id\":\"$CID\",\"app_name\":\"Your Own AI (locked)\",\"origin\":\"yoai://app\",\"app_agent_pub_key\":\"$key\"}" >/dev/null
 
-YOAI_TEST_UPDATE_BACKUP_ONLY=1 YOAI_TEST_BACKUP_HOLD_MS=4000 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$H" YOAI_VAULT_PORT="$P1" node e2e/run.mjs models --spec e2e/specs/locked/locked.e2e.ts > "$LOGS/launch.out" 2>&1 || { grep -vE "window states|get_window_states" "$LOGS/launch.out" | tail -40; fail "the spec failed"; }
+YOAI_TEST_UPDATE_BACKUP_ONLY=1 YOAI_TEST_BACKUP_HOLD_MS=4000 YOAI_E2E_LONG=1 YOAI_E2E_HOME="$H" YOAI_VAULT_PORT="$P1" node e2e/run.mjs models --spec "${LOCKED_SPEC:-e2e/specs/locked/locked.e2e.ts}" > "$LOGS/launch.out" 2>&1 || { grep -vE "window states|get_window_states" "$LOGS/launch.out" | tail -40; fail "the spec failed"; }
 sed -E 's/\x1b\[[0-9;]*m//g' "$DATA"/logs/*.log > "$LOGS/app.log"
 grep -oE "e2e: .*" "$LOGS/launch.out" | cut -c1-300 | sed 's/^/   /'
+# Another spec against the same linked profile and test Vault (LOCKED_SPEC):
+# its own script reads the log.
+[ -z "${LOCKED_SPEC:-}" ] || { echo "== ${LOCKED_SPEC}: the spec passed (logs kept at $LOGS)"; exit 0; }
 grep -E "\[update\]" "$LOGS/app.log" | sed -E 's/^\[[0-9-]+\]\[([0-9:]+)\]\[[^]]*\]\[[A-Z]+\] /   \1 /'
 grep -q '"conversations":[1-9]' <<< "$(grep -o 'e2e: locked backup {.*' "$LOGS/launch.out")" || fail "the backup made while the Vault was locked holds no conversation"
 [ "$(grep -c "\[update\] a Vault backup is running: the install waits for it" "$LOGS/app.log")" -ge 1 ] || fail "the update never waited for a backup that was already running"
