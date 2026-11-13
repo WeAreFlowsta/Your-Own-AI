@@ -371,7 +371,7 @@ fn primary() -> Option<Rendezvous> {
     let signal_url = env("FLOWSTA_SIGNAL_URL")
         .or_else(|| option_env!("FLOWSTA_SIGNAL_URL").map(String::from))
         .unwrap_or_else(|| bootstrap_url.replacen("https://", "wss://", 1));
-    Some(Rendezvous { bootstrap_url, signal_url: Some(signal_url), auth_material: Some(auth_material) })
+    Some(Rendezvous { bootstrap_url, signal_url: Some(signal_url), auth_material: Some(auth_material), relay_url: None })
 }
 
 /// Open rendezvous for when Flowsta's is dark (community nodes): a
@@ -396,7 +396,7 @@ fn parse_fallbacks(list: &str) -> Vec<Rendezvous> {
         .map(|u| {
             let bootstrap_url = u.trim_end_matches('/').to_string();
             let host = bootstrap_url.trim_start_matches("https://").to_string();
-            Rendezvous { bootstrap_url, signal_url: Some(format!("wss://{}", host)), auth_material: None }
+            Rendezvous { bootstrap_url, signal_url: Some(format!("wss://{}", host)), auth_material: None, relay_url: None }
         })
         .collect()
 }
@@ -409,7 +409,7 @@ fn primary_07() -> Option<Rendezvous> {
     let bootstrap_url = env("FLOWSTA_BOOTSTRAP_URL_07")
         .or_else(|| option_env!("FLOWSTA_BOOTSTRAP_URL_07").map(String::from))
         .unwrap_or_else(|| "https://bootstrap-7.flowsta.com".to_string());
-    Some(Rendezvous { bootstrap_url, signal_url: None, auth_material: Some(auth_material) })
+    Some(Rendezvous { bootstrap_url, signal_url: None, auth_material: Some(auth_material), relay_url: None })
 }
 
 /// The 0.7 line's rendezvous for the registration keeper.
@@ -419,7 +419,7 @@ pub(crate) fn rendezvous_servers_07() -> Vec<(String, Option<String>)> {
 
 /// No rendezvous at all: a localhost black hole, one device.
 fn alone() -> Rendezvous {
-    Rendezvous { bootstrap_url: "https://localhost/".into(), signal_url: Some("wss://localhost/".into()), auth_material: None }
+    Rendezvous { bootstrap_url: "https://localhost/".into(), signal_url: Some("wss://localhost/".into()), auth_material: None, relay_url: None }
 }
 
 /// The rendezvous for this conductor session: the primary when it answers
