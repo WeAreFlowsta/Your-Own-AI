@@ -1,0 +1,63 @@
+name: UI tests
+
+# The real app, built with its test driver and driven through its first
+# launch under a virtual display: a fresh profile's welcome screen, the
+# hardware check, the wizard's steps (e2e/specs/fresh). The same specs run
+# on a developer's desktop with `npm run e2e`. The conductors are the real
+# ones; the model engine is a stub (no model is downloaded or run here).
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "src-tauri/**"
+      - "e2e/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/ui-tests.yml"
+
+concurrency:
+  group: ui-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fresh:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            xvfb xdotool dbus-x11 webkit2gtk-driver
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: e2e
+      - name: Sidecars (Holochain from its releases; the engine stubbed, it is not started here)
+        run: |
+          ./download-holochain-binaries.sh x86_64-unknown-linux-gnu
+          mkdir -p src-tauri/bin && touch src-tauri/bin/yourowai-llama-server-x86_64-unknown-linux-gnu && chmod +x src-tauri/bin/yourowai-llama-server-x86_64-unknown-linux-gnu
+      - run: npm ci
+      - name: Build the app with its test driver
+        run: npm run e2e:build
+      - name: First launch, driven (fresh profile)
+        run: dbus-run-session -- xvfb-run -a -s "-screen 0 1440x900x24" npm run e2e
+      - name: Screenshots and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-tests-fresh
+          path: |
+            e2e/shots/**
+            e2e/profile/.local/share/com.solar.yourowai/logs/**
+          if-no-files-found: ignore
+          retention-days: 14
