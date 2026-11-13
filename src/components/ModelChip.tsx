@@ -273,6 +273,9 @@ export const ModelChip = component$<ModelChipProps>((props) => {
                       <span class={`block truncate ${current.value === om.id ? 'font-medium' : 'font-normal'}`}>
                         {om.display_name}
                       </span>
+                      {om.host && (
+                        <span class="block truncate text-xs text-[var(--text-muted)]" data-testid="model-host">{om.host}</span>
+                      )}
                       {current.value === om.id && (
                         <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                           <LuCheck class="h-4 w-4" aria-hidden="true" />

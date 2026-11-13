@@ -103,7 +103,7 @@ const AiFormModal = component$<AiFormModalProps>(
       sMinP: null as number | null,
       sRepeatPenalty: null as number | null,
       localModels: [] as LocalModel[],
-      onlineModels: [] as { id: string; display_name: string; description: string }[],
+      onlineModels: [] as { id: string; display_name: string; description: string; host?: string | null }[],
       // Models served by the user's connected external engine (Settings → Engines).
       externalModels: [] as string[],
       // May online options be OFFERED for new selections? (signed in + plan;
@@ -1229,6 +1229,7 @@ const AiFormModal = component$<AiFormModalProps>(
                             {om.display_name}
                             <span class="ml-2 text-xs text-[var(--text-muted)]">{om.description}</span>
                           </span>
+                          {om.host && <span class="block truncate text-xs text-[var(--text-muted)]">{om.host}</span>}
                           {store.model === om.id && (
                             <span class="absolute inset-y-0 left-0 flex items-center pl-3 text-[var(--text-link)]">
                               <LuCheck class="h-5 w-5" aria-hidden="true" />

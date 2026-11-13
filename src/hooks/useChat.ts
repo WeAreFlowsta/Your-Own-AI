@@ -1601,12 +1601,12 @@ export function useChat(props: UseChatProps) {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
         const userMemory = await memoryBlockPromise;
-        // Report mode: a local model whose template thinks natively gets the
-        // ceremony-free prompt (its thinking arrives as reasoning already).
+        // Report mode: a model that thinks by itself gets the ceremony-free
+        // prompt (its thinking arrives as reasoning already): a local model
+        // whose template thinks, and an online model the catalog says does.
         const nativeThinking =
           turnMode === "report" &&
           !!preferredModel &&
-          !preferredModel.startsWith("online:") &&
           !preferredModel.startsWith("external:") &&
           (await invoke<boolean>("model_thinks_natively", { model: preferredModel }).catch(() => false));
         let systemPrompt = buildSystemPrompt(
