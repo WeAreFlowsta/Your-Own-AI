@@ -531,6 +531,11 @@ pub async fn model_thinks_natively(model: String) -> bool {
 
 #[tauri::command]
 pub async fn is_llama_server_ready() -> Result<bool, String> {
+    // No chat server of ours: not ready, and nobody else's program on that
+    // port is asked.
+    if !our_chat_server_is_up() {
+        return Ok(false);
+    }
     let client = local_http();
     match client.get(format!("http://localhost:{}/health", chat_port())).bearer_auth(local_api_key()).send().await {
         Ok(resp) if resp.status().is_success() => Ok(true),
@@ -2232,6 +2237,25 @@ pub struct VisionPick {
 /// config stops its own compaction from ever firing).
 pub static CURRENT_CTX_SIZE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+/// The process id of the chat server this app started and has not seen end
+/// (0: none). Text goes to the chat port only while this is set: with no
+/// server of ours there, whatever listens on that port is someone else's
+/// program (a developer's web server, a proxy), and it is sent nothing.
+static OUR_CHAT_SERVER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn chat_server_started(pid: u32) {
+    OUR_CHAT_SERVER.store(pid, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The chat server with this pid ended (a later one's record is left alone).
+fn chat_server_ended(pid: u32) {
+    let _ = OUR_CHAT_SERVER.compare_exchange(pid, 0, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn our_chat_server_is_up() -> bool {
+    OUR_CHAT_SERVER.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
 /// A context the NEXT spawn must reach at least (set by `ensure_context`
 /// after it checked the machine can afford it; consumed by the spawn).
 /// Lets a turn that outgrows the running context reload with more room
@@ -2448,7 +2472,7 @@ pub async fn count_tokens_text(text: &str) -> u64 {
         return 0;
     }
     let fallback = (text.len() as f64 / 3.0).ceil() as u64;
-    if CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+    if CURRENT_CTX_SIZE.load(std::sync::atomic::Ordering::Relaxed) == 0 || !our_chat_server_is_up() {
         return fallback;
     }
     let client = local_http();
@@ -2960,6 +2984,9 @@ fn has_word_oom(lower: &str) -> bool {
 }
 
 async fn chat_server_health_ok() -> bool {
+    if !our_chat_server_is_up() {
+        return false;
+    }
     let client = local_http();
     matches!(
         client.get(format!("http://127.0.0.1:{}/health", chat_port())).bearer_auth(local_api_key()).send().await,
@@ -3136,6 +3163,8 @@ async fn start_mlx_server(
         ])
         .spawn()
         .map_err(|e| format!("Failed to start the MLX engine: {e}"))?;
+    let mlx_pid = child.pid();
+    chat_server_started(mlx_pid);
     *state.server_process.lock().await = Some(child);
     **is_running = true;
     *state.spawned_backend.lock().await = Some("mlx".to_string());
@@ -3149,6 +3178,7 @@ async fn start_mlx_server(
                     log::info!("[swiftlm] {}", String::from_utf8_lossy(&line).trim_end());
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(t) => {
+                    chat_server_ended(mlx_pid);
                     log::warn!("[swiftlm] process terminated: {:?}", t.code);
                     break;
                 }
@@ -3639,6 +3669,7 @@ pub async fn start_llama_server(
         }
     };
     let chat_pid = child.pid();
+    chat_server_started(chat_pid);
 
     *state.server_process.lock().await = Some(child);
     *is_running = true;
@@ -3705,6 +3736,7 @@ pub async fn start_llama_server(
                     log::error!("[llama-server error] {}", err);
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
+                    chat_server_ended(chat_pid);
                     log::warn!("[llama-server] Process terminated with code: {:?}", payload.code);
                     // A NON-ZERO exit means the server died on its own - almost always
                     // out of GPU memory loading a too-large model. A kill or
@@ -4654,6 +4686,11 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
         "stream": false,
         "cache_prompt": true
     });
+    // No chat server of ours to warm: the persona and memory in this prompt
+    // go to nobody else's program on that port.
+    if !our_chat_server_is_up() {
+        return Ok(0);
+    }
     // A turn already running: its own prefix is being computed - do not
     // add a second copy of the same work beside it.
     if FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0 {
@@ -6425,7 +6462,9 @@ pub async fn stream_chat_completion(
         } else {
             // Query the running server for its model name
             let client_tmp = local_http();
-            match client_tmp.get(format!("http://localhost:{}/v1/models", chat_port())).bearer_auth(local_api_key()).send().await {
+            if !our_chat_server_is_up() {
+                "default".to_string()
+            } else { match client_tmp.get(format!("http://localhost:{}/v1/models", chat_port())).bearer_auth(local_api_key()).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     if let Ok(body) = resp.json::<serde_json::Value>().await {
                         body["data"][0]["id"].as_str()
@@ -6436,7 +6475,7 @@ pub async fn stream_chat_completion(
                     }
                 }
                 _ => "default".to_string(),
-            }
+            } }
         }
     };
     // A template that always opens a thought and has no switch: prefill an

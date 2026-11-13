@@ -10,27 +10,32 @@ const OFFSET = Number(process.env.YOAI_PORT_OFFSET ?? 0) || 0;
 const PORTS = { chat: 8080 + OFFSET, embed: 8091 + OFFSET, util: 8092 + OFFSET };
 
 /** A listener of our own on `port`, standing in for someone else's server:
- *  it accepts connections and says nothing a model server would. */
-async function hold(port: number): Promise<{ server: net.Server; connections: () => number }> {
-  let seen = 0;
+ *  it accepts connections, says nothing a model server would, and keeps the
+ *  request line of each thing it was asked. */
+async function hold(port: number): Promise<{ server: net.Server; asked: () => string[] }> {
+  const asked: string[] = [];
   for (let i = 0; i < 40; i++) {
     const server = net.createServer((socket) => {
-      seen += 1;
+      const at = asked.push("(nothing sent)") - 1;
       socket.on("error", () => undefined);
-      socket.end("HTTP/1.1 418 I'm a teapot\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+      socket.once("data", (d) => {
+        asked[at] = d.toString("latin1").split("\r\n")[0].slice(0, 80);
+        socket.end("HTTP/1.1 418 I'm a teapot\r\ncontent-length: 0\r\nconnection: close\r\n\r\n");
+      });
+      setTimeout(() => socket.destroy(), 5_000).unref();
     });
     const ok = await new Promise<boolean>((done) => {
       server.once("error", () => done(false));
       server.listen(port, "127.0.0.1", () => done(true));
     });
-    if (ok) return { server, connections: () => seen };
+    if (ok) return { server, asked: () => asked };
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(`port ${port} never came free for the test's own listener`);
 }
 
 describe("another program holds the engines' usual ports", () => {
-  const held: { name: string; port: number; server: net.Server; connections: () => number }[] = [];
+  const held: { name: string; port: number; server: net.Server; asked: () => string[] }[] = [];
   after(async () => {
     await Promise.all(held.map((h) => new Promise((r) => h.server.close(() => r(undefined)))));
     // Back on their usual ports for the specs that follow.
@@ -55,8 +60,13 @@ describe("another program holds the engines' usual ports", () => {
 
     // Nobody's server was ended, and no prompt was sent to it.
     for (const h of held) expect(h.server.listening).toBe(true);
-    const chat = held.find((h) => h.name === "chat")!;
-    console.log(`e2e: connections the stand-in on the chat port saw: ${chat.connections()}`);
-    expect(chat.connections()).toBeLessThanOrEqual(2); // the app's own look at who holds the port, never a prompt
+    // What it was asked is the app's "is my server up?" (GET /health, while
+    // the app had no server of its own yet), never a prompt or anything else.
+    for (const h of held) {
+      const asked = h.asked();
+      const kinds = [...new Set(asked)];
+      console.log(`e2e: the stand-in on the ${h.name} port was asked ${asked.length} time(s): ${JSON.stringify(kinds)}`);
+      expect(kinds.filter((k) => !/^GET \/health HTTP\/1\.1$/.test(k) && k !== "(nothing sent)")).toEqual([]);
+    }
   });
 });
