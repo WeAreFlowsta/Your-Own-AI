@@ -132,4 +132,5 @@ curl -s -m 2 http://127.0.0.1:11435/health | grep -q '"ok"' || fail "B never cam
 run return "$THIS" "$A" "$P1" e2e/specs/devices/reattach.e2e.ts REATTACH_PHASE=return YOAI_E2E_LONG=1 YOAI_PORT_OFFSET=100 YOAI_E2E_WITH_RENDEZVOUS=1
 alog > /dev/null; grep -E "\[watch\] the 0\.6 line is wanted|stopped waiting|\[lines\]" "$LOGS/a-all.log" | tail -4 | sed 's/^/   /' || true
 killapps; gone || true
+e2e/no-fork-check.sh "$A" "$B" || { echo "FAIL: a conductor reported a fork or a moved chain head (above)" >&2; exit 1; }
 echo "== the 0.6 line stopped by the person's choice and started again when B came back: passed (logs kept at $LOGS)"
