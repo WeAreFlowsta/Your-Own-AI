@@ -208,6 +208,45 @@ pub(crate) fn fold_twins(list: &mut [serde_json::Value]) -> u32 {
     changed
 }
 
+/// `fold_twins` on a stored list, and what a new fold brings with it on this
+/// device: the documents the twin may read, the leader may read; a picture
+/// the person gave the twin shows on a leader that has none of its own; and
+/// the leader's search and recall index is rebuilt once, so it takes in the
+/// twin's earlier conversations. Returns how many marks changed.
+pub(crate) fn fold_and_carry(app: &tauri::AppHandle, list: &mut [serde_json::Value]) -> u32 {
+    let already: std::collections::HashSet<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["id"].as_str().map(String::from)).collect();
+    let changed = fold_twins(list);
+    if changed == 0 {
+        return 0;
+    }
+    let thumb_dir = crate::profile::root(app).ok().map(|r| r.join("thumbnails"));
+    let mut new_folds = 0;
+    for twin in list.iter().filter(|ai| ai["foldedInto"].is_string()) {
+        let (Some(twin_id), Some(lead_founding)) = (twin["id"].as_str(), twin["foldedInto"].as_str()) else { continue };
+        if already.contains(twin_id) {
+            continue;
+        }
+        let Some(leader_id) = list.iter().find(|ai| !ai["foldedInto"].is_string() && founding_of(ai).as_deref() == Some(lead_founding)).and_then(|ai| ai["id"].as_str()) else { continue };
+        new_folds += 1;
+        match crate::corpus::share_grants(app, twin_id, leader_id) {
+            Ok(n) if n > 0 => log::info!("[config-sync] {} document(s) its twin could read, {} can read", n, twin["name"].as_str().unwrap_or("the AI")),
+            Ok(_) => {}
+            Err(e) => log::warn!("[config-sync] the twin's documents could not be shared: {e}"),
+        }
+        if let Some(dir) = &thumb_dir {
+            if has_own_picture(dir, twin_id) && !has_own_picture(dir, leader_id) && std::fs::copy(dir.join(format!("{twin_id}.jpg")), dir.join(format!("{leader_id}.jpg"))).is_ok() {
+                mark_picture(dir, leader_id, false);
+            }
+        }
+    }
+    if new_folds > 0 {
+        crate::vault_escrow::set_reembed_pending(app);
+    }
+    let names: Vec<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
+    log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", changed, names.len(), names.join(", "));
+    changed
+}
+
 /// The entries folded into the AI whose founding key is `leader`.
 pub(crate) fn folded_into<'a>(list: &'a [serde_json::Value], leader: &str) -> Vec<&'a serde_json::Value> {
     list.iter().filter(|ai| ai["foldedInto"].as_str() == Some(leader)).collect()
@@ -878,11 +917,7 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
     save_state(app, &ConfigSyncState { checked_at: now_ms(), devices: synced, updated: total_updated, added: total_added, ..Default::default() });
     // Starters that stand twice (a second computer added before joins
     // folded) become one, the same one on every device.
-    let folded = fold_twins(&mut local);
-    if folded > 0 {
-        let names: Vec<String> = local.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
-        log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", folded, names.len(), names.join(", "));
-    }
+    let folded = fold_and_carry(app, &mut local);
     if total_updated + total_added + folded > 0 {
         store.set("custom-ais", serde_json::json!(local));
         store.save().map_err(|e| e.to_string())?;
@@ -906,12 +941,10 @@ pub(crate) fn fold_stored_twins(app: &tauri::AppHandle) -> Result<u32, String> {
         Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
         _ => return Ok(0),
     };
-    let folded = fold_twins(&mut list);
+    let folded = fold_and_carry(app, &mut list);
     if folded > 0 {
-        let names: Vec<String> = list.iter().filter(|ai| ai["foldedInto"].is_string()).filter_map(|ai| ai["name"].as_str().map(String::from)).collect();
         store.set("custom-ais", serde_json::json!(list));
         store.save().map_err(|e| e.to_string())?;
-        log::info!("[config-sync] {} mark(s) changed: {} AI(s) stand as one with their twin ({})", folded, names.len(), names.join(", "));
         let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "folded": folded }));
     }
     Ok(folded)

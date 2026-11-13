@@ -1637,6 +1637,23 @@ pub(crate) fn delete_document(conn: &Connection, doc_id: &str) -> Result<(), Str
     Ok(())
 }
 
+/// Every document `from_ai` may read, `to_ai` may read too (an AI and the
+/// twin folded into it are one AI to the person). Returns how many grants
+/// were added.
+pub(crate) fn share_grants(app: &AppHandle, from_ai: &str, to_ai: &str) -> Result<usize, String> {
+    let conn = open(app)?;
+    let n = share_grants_in(&conn, from_ai, to_ai)?;
+    if n > 0 {
+        cache_invalidate();
+    }
+    Ok(n)
+}
+
+fn share_grants_in(conn: &Connection, from_ai: &str, to_ai: &str) -> Result<usize, String> {
+    conn.execute("INSERT OR IGNORE INTO grants (doc_id, ai_id) SELECT doc_id, ?2 FROM grants WHERE ai_id = ?1", params![from_ai, to_ai])
+        .map_err(|e| e.to_string())
+}
+
 /// Grant or withhold one document for one AI. Withholding the last grant
 /// removes the document from the library (nothing could read it anyway).
 #[tauri::command]
@@ -2319,6 +2336,24 @@ mod tests {
         let _ = std::fs::remove_file(&path_a);
         let _ = std::fs::remove_file(&path_b);
         cache_invalidate();
+    }
+
+    #[test]
+    fn a_leader_may_read_what_its_folded_twin_could() {
+        let path = std::env::temp_dir().join(format!("yoai-corpus-share-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let conn = open_at(&path).expect("db");
+        for (doc, ai) in [("d1", "twin"), ("d2", "twin"), ("d2", "leader"), ("d3", "other")] {
+            conn.execute("INSERT INTO grants (doc_id, ai_id) VALUES (?1, ?2)", params![doc, ai]).unwrap();
+        }
+        assert_eq!(share_grants_in(&conn, "twin", "leader").unwrap(), 1, "d1 is new to the leader; d2 it had");
+        let leaders: Vec<String> = conn.prepare("SELECT doc_id FROM grants WHERE ai_id = 'leader' ORDER BY doc_id").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(leaders, vec!["d1", "d2"]);
+        let twins: i64 = conn.query_row("SELECT COUNT(*) FROM grants WHERE ai_id = 'twin'", [], |r| r.get(0)).unwrap();
+        assert_eq!(twins, 2, "the twin keeps its own");
+        assert_eq!(share_grants_in(&conn, "twin", "leader").unwrap(), 0, "a second time adds nothing");
+        drop(conn);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
