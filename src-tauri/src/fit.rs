@@ -826,6 +826,16 @@ pub fn forget_assess() {
     }
 }
 
+/// Drop the kept assessment: what it was worked out from has changed (a
+/// model's fine-tune setting). Without this a Save within the three seconds
+/// an assessment is kept for left the model's row saying what it said
+/// before.
+pub(crate) fn forget_assessment() {
+    if let Ok(mut g) = ASSESS_MEMO.lock() {
+        *g = None;
+    }
+}
+
 pub async fn assess(app: &AppHandle) -> Vec<ModelFit> {
     let memo = &ASSESS_MEMO;
     const TTL: std::time::Duration = std::time::Duration::from_secs(3);
