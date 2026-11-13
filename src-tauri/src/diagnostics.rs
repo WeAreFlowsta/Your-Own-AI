@@ -95,6 +95,7 @@ async fn build_report(app: &AppHandle) -> String {
         "System crash records (last 7 days)",
         &crash_records(),
     );
+    section(&mut r, "The last run that did not close cleanly", &bad_run_section(&app));
     section(&mut r, "App log files", &log_list_section(&app));
     section(
         &mut r,
@@ -283,6 +284,52 @@ fn log_tail_section(app: &AppHandle) -> String {
         }
         Err(e) => format!("collector failed: {e}"),
     }
+}
+
+/// Logged once at each start by a version that says when it closes.
+pub(crate) const RUN_SAYS_WHEN_IT_CLOSES: &str = "[run] this version logs a last line when a run closes cleanly";
+/// The last line of a run that closed cleanly (`stop_everything`).
+pub(crate) const RUN_CLOSED: &str = "[exit] closed cleanly";
+/// How much of a run that ended badly the report carries.
+const BAD_RUN_TAIL_LINES: usize = 150;
+
+/// Pure: the end of the most recent run in `log` that did not close cleanly,
+/// with the line it started on. A run begins at a "Your Own AI <version>
+/// starting (" line. The newest run is left out when `newest_is_running`
+/// (it is the one writing the report). A run of a version from before runs
+/// said when they close is not judged: it never says, clean or not.
+pub(crate) fn last_bad_run(log: &str, newest_is_running: bool) -> Option<String> {
+    let lines: Vec<&str> = log.lines().collect();
+    let starts: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains("Your Own AI ") && l.contains(" starting (")).map(|(i, _)| i).collect();
+    let mut runs: Vec<&[&str]> = starts.iter().enumerate().map(|(n, &from)| &lines[from..starts.get(n + 1).copied().unwrap_or(lines.len())]).collect();
+    if newest_is_running {
+        runs.pop();
+    }
+    let bad = runs.into_iter().rev().find(|run| run.iter().any(|l| l.contains(RUN_SAYS_WHEN_IT_CLOSES)) && !run.iter().any(|l| l.contains(RUN_CLOSED)))?;
+    let tail = &bad[bad.len().saturating_sub(BAD_RUN_TAIL_LINES)..];
+    Some(format!("started: {}\n(its last {} of {} lines)\n{}", bad[0], tail.len(), bad.len(), tail.join("\n")))
+}
+
+/// The end of the last run that did not close cleanly, from the newest log
+/// files (a crash's last lines are in the run before this one, which the
+/// tail of the live log no longer shows once this run has written enough).
+fn bad_run_section(app: &AppHandle) -> String {
+    let dir = match log_dir(app) {
+        Ok(d) => d,
+        Err(e) => return format!("collector failed: {e}"),
+    };
+    let files = match sorted_log_files(&dir) {
+        Ok(f) => f,
+        Err(e) => return format!("collector failed: {e}"),
+    };
+    // The live file first (its newest run is this one), then the two before it.
+    for (n, (path, _, _)) in files.iter().take(3).enumerate() {
+        let Ok(content) = std::fs::read_to_string(path) else { continue };
+        if let Some(found) = last_bad_run(&content, n == 0) {
+            return format!("in {}\n{}", path.file_name().unwrap_or_default().to_string_lossy(), found);
+        }
+    }
+    "every recent run closed cleanly (or is from a version that does not say)".to_string()
 }
 
 /// (path, size, seconds-since-modified) for *.log files, newest first.
@@ -689,5 +736,54 @@ mod tests {
     fn marker_matching_is_case_insensitive() {
         assert!(matches_marker("Faulting application name: YOUROWAI-holochain.exe"));
         assert!(!matches_marker("Faulting application name: notepad.exe"));
+    }
+}
+
+#[cfg(test)]
+mod bad_run_tests {
+    use super::*;
+
+    fn run(version: &str, says: bool, body: &[&str], closed: bool) -> String {
+        let mut l = vec![format!("[t][app_lib][INFO] Your Own AI {version} starting (linux x86_64)")];
+        if says {
+            l.push(format!("[t][app_lib][INFO] {RUN_SAYS_WHEN_IT_CLOSES}"));
+        }
+        l.extend(body.iter().map(|b| format!("[t][app_lib][INFO] {b}")));
+        if closed {
+            l.push(format!("[t][app_lib][INFO] {RUN_CLOSED}"));
+        }
+        l.join("\n")
+    }
+
+    #[test]
+    fn the_run_before_this_one_that_never_closed_is_shown() {
+        let log = [run("0.9.1", true, &["one"], true), run("0.9.1", true, &["two", "the last thing it did"], false), run("0.9.1", true, &["this run"], false)].join("\n");
+        let found = last_bad_run(&log, true).expect("the middle run ended badly");
+        assert!(found.contains("the last thing it did") && !found.contains("this run") && !found.contains("one\n"), "{found}");
+        // Not the run writing the report, even though it has not closed.
+        assert!(last_bad_run(&run("0.9.1", true, &["this run"], false), true).is_none());
+        // The same file read as a rotated one: its newest run counts.
+        assert!(last_bad_run(&run("0.9.1", true, &["crashed"], false), false).is_some());
+    }
+
+    #[test]
+    fn clean_runs_and_runs_of_an_older_version_are_not_called_bad() {
+        let clean = [run("0.9.1", true, &["a"], true), run("0.9.1", true, &["b"], true), run("0.9.1", true, &["now"], false)].join("\n");
+        assert!(last_bad_run(&clean, true).is_none());
+        // 0.9.0 never said when it closed: nothing can be told from its silence.
+        let older = [run("0.9.0", false, &["quit by the person"], false), run("0.9.1", true, &["now"], false)].join("\n");
+        assert!(last_bad_run(&older, true).is_none());
+        // The most recent bad run wins over an older one.
+        let two = [run("0.9.1", true, &["first crash"], false), run("0.9.1", true, &["second crash"], false), run("0.9.1", true, &["now"], false)].join("\n");
+        assert!(last_bad_run(&two, true).unwrap().contains("second crash"));
+    }
+
+    #[test]
+    fn a_long_run_is_cut_to_its_end() {
+        let body: Vec<String> = (0..1000).map(|i| format!("line {i}")).collect();
+        let refs: Vec<&str> = body.iter().map(String::as_str).collect();
+        let found = last_bad_run(&[run("0.9.1", true, &refs, false), run("0.9.1", true, &["now"], false)].join("\n"), true).unwrap();
+        assert!(found.contains("line 999") && !found.contains("line 100\n"), "its end, not its start");
+        assert!(found.lines().count() <= BAD_RUN_TAIL_LINES + 3);
     }
 }
