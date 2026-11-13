@@ -1006,6 +1006,9 @@ pub fn run() {
                 std::env::consts::OS,
                 std::env::consts::ARCH
             );
+            // A run that closes says so as its last line; the diagnostic
+            // report shows the end of the last run that did not.
+            log::info!("{}", diagnostics::RUN_SAYS_WHEN_IT_CLOSES);
             log::info!("[flowsta] online-model proxy: {}", flowsta::proxy_url());
 
             // Instance lock FIRST - before anything spawns. Exits here if
@@ -1210,6 +1213,7 @@ pub fn run() {
 /// the conductor and key store (asked and given their graces). At quit, and
 /// before an update installs (Windows cannot replace a file in use).
 pub(crate) fn stop_everything(app_handle: &AppHandle) {
+    log::info!("[exit] Your Own AI is closing: stopping what it runs");
     println!("[Exit] Stopping llama-server...");
     agent_bridge::kill_on_exit(app_handle);
     let llm_state = app_handle.state::<LLMState>();
@@ -1248,6 +1252,7 @@ pub(crate) fn stop_everything(app_handle: &AppHandle) {
     println!("[Exit] Stopping Holochain conductor...");
     conductor::stop_for_good();
     println!("[Exit] Holochain stopped");
+    log::info!("{}", diagnostics::RUN_CLOSED);
 }
 
 /// Where the bundled resources (hApp bundle, pdfium) live. `resource_dir()`

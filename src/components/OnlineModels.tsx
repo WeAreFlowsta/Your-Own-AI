@@ -27,6 +27,7 @@ import LiquidMetalButton from './LiquidMetalButton';
 import { Callout } from './Callout';
 import { getPausedModels, mirrorPausedModels, setModelPaused } from '../utils/modelPrefs';
 import { noteEntitlement } from '../utils/entitlement';
+import { hostLine } from '../utils/modelHost';
 import {
   AUTO_ROUTING_CHANGED,
   ROUTING_SLOTS,
@@ -80,6 +81,8 @@ interface OnlineModel {
   routing?: { slots?: string[] } | null;
   /** The provider the proxy sends it to (owned_by). */
   provider?: string | null;
+  /** Its maker, when another company than the provider made it. */
+  maker?: string | null;
   /** The proxy's flag right now: "failing" | "slow" (absent = fine). */
   health?: string | null;
 }
@@ -687,6 +690,9 @@ export const OnlineModels = component$(() => {
                       </div>
                     </div>
 
+                    {hostLine(model, store.providers) && (
+                      <p class="text-xs text-[var(--text-muted)] mb-2" data-testid="model-host">{hostLine(model, store.providers)}</p>
+                    )}
                     <p class="text-sm text-[var(--text-secondary)] mb-3 line-clamp-3">
                       {model.description}
                     </p>

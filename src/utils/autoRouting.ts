@@ -1,8 +1,11 @@
 /**
  * "Models automatic routing may use" - the person's switches, shared by
  * Settings > Routing and the Online Models page. settings.json
- * `routingAutoAllow` holds only what the person changed:
- * `{ providers: { id: bool }, models: { "online:<id>": bool } }`. The rule
+ * `routingAutoAllow` holds every switch the person has touched, whatever
+ * its value: `{ providers: { id: bool }, models: { "<id>": bool } }`. A
+ * default stays a default only until the person changes it; a switch they
+ * set keeps its value when the catalog's default later changes, also when
+ * the two were equal at the time. The rule
  * (a model's own switch, then its provider's, then the catalog's default)
  * lives in the router (router.rs auto_allowed); `online_auto_allowed` hands
  * back each model's standing, so a screen never computes its own.
@@ -37,22 +40,29 @@ async function writeAutoAllow(v: AutoAllow): Promise<void> {
   window.dispatchEvent(new CustomEvent(AUTO_ROUTING_CHANGED));
 }
 
-/** A provider's switch governs all its models: the per-model switches under
- *  it are cleared. Back to the catalog's default = no entry at all. */
-export async function setProviderAllowed(provider: OnlineProvider, modelIds: string[], on: boolean): Promise<void> {
-  const v = await readAutoAllow();
-  for (const id of modelIds) delete v.models[id];
-  if (on === provider.auto_default) delete v.providers[provider.id];
-  else v.providers[provider.id] = on;
-  await writeAutoAllow(v);
+/** Pure: the switches after the person set a provider's. It is kept whatever
+ *  its value, and it decides only for the models they never touched: a
+ *  model's own switch stays as they set it. */
+export function withProviderSwitch(v: AutoAllow, providerId: string, on: boolean): AutoAllow {
+  return { providers: { ...v.providers, [providerId]: on }, models: { ...v.models } };
 }
 
-/** One model's switch. Matching what its provider says = no entry. */
-export async function setModelAllowed(modelId: string, providerAllows: boolean, on: boolean): Promise<void> {
-  const v = await readAutoAllow();
-  if (on === providerAllows) delete v.models[modelId];
-  else v.models[modelId] = on;
-  await writeAutoAllow(v);
+/** Pure: the switches after the person set one model's. Kept whatever its
+ *  value, also when it matches what its provider says today. */
+export function withModelSwitch(v: AutoAllow, modelId: string, on: boolean): AutoAllow {
+  return { providers: { ...v.providers }, models: { ...v.models, [modelId]: on } };
+}
+
+/** A provider's switch. `_modelIds` is no longer used (the switches of its
+ *  models were cleared here until 0.9.1). */
+export async function setProviderAllowed(provider: OnlineProvider, _modelIds: string[], on: boolean): Promise<void> {
+  await writeAutoAllow(withProviderSwitch(await readAutoAllow(), provider.id, on));
+}
+
+/** One model's switch. `_providerAllows` is no longer used (a switch equal
+ *  to its provider's was not stored until 0.9.1). */
+export async function setModelAllowed(modelId: string, _providerAllows: boolean, on: boolean): Promise<void> {
+  await writeAutoAllow(withModelSwitch(await readAutoAllow(), modelId, on));
 }
 
 /** Each model's standing ("online:<id>" -> allowed), from the router's rule. */

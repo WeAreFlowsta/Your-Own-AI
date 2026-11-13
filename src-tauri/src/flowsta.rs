@@ -1257,6 +1257,14 @@ pub struct OnlineModel {
     /// healthy, or too few calls to say). From the `health` block beside
     /// `data` in /v1/models.
     pub health: Option<String>,
+    /// Who made the model, where that differs from who serves it (`maker`:
+    /// a US copy of Kimi is Moonshot's model, served by Fireworks). None =
+    /// the provider made it, or an older catalog.
+    pub maker: Option<String>,
+    /// Its thinking arrives apart from its answer (`thinks_natively`): the
+    /// app must not also ask it to think inside `<think>` tags. False on a
+    /// catalog without the field.
+    pub thinks_natively: bool,
 }
 /// A provider in the catalog's providers block (beside `data` in
 /// /v1/models): its name, where the company is based, and whether automatic
@@ -1314,6 +1322,21 @@ pub async fn list_online_providers() -> Result<Vec<OnlineProvider>, String> {
     Ok(online_catalog().await?.1)
 }
 
+/// A catalog model's maker, when it is someone other than its provider.
+pub(crate) fn catalog_maker(m: &serde_json::Value) -> Option<String> {
+    let maker = m["maker"].as_str().filter(|s| !s.is_empty())?;
+    (Some(maker) != m["owned_by"].as_str()).then(|| maker.to_string())
+}
+
+/// Whether an online model ("online:<id>") thinks by itself, from the
+/// catalog (cached for a minute). Unknown, or no catalog: false.
+pub async fn online_model_thinks_natively(model: &str) -> bool {
+    match online_catalog().await {
+        Ok((models, _)) => models.iter().any(|m| m.id == model && m.thinks_natively),
+        Err(_) => false,
+    }
+}
+
 async fn fetch_online_models() -> Result<Catalog, String> {
     let v: serde_json::Value = http()
         .get(format!("{}/v1/models", proxy_url()))
@@ -1347,6 +1370,8 @@ async fn fetch_online_models() -> Result<Catalog, String> {
                         }),
                     released: m["released"].as_str().map(str::to_string),
                     provider: m["owned_by"].as_str().filter(|p| !p.is_empty()).map(str::to_string),
+                    maker: catalog_maker(m),
+                    thinks_natively: m["thinks_natively"].as_bool().unwrap_or(false),
                     health: m["id"].as_str().and_then(|id| v["health"][id].as_str()).filter(|f| !f.is_empty()).map(str::to_string),
                     routing: m["routing"].as_object().map(|r| {
                         let u8_of = |k: &str| r.get("caps").and_then(|c| c.get(k)).and_then(|x| x.as_u64()).map(|x| x.min(10) as u8);

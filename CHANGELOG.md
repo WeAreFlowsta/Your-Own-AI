@@ -29,6 +29,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   restore here" and it restores what that computer backed up to your
   Vault. (Devices)
 
+### Online models
+- Each online model says who serves it and where that company is based,
+  and who made it when that is someone else, on its card and in the model
+  pickers.
+
 ### Updates
 - The update is checked twice before it installs: the release is listed
   in a manifest signed by Flowsta, and the download must match both its
@@ -169,6 +174,23 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- A program that requires a tool call from a local model gets one more
+  often. Some models write the call as plain text, which came back as an
+  answer in words; it is now read as the call it is, and when there is
+  none the model is asked once more.
+- The diagnostic report shows the end of the last run that did not close
+  cleanly. After a crash, the lines that say why were in the run before,
+  and the report showed only the newest part of the log.
+- Agent mode on the local endpoint (the mode where an outside program
+  brings its own instructions) now always carries two ground rules ahead
+  of them: never help anyone harm themselves or others, and do not invent
+  facts or results. Before, it was the one path with none.
+- A report from an online model that thinks by itself is no longer asked
+  to think a second time, which made some reports long and repetitive.
+- The models automatic routing may use stay as you set them. A switch you
+  set to what was the default at the time is now kept, so it holds when
+  that default later changes; and a model you switched yourself keeps its
+  setting when you change its provider's switch.
 - A starter AI that showed twice (on computers linked before 0.9.1) is one
   AI again: one entry in every list, with the conversations and the
   memory of both. Every computer of yours picks the same one, and nothing

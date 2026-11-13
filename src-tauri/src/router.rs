@@ -3146,6 +3146,8 @@ mod tests {
         crate::flowsta::OnlineModel {
             provider: None,
             health: None,
+            maker: None,
+            thinks_natively: false,
             id: id.to_string(),
             display_name: name.to_string(),
             description: desc.to_string(),
@@ -3325,6 +3327,8 @@ mod tests {
         crate::flowsta::OnlineModel {
             provider: None,
             health: None,
+            maker: None,
+            thinks_natively: false,
             id: format!("online:{id}"),
             display_name: name.to_string(),
             description: desc.to_string(),
@@ -3609,6 +3613,28 @@ mod tests {
         let openai_off: HashMap<String, bool> = [("openai".to_string(), false)].into();
         assert!(auto_allowed("gpt-6-luna", Some("openai"), &luna_on, &openai_off, &providers));
         assert!(!auto_allowed("online:gpt-6-astra", Some("openai"), &luna_on, &openai_off, &providers));
+    }
+
+    /// A default stays a default only until the person changes it. The
+    /// settings keep every switch they touched, whatever its value
+    /// (`autoRouting.ts`), so a choice that equalled the catalog's default
+    /// when it was made holds when that default later flips.
+    #[test]
+    fn a_choice_equal_to_the_default_survives_a_change_of_the_default() {
+        use std::collections::HashMap;
+        let catalog = |qwen_default: bool| vec![crate::flowsta::OnlineProvider { id: "qwen".into(), name: "Qwen".into(), based_in: None, auto_default: qwen_default }];
+        let none: HashMap<String, bool> = HashMap::new();
+        // The person turned the provider off while off was the default, and
+        // one of its models on while on was what the provider said.
+        let provider_off: HashMap<String, bool> = [("qwen".to_string(), false)].into();
+        let model_on: HashMap<String, bool> = [("qwen-max".to_string(), true)].into();
+        // The catalog's default flips to on: their provider choice holds...
+        assert!(!auto_allowed("online:qwen-plus", Some("qwen"), &none, &provider_off, &catalog(true)));
+        // ...where a person who never touched it follows the new default.
+        assert!(auto_allowed("online:qwen-plus", Some("qwen"), &none, &none, &catalog(true)));
+        // A model's own switch stays as set when its provider's switch changes.
+        assert!(auto_allowed("online:qwen-max", Some("qwen"), &model_on, &provider_off, &catalog(false)));
+        assert!(auto_allowed("online:qwen-max", Some("qwen"), &model_on, &provider_off, &catalog(true)));
     }
 
     #[test]

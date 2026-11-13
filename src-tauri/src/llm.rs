@@ -520,7 +520,12 @@ pub(crate) fn local_http() -> reqwest::Client {
 /// `<think>` tags in the answer; asking for both made a model echo the
 /// instruction's literal tags into its report (2026-10-12).
 #[tauri::command]
-pub fn model_thinks_natively(model: String) -> bool {
+pub async fn model_thinks_natively(model: String) -> bool {
+    // An online model: the catalog says (its thinking streams apart from
+    // its answer). A local one: its own template does.
+    if model.starts_with("online:") {
+        return crate::flowsta::online_model_thinks_natively(&model).await;
+    }
     model_thinks_on_request(&model)
 }
 

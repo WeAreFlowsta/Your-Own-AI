@@ -13,6 +13,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import type { LocalModel } from "../types";
+import { hostLine, type Host } from "./modelHost";
 import { catalogVariantsForGrading, type CatalogFit, type CatalogModes, type RunMode } from "../data/recommended-models";
 
 /** green = fits fully on the GPU; split = GPU + RAM (MoE experts in main
@@ -27,6 +28,13 @@ export interface OnlineModel {
   /** Shelf/category from the catalog ("chat" | "web_search" | "coding") —
    *  web_search drives the "Searching the web" status during streams. */
   category?: string;
+  /** The provider that serves it, and its maker when that is another
+   *  company (from the catalog). */
+  provider?: string | null;
+  maker?: string | null;
+  /** Who hosts it and where, in words (`modelHost.ts`); set when the list
+   *  is fetched. */
+  host?: string | null;
 }
 
 let localCache: LocalModel[] | null = null;
@@ -71,9 +79,13 @@ export function getCachedCatalogModes(): CatalogModes | null {
 }
 
 export async function refreshOnlineModels(): Promise<OnlineModel[]> {
-  const models = await invoke<OnlineModel[]>("list_online_models");
-  onlineCache = models;
-  return models;
+  const [models, hosts] = await Promise.all([
+    invoke<OnlineModel[]>("list_online_models"),
+    // The same cached catalog; a failure only leaves the host line out.
+    invoke<Host[]>("list_online_providers").catch(() => [] as Host[]),
+  ]);
+  onlineCache = models.map((m) => ({ ...m, host: hostLine(m, hosts) }));
+  return onlineCache;
 }
 
 /**
