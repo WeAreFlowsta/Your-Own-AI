@@ -47,7 +47,7 @@ describe("another program holds the engines' usual ports", () => {
 
     await ask("Ports test: name one color and nothing else.");
     await waitForReplyDone(600_000);
-    const reply = (await lastReply()).trim();
+    const reply = ((await lastReply())?.text ?? "").trim();
     console.log(`e2e: with the usual ports held the reply was: ${reply.slice(0, 120)}`);
     expect(reply.length).toBeGreaterThan(0);
     expect(reply).not.toContain("empty reply");
