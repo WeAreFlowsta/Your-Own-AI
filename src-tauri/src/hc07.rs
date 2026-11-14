@@ -271,7 +271,7 @@ impl Cells07 {
         // one back on, for up to about a minute. The question writes nothing.
         let turn_on = [app.app_id.clone()];
         let wait = ReadyWait { attempts: 20, gap: std::time::Duration::from_secs(3), reenable: &turn_on, label: "[0.7]" };
-        let tries = admin.wait_ready_with(&wait, || client.cell_runs(ROLE, ZOME)).await.map_err(|e| format!("0.7 cell of {}: {} ({:?})", app.app_id, e.detail, e.kind))?;
+        let tries = admin.wait_ready_with(&wait, || client.cell_runs(ROLE)).await.map_err(|e| format!("0.7 cell of {}: {} ({:?})", app.app_id, e.detail, e.kind))?;
         if tries > 1 {
             log::info!("[0.7] {} answered after {} tries", app.app_id, tries);
         }

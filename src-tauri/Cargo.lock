@@ -2365,7 +2365,7 @@ dependencies = [
 [[package]]
 name = "flowsta-hc-lines"
 version = "0.1.0"
-source = "git+https://github.com/WeAreFlowsta/flowsta-hc-lines?rev=8c24de49b84fa6d6855d7804bccb3a984a12967a#8c24de49b84fa6d6855d7804bccb3a984a12967a"
+source = "git+https://github.com/WeAreFlowsta/flowsta-hc-lines?rev=06b1318f4a10e6093a170476fba32e38b2641fc8#06b1318f4a10e6093a170476fba32e38b2641fc8"
 dependencies = [
  "async-trait",
  "base64 0.22.1",

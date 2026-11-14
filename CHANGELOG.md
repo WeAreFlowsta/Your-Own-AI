@@ -64,6 +64,10 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   (up to 15 minutes) and says so, and does not start a second one after it.
 
 ### The move
+- **Opening Your Own AI no longer adds a record to each AI's history.**
+  Every start wrote one small permission record per AI, which then had to
+  sync to your other devices. Your Own AI now signs with each AI's own key
+  and writes nothing at a start.
 - Each computer moves its own history in the background, a little at a
   time, and carries on where it stopped after a restart or a power cut,
   with nothing lost or doubled.
@@ -237,8 +241,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   engine starts on a free port instead. Before, Your Own AI stopped that
   program to take the port, or, when it could not, sent every message to it
   and answered with empty replies. Only Your Own AI's own engine is ever
-  restarted, and nothing is sent to port 8080 while Your Own AI has no
-  engine of its own running there.
+  restarted, and nothing is sent to any of the three ports while Your Own
+  AI has no engine of its own running there.
 
 ## [0.9.0] - 2026-10-22
 
