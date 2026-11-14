@@ -264,16 +264,37 @@ pub async fn connect_app_websocket(
     app_port: u16,
     app_id: &str,
 ) -> Result<holochain_client::AppWebsocket, String> {
-    connect_app_websocket_as(admin_port, app_port, app_id, &crate::conductor::origin()).await
+    let store = crate::conductor::key_store(flowsta_hc_lines::Line::V06).ok_or("the key store is not running")?;
+    connect_signed(admin_port, app_port, app_id, &crate::conductor::origin(), Some(store)).await
 }
 
 /// [`connect_app_websocket`] presenting `origin`: for a tool in another
-/// process, which reads the origin from the conductor's config.
+/// process, which reads the origin from the conductor's config. It has no
+/// way to the key store, so its calls are signed under a signing grant
+/// (one action on the cell's chain).
 pub async fn connect_app_websocket_as(
     admin_port: u16,
     app_port: u16,
     app_id: &str,
     origin: &str,
+) -> Result<holochain_client::AppWebsocket, String> {
+    connect_signed(admin_port, app_port, app_id, origin, None).await
+}
+
+/// A function the zome does not have. Calling it asks whether the cell
+/// runs without writing anything: a running cell answers that the function
+/// is missing, a stopped one says CellDisabled.
+const IS_THE_CELL_RUNNING: &str = "__is_the_cell_running";
+
+/// The connection. With `key_store` (its address and passphrase), calls are
+/// signed with the AI's own key there: a cell takes its own agent's calls,
+/// so nothing is written to its chain.
+async fn connect_signed(
+    admin_port: u16,
+    app_port: u16,
+    app_id: &str,
+    origin: &str,
+    key_store: Option<(String, String)>,
 ) -> Result<holochain_client::AppWebsocket, String> {
     let admin_ws = AdminWebsocket::connect(
         format!("localhost:{}", admin_port),
@@ -308,6 +329,12 @@ pub async fn connect_app_websocket_as(
         _ => unreachable!(),
     };
 
+    let signer_arc: std::sync::Arc<dyn holochain_client::AgentSigner + Send + Sync> = if let Some((url, passphrase)) = &key_store {
+        let cell = flowsta_hc_lines::admin::CellRef { role: ROLE_NAME.to_string(), dna_hash: cell_id.dna_hash().get_raw_39().to_vec(), agent_key: cell_id.agent_pubkey().get_raw_39().to_vec() };
+        flowsta_hc_lines::admin::key_store_signer_06(url, passphrase, std::slice::from_ref(&cell))
+            .await
+            .map_err(|e| format!("Failed to reach the key store: {}", e))?
+    } else {
     // Authorize signing credentials, retrying two transient failures:
     // - CellDisabled: after a conductor restart/upgrade, cells can lag the
     //   app's Enabled status. Re-issue enable_app and retry — the same
@@ -350,9 +377,8 @@ pub async fn connect_app_websocket_as(
         }
     };
     signer.add_credentials(cell_id.clone(), creds);
-
-    let signer_arc: std::sync::Arc<dyn holochain_client::AgentSigner + Send + Sync> =
-        signer.into();
+    signer.into()
+    };
 
     // Issue app auth token.
     let token = admin_ws
@@ -381,6 +407,32 @@ pub async fn connect_app_websocket_as(
     )
     .await
     .map_err(|e| format!("Failed to connect app WebSocket: {}", e))?;
+
+    // After a conductor restart or upgrade, cells can lag the app's Enabled
+    // status: ask until the cell answers, enabling the app again between
+    // tries (the grant used to be this check).
+    if key_store.is_some() {
+        use holochain_client::ZomeCallTarget;
+        use holochain_types::prelude::ExternIO;
+        for attempt in 1..=6 {
+            let asked = app_ws
+                .call_zome(ZomeCallTarget::RoleName(ROLE_NAME.into()), "transcript".into(), IS_THE_CELL_RUNNING.into(), ExternIO::from(vec![0xc0]))
+                .await;
+            let kind = match &asked {
+                Ok(_) => break,
+                Err(e) => flowsta_hc_lines::client::kind_06(e),
+            };
+            match kind {
+                flowsta_hc_lines::ZomeErrorKind::MissingFunction => break,
+                flowsta_hc_lines::ZomeErrorKind::CellNotRunning if attempt < 6 => {
+                    log::warn!("Cell disabled for {} (attempt {}), re-enabling and retrying", app_id, attempt);
+                    let _ = admin_ws.enable_app(app_id.to_string()).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+                _ => return Err(format!("The cell of {} did not answer: {:?}", app_id, asked.err())),
+            }
+        }
+    }
 
     log::info!("App WebSocket connected for {}", app_id);
     Ok(app_ws)

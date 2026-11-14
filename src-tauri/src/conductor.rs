@@ -68,6 +68,18 @@ pub fn app_port() -> Option<u16> {
     supervisor().ports(Line::V06).map(|(_, app)| app)
 }
 
+/// A running line's key store, for calls signed with an AI's own key: its
+/// address and its passphrase. The address carries the connection key:
+/// never log either.
+pub(crate) fn key_store(line: Line) -> Option<(String, String)> {
+    let url = supervisor().key_store_url(line)?;
+    let passphrase = match line {
+        Line::V06 => PASSPHRASE_06.to_string(),
+        Line::V07 => LINE_07.lock().unwrap_or_else(|p| p.into_inner()).as_ref()?.passphrase.clone(),
+    };
+    Some((url, passphrase))
+}
+
 /// A line's admin and app ports, while it runs.
 pub fn ports(line: Line) -> Option<(u16, u16)> {
     supervisor().ports(line)
@@ -164,6 +176,7 @@ pub(crate) fn passphrase_of_store_07(data_dir: &Path, data_key: &[u8; 32]) -> Re
 /// died, or it was stopped for its memory).
 pub fn attach_07(app: tauri::AppHandle, data_dir: PathBuf, line_07: Line07) -> Result<(), String> {
     let session = supervisor().session().ok_or("no session runs")?;
+    *LINE_07.lock().unwrap_or_else(|p| p.into_inner()) = Some(line_07.clone());
     supervisor().attach_line(session, Line::V07, Arc::new(YoaiLines { app: Some(app), data_dir, line_07: Some(line_07) }));
     Ok(())
 }
@@ -1019,6 +1032,9 @@ fn now_ms_conductor() -> u64 {
 #[cfg(test)]
 pub(crate) async fn start_for_test(data_dir: PathBuf, line_07: Option<Line07>) -> Result<u64, String> {
     let secondary = line_07.is_some().then_some(Line::V07);
+    if let Some(l07) = &line_07 {
+        *LINE_07.lock().unwrap_or_else(|p| p.into_inner()) = Some(l07.clone());
+    }
     supervisor().start_lines(Line::V06, secondary, Arc::new(YoaiLines { app: None, data_dir, line_07 })).await
 }
 

@@ -5,7 +5,7 @@
 //! alike, and outputs holding records decode with the 0.7 types into the
 //! library's line-free `RecordView`.
 
-use flowsta_hc_lines::admin::AppConnect;
+use flowsta_hc_lines::admin::{AppConnect, ReadyWait, Signing};
 use flowsta_hc_lines::v07::holochain_types::prelude::Record as Record07;
 use flowsta_hc_lines::{AdminClient, AppClient, InstallRequest, Line, RecordView};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -250,44 +250,31 @@ impl Cells07 {
             .find(|a| a.app_id.starts_with(APP_ID_PREFIX) && a.agent_key == agent)
             .ok_or_else(|| format!("no 0.7 transcript app for {agent_hex}"))?;
         let cell = admin.app_cell(&app.app_id, ROLE).await.map_err(|e| format!("0.7 cell of {}: {e}", app.app_id))?;
-        // Enabled is not ready: right after a start (or the install restart)
-        // a cell is listed before it runs. Wait for it, turning a disabled
-        // one back on, for up to about a minute.
-        let mut tries = 0;
-        let grant = loop {
-            tries += 1;
-            match admin.authorize_signing(&cell).await {
-                Ok(g) => break g,
-                Err(e) if e.kind == flowsta_hc_lines::ZomeErrorKind::CellNotRunning && tries < 20 => {
-                    if tries == 1 {
-                        log::info!("[0.7] {} is not running yet; waiting for it", app.app_id);
-                    }
-                    if !app.enabled {
-                        let _ = admin.enable(&app.app_id).await;
-                    }
-                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
-                }
-                // A write on the chain (the cell's first call runs its init)
-                // moved the head under the grant.
-                Err(e) if e.to_string().contains("head has moved") && tries < 20 => tokio::time::sleep(std::time::Duration::from_millis(300)).await,
-                Err(e) => return Err(format!("0.7 grant for {}: {e}", app.app_id)),
-            }
-        };
-        if tries > 1 {
-            log::info!("[0.7] {} answered after {} tries", app.app_id, tries);
-        }
         let (_, app_port) = crate::conductor::ports(Line::V07).ok_or("the 0.7 line is not running")?;
+        // Calls are signed with the AI's own key in the key store: a cell
+        // takes its own agent's calls, so connecting writes nothing to the
+        // AI's chain (a signing grant is a chain action at every start).
+        let (store, passphrase) = crate::conductor::key_store(Line::V07).ok_or("the 0.7 key store is not running")?;
         let client = admin
             .connect_app(AppConnect {
                 app_port,
                 origin: &crate::conductor::origin(),
                 app_id: &app.app_id,
                 cell: &cell,
-                grant,
+                signing: Signing::KeyStore { url: &store, passphrase: &passphrase },
                 request_timeout: std::time::Duration::from_secs(crate::dna::BACKUP_READ_TIMEOUT_SECS),
             })
             .await
             .map_err(|e| format!("0.7 connect {}: {e}", app.app_id))?;
+        // Enabled is not ready: right after a start (or the install restart)
+        // a cell is listed before it runs. Wait for it, turning a disabled
+        // one back on, for up to about a minute. The question writes nothing.
+        let turn_on = [app.app_id.clone()];
+        let wait = ReadyWait { attempts: 20, gap: std::time::Duration::from_secs(3), reenable: &turn_on, label: "[0.7]" };
+        let tries = admin.wait_ready_with(&wait, || client.cell_runs(ROLE)).await.map_err(|e| format!("0.7 cell of {}: {} ({:?})", app.app_id, e.detail, e.kind))?;
+        if tries > 1 {
+            log::info!("[0.7] {} answered after {} tries", app.app_id, tries);
+        }
         let client = Arc::new(client);
         self.clients.lock().await.insert(agent_hex.to_string(), client.clone());
         Ok(client)

@@ -2256,6 +2256,26 @@ pub(crate) fn our_chat_server_is_up() -> bool {
     OUR_CHAT_SERVER.load(std::sync::atomic::Ordering::Relaxed) != 0
 }
 
+/// The same record for the two helper servers (the memory model and the
+/// helper model): the pid of the one this app started and has not seen end.
+/// Nothing is sent to a helper's port, not a health check either, while the
+/// app has no server of its own there.
+static OUR_EMBED_SERVER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static OUR_UTIL_SERVER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn helper_started(record: &std::sync::atomic::AtomicU32, pid: u32) {
+    record.store(pid, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The helper with this pid ended (a later one's record is left alone).
+fn helper_ended(record: &std::sync::atomic::AtomicU32, pid: u32) {
+    let _ = record.compare_exchange(pid, 0, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn helper_is_ours(record: &std::sync::atomic::AtomicU32) -> bool {
+    record.load(std::sync::atomic::Ordering::Relaxed) != 0
+}
+
 /// A context the NEXT spawn must reach at least (set by `ensure_context`
 /// after it checked the machine can afford it; consumed by the spawn).
 /// Lets a turn that outgrows the running context reload with more room
@@ -4055,6 +4075,9 @@ pub(crate) fn netstat_listening_pids(text: &str, port: &str) -> Vec<String> {
 }
 
 async fn embed_server_ready() -> bool {
+    if !helper_is_ours(&OUR_EMBED_SERVER) {
+        return false;
+    }
     let client = local_http();
     // Bounded: a server that accepted the connection but never answers must
     // read as not ready, not hold every prompt that waits on its recall.
@@ -4217,6 +4240,7 @@ async fn ensure_embedding_server(
     let child_pid = child.pid();
     lower_priority(child_pid);
 
+    helper_started(&OUR_EMBED_SERVER, child_pid);
     *state.embed_process.lock().await = Some(child);
     *state.embed_running.lock().await = true;
     *state.embed_model.lock().await = Some(model_filename.to_string());
@@ -4231,6 +4255,7 @@ async fn ensure_embedding_server(
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
                     log::warn!("[embed-server] terminated: {:?}", payload.code);
+                    helper_ended(&OUR_EMBED_SERVER, child_pid);
                     break;
                 }
                 _ => {}
@@ -4370,6 +4395,9 @@ enum EmbedError {
 }
 
 async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, EmbedError> {
+    if !helper_is_ours(&OUR_EMBED_SERVER) {
+        return Err(EmbedError::Other("The memory model is not running".to_string()));
+    }
     let _busy = Inflight::new(&EMBED_INFLIGHT);
     let client = local_http();
     // Bounded: an embedding that never comes back is an error the caller
@@ -4426,6 +4454,9 @@ async fn embed_one_shrinking(model: &str, text: String) -> Result<Vec<f32>, Stri
 fn util_port() -> String { crate::ports::util().to_string() }
 
 async fn util_server_ready() -> bool {
+    if !helper_is_ours(&OUR_UTIL_SERVER) {
+        return false;
+    }
     let client = local_http();
     matches!(
         client.get(format!("http://localhost:{}/health", util_port())).bearer_auth(local_api_key()).send().await,
@@ -4558,6 +4589,7 @@ async fn ensure_utility_server(
     let child_pid = child.pid();
     lower_priority(child_pid);
 
+    helper_started(&OUR_UTIL_SERVER, child_pid);
     *state.util_process.lock().await = Some(child);
     *state.util_running.lock().await = true;
     *state.util_model.lock().await = Some(model_filename.to_string());
@@ -4572,6 +4604,7 @@ async fn ensure_utility_server(
                 }
                 tauri_plugin_shell::process::CommandEvent::Terminated(payload) => {
                     log::warn!("[util-server] terminated: {:?}", payload.code);
+                    helper_ended(&OUR_UTIL_SERVER, child_pid);
                     break;
                 }
                 _ => {}
