@@ -21,6 +21,7 @@ mod diagnostics;          // one-click diagnostic report (Settings > Help & diag
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
 mod matrix;               // in-app truth matrix (Help & diagnostics, every build)
+mod doc_reader;           // the optional document reader (a picture of a document -> text)
 mod report_scrub;         // what may leave the computer in a report sent by hand
 mod engine;               // optional inference engines (pinned tag; CUDA backend later)
 mod ocr;                  // OCR for scanned PDFs (pdfium render + ocrs)

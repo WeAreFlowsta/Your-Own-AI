@@ -6,7 +6,7 @@
 import { component$ } from "@builder.io/qwik";
 import ModelStorageLocation from "./ModelStorageLocation";
 import { ComponentCard, BuildComponentCard } from "./ComponentCards";
-import { EMBEDDING_MODEL, UTILITY_MODEL, VISION_PROJECTORS, OCR_MODELS } from "../data/recommended-models";
+import { EMBEDDING_MODEL, UTILITY_MODEL, VISION_PROJECTORS, OCR_MODELS, DOCUMENT_READER } from "../data/recommended-models";
 
 export default component$(() => {
   return (
@@ -36,6 +36,7 @@ export default component$(() => {
             <ComponentCard manageOnly key={projector.id} model={projector} icon="eye" activeLabel="Installed - this model can now see images you attach." />
           ))}
           <ComponentCard manageOnly model={OCR_MODELS} icon="scan" activeLabel="Installed - scanned PDFs are read on your device." />
+          <ComponentCard manageOnly model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs are read with it, on your device." />
         </div>
         <p class="mt-3 text-xs text-[var(--text-muted)]">Engines (CUDA, MLX) are managed under Engines below.</p>
       </div>

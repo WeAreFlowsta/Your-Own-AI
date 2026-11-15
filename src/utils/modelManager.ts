@@ -8,7 +8,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { LocalModel } from '../types';
-import { EMBEDDING_MODEL, VISION_PROJECTORS, OCR_MODELS } from '../data/recommended-models';
+import { EMBEDDING_MODEL, VISION_PROJECTORS, OCR_MODELS, DOCUMENT_READER } from '../data/recommended-models';
 
 /** Filenames that are capability dependencies (embedding, vision projectors), not
  *  chat models — they live in the same models dir but must never appear in a model
@@ -18,6 +18,7 @@ const NON_CHAT_MODEL_FILES = new Set<string>([
   EMBEDDING_MODEL.filename,
   ...VISION_PROJECTORS.map((p) => p.filename),
   ...(OCR_MODELS.files?.map((f) => f.filename) ?? [OCR_MODELS.filename]),
+  ...(DOCUMENT_READER.files?.map((f) => f.filename) ?? [DOCUMENT_READER.filename]),
 ]);
 const isNonChatModel = (name: string): boolean =>
   NON_CHAT_MODEL_FILES.has(name) ||

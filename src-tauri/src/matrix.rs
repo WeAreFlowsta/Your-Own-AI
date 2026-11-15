@@ -235,7 +235,7 @@ pub async fn leg_memory_grade(app: &AppHandle, bin: &Path, dir: &Path, loaded: O
         .map(|rd| {
             rd.flatten()
                 .filter_map(|e| e.file_name().to_str().map(String::from))
-                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj") && !crate::doc_reader::is_reader_file(n))
                 .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
                 .collect()
         })
@@ -659,6 +659,7 @@ fn gguf_files(dir: &Path) -> Vec<String> {
                 // model, and standalone they cannot load at all (the 4060 Ti
                 // report's only failures were one MTP draft benched alone).
                 .filter(|n| !crate::llm::is_draft_file(dir, n))
+                .filter(|n| !crate::doc_reader::is_reader_file(n))
                 .collect()
         })
         .unwrap_or_default();
@@ -838,7 +839,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
         .map(|rd| {
             rd.flatten()
                 .filter_map(|e| e.file_name().to_str().map(String::from))
-                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj") && !crate::doc_reader::is_reader_file(n))
                 .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
                 .collect()
         })
@@ -1057,7 +1058,7 @@ pub async fn leg_turn_mode(bin: &Path, dir: &Path, loaded: Option<&str>, sink: S
         .map(|rd| {
             rd.flatten()
                 .filter_map(|e| e.file_name().to_str().map(String::from))
-                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj") && !crate::doc_reader::is_reader_file(n))
                 .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
                 .collect()
         })
@@ -2736,7 +2737,7 @@ async fn leg_routing_inner(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<S
     failures
 }
 
-fn engine_binary(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
+pub(crate) fn engine_binary(app: &AppHandle) -> Result<(PathBuf, &'static str), String> {
     if let crate::engine::Backend::Cuda = crate::engine::active_backend(app) {
         if let Some(bin) = crate::engine::cuda_engine_binary(app) {
             return Ok((bin, "CUDA"));
