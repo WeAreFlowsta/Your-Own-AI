@@ -77,7 +77,7 @@ export const AttachmentChips = component$<AttachmentChipsProps>((props) => {
     <div class="px-2 pt-1.5 pb-0.5">
       <div class="flex flex-wrap items-center gap-1.5">
         {images.map((img, idx) => (
-          <span key={`img-${idx}`} class="relative shrink-0" title={img.filename}>
+          <span key={`img-${idx}`} class="relative shrink-0" title={img.filename} data-testid="attached-image">
             <img
               src={img.dataUrl}
               alt={img.filename}
