@@ -10,14 +10,26 @@ on:
 
 jobs:
   build-linux:
-    runs-on: ubuntu-latest
+    # 22.04, not ubuntu-latest: the runner's glibc becomes the engine's floor
+    # (the "Verify binary" step holds it at 2.35).
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-12
+      CXX: g++-12
     steps:
       - name: Install build dependencies
         run: |
           sudo apt-get update
           # spirv-headers/spirv-tools: required by llama.cpp's Vulkan backend
           # (ggml-vulkan find_package(SPIRV-Headers)) since ~mid-2026.
-          sudo apt-get install -y build-essential cmake libvulkan-dev glslang-tools glslc spirv-headers spirv-tools
+          sudo apt-get install -y build-essential cmake g++-12 libvulkan-dev glslang-tools spirv-headers spirv-tools
+          # glslc (the shader compiler the Vulkan backend builds with) is not
+          # packaged for 22.04: take it from the Vulkan SDK when apt has none.
+          if ! sudo apt-get install -y glslc; then
+            curl -fsSL -o /tmp/vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+            mkdir -p /tmp/vulkan-sdk && tar -xJf /tmp/vulkan-sdk.tar.xz -C /tmp/vulkan-sdk --strip-components=1
+            echo "/tmp/vulkan-sdk/x86_64/bin" >> "$GITHUB_PATH"
+          fi
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
@@ -52,6 +64,16 @@ jobs:
           if ldd build/bin/llama-server 2>/dev/null | grep -E "libssl|libcrypto|libcurl"; then
             echo "llama-server links SSL/curl libraries - it will fail on machines without them"; exit 1
           fi
+          # The oldest Linux this engine must start on is Ubuntu 22.04
+          # (glibc 2.35, libstdc++ 3.4.30), the release the app itself is
+          # built on. A newer runner stamps a newer floor into the binary and
+          # it then refuses to start on every older system (b12359 built on
+          # ubuntu-latest needed glibc 2.43: Ubuntu 24.04 has 2.39).
+          need() { objdump -T build/bin/llama-server | grep -oE "$1_[0-9.]+" | sed "s/$1_//" | sort -V | tail -1; }
+          GLIBC=$(need GLIBC); GLIBCXX=$(need GLIBCXX)
+          echo "needs glibc $GLIBC, libstdc++ $GLIBCXX"
+          [ "$(printf '%s\n' "$GLIBC" 2.35 | sort -V | tail -1)" = "2.35" ] || { echo "the engine needs glibc $GLIBC, newer than 2.35"; exit 1; }
+          [ "$(printf '%s\n' "$GLIBCXX" 3.4.30 | sort -V | tail -1)" = "3.4.30" ] || { echo "the engine needs libstdc++ $GLIBCXX, newer than 3.4.30"; exit 1; }
           ./build/bin/llama-server --version
           strip build/bin/llama-server
 
