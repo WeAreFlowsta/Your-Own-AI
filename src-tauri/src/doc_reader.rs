@@ -18,6 +18,21 @@ use std::time::{Duration, Instant};
 /// `mmproj-model-f16-4x.gguf`).
 pub const MODEL_FILE: &str = "MiniCPM-OCR-1_0-Q4_K_M.gguf";
 pub const VISION_FILE: &str = "MiniCPM-OCR-1_0-mmproj-f16.gguf";
+/// The quick check's model: the built-in reader's text detection, kept as
+/// this component's own file so removing either component leaves the other
+/// whole.
+pub const CHECK_FILE: &str = "document-check.rten";
+/// A picture with at least this many words found in it is a document.
+/// Measured 2026-11-16: nine documents and screenshots had 62 words or
+/// more, ten ordinary pictures 18 or fewer, a picture with a caption 12.
+pub const DOCUMENT_WORDS: usize = 40;
+/// The longest side a picture is read at.
+pub const PICTURE_MAX_SIDE: u32 = 1800;
+
+pub fn is_document(words_found: usize) -> bool {
+    words_found >= DOCUMENT_WORDS
+}
+
 /// The model's own instruction for plain reading (its SDK's default).
 const READ_PROMPT: &str = "Text Recognition:";
 /// Width a PDF page is drawn at for the reader: A4 at 150 dpi, the size
@@ -246,6 +261,7 @@ mod tests {
         assert!(on_card(Some(4.0)));
         assert!(!on_card(Some(1.1)));
         assert!(!on_card(None));
+        assert!(is_document(62) && !is_document(18));
         assert!(is_reader_file("MiniCPM-OCR-1_0-Q4_K_M.gguf") && !is_reader_file("gemma-4-E2B-it-Q4_K_M.gguf"));
     }
 

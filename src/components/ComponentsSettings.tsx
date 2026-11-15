@@ -36,7 +36,7 @@ export default component$(() => {
             <ComponentCard manageOnly key={projector.id} model={projector} icon="eye" activeLabel="Installed - this model can now see images you attach." />
           ))}
           <ComponentCard manageOnly model={OCR_MODELS} icon="scan" activeLabel="Installed - scanned PDFs are read on your device." />
-          <ComponentCard manageOnly model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs are read with it, on your device." />
+          <ComponentCard manageOnly model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs and pictures of documents are read with it, on your device." />
         </div>
         <p class="mt-3 text-xs text-[var(--text-muted)]">Engines (CUDA, MLX) are managed under Engines below.</p>
       </div>

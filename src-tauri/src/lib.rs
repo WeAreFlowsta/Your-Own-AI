@@ -746,6 +746,7 @@ pub fn run() {
             llm::download_status,
             ocr::is_ocr_ready,
             ocr::ocr_scanned_pdf,
+            ocr::read_picture_as_document,
             llm::delete_model,
             llm::get_models_directory,
             llm::models_disk_info,

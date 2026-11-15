@@ -128,6 +128,8 @@ export default component$(() => {
   const systemInfo = useSignal<SystemInfo | null>(null);
   const attachedFiles = useSignal<AttachedFile[]>([]);
   const attachedImages = useSignal<AttachedImage[]>([]);
+  /** Data URLs of attached pictures the document reader read into text. */
+  const picturesReadAsText = useSignal<string[]>([]);
   // A scanned PDF the user attached while OCR isn't installed — drives the offer.
   const ocrNeeded = useSignal<{ filePath: string; filename: string } | null>(null);
   // A scanned PDF currently being OCR'd (installed path) — drives the "reading…"
@@ -1902,7 +1904,9 @@ export default component$(() => {
     dropReplacedTurn();
     const webOnce = webOnceNext.value;
     webOnceNext.value = false;
-    sendMessage(finalInput, selectedAction.value, fileContext, images, undefined, false, webOnce ? { webOnce: true } : undefined);
+    const readAsText = picturesReadAsText.value.filter((u) => images.includes(u));
+    picturesReadAsText.value = [];
+    sendMessage(finalInput, selectedAction.value, fileContext, images, undefined, false, { ...(webOnce ? { webOnce: true } : {}), ...(readAsText.length ? { readAsText } : {}) });
     input.value = "";
     selectedAction.value = null;
     attachedImages.value = []; // image is per-turn — don't silently re-send it
@@ -2175,6 +2179,29 @@ export default component$(() => {
             ...attachedImages.value.filter((i) => i.dataUrl !== added.dataUrl),
             added,
           ].slice(-MAX_IMAGES_PER_MESSAGE);
+          // With the document reader installed, a picture that is mostly
+          // text (a letter, a form, a screenshot of a table) is read into
+          // text as well: the AI gets the words exactly, whether or not its
+          // model sees pictures. An ordinary photo answers in about a second
+          // and stays a picture only.
+          try {
+            const doc = await invoke<{ document: boolean; text?: string }>("read_picture_as_document", { filePath });
+            const textPath = `${filePath}#text`;
+            if (doc.document && doc.text && !attachedFiles.value.some((f) => f.path === textPath)) {
+              const text = doc.text;
+              attachedFiles.value = [...attachedFiles.value, {
+                filename: `${img.filename} (text)`,
+                path: textPath,
+                sizeBytes: new TextEncoder().encode(text).length,
+                content: text,
+                truncated: false,
+                estimatedTokens: await invoke<number>("count_tokens", { text }).catch(() => Math.ceil(text.length / 3)),
+              }];
+              picturesReadAsText.value = [...picturesReadAsText.value, added.dataUrl];
+            }
+          } catch (e) {
+            console.warn("[ChatPage] the picture was not checked as a document:", e);
+          }
         } catch (err) {
           console.error(`[ChatPage] Failed to read image ${filePath}:`, err);
         } finally {

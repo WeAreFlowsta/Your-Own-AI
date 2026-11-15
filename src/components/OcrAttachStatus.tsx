@@ -37,7 +37,9 @@ export const OcrAttachStatus = component$<OcrAttachStatusProps>((props) => {
       {props.reading?.value && !props.ocrProcessing.value && (
         <div class="mt-2 flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
           <span class="inline-block w-2 h-2 rounded-full bg-[var(--bg-button-primary)] animate-pulse shrink-0" />
-          Reading “{props.reading.value}”…
+          {page.value
+            ? `Reading “${props.reading.value}” with the document reader. This can take a minute.`
+            : `Reading “${props.reading.value}”…`}
         </div>
       )}
 
