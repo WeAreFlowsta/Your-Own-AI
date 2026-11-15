@@ -37,7 +37,9 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake g++-12 xz-utils
+          # libvulkan1: the loader the engine links (the SDK tarball has headers
+          # and tools, no loader library); the same one it loads at run time.
+          sudo apt-get install -y build-essential cmake g++-12 xz-utils libvulkan1
           # 22.04's own Vulkan headers (1.3.204) are too old for llama.cpp's
           # Vulkan backend: build against the Vulkan SDK (headers, glslc,
           # SPIRV headers), pinned. The engine still loads the system's
@@ -67,6 +69,7 @@ jobs:
             -DGGML_FMA=ON \
             -DGGML_F16C=ON \
             -DGGML_VULKAN=ON \
+            -DVulkan_LIBRARY=/usr/lib/x86_64-linux-gnu/libvulkan.so.1 \
             -DLLAMA_CURL=OFF \
             -DLLAMA_SERVER_SSL=OFF \
             -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
