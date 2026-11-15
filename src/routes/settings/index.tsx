@@ -1953,10 +1953,9 @@ export default component$(() => {
                   <span class="font-semibold text-[var(--text-primary)]">
                     Truth matrix
                   </span>{" "}
-                  - tests how your downloaded models really run on this
-                  computer, with fixed test questions. Nothing from your
-                  conversations is used, nothing goes online, and the report
-                  it writes holds no personal data. Takes about 10-20 minutes.
+                  - tests how your models run on this computer. Sending us
+                  the report helps us make the app better. It holds no
+                  private data. Takes 10-20 minutes.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
@@ -1993,8 +1992,8 @@ export default component$(() => {
                 )}
                 {matrixPath.value && !matrixBusy.value && (
                   <p class="mt-3 text-xs text-[var(--text-muted)] break-all">
-                    Report saved to {matrixPath.value} - attach this file when
-                    reporting how this computer runs.
+                    Report saved to {matrixPath.value}. Send us this file to
+                    help make the app better.
                   </p>
                 )}
                 {matrixError.value && (

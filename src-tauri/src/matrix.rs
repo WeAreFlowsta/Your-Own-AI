@@ -720,6 +720,9 @@ fn moe_decision(meta: &crate::gguf::GgufMeta, size: u64, ctx: u64, free: Option<
 /// one = 1. Held out of every prompt; never a benchmark set verbatim.
 struct QualityCase {
     ask: &'static str,
+    /// The right answer is to say it does not know (a place that does not
+    /// exist): an apology is then no refusal.
+    may_decline: bool,
     /// Extra system text for the case (the app's own block shapes, mirrored).
     system_extra: Option<&'static str>,
     /// Phrases that must NOT appear: context dragged in where it does not belong.
@@ -731,19 +734,37 @@ struct QualityCase {
     max_chars: usize,
 }
 const QUALITY_GOLD: &[QualityCase] = &[
-    QualityCase { system_extra: None, must_not: &[], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { system_extra: None, must_not: &[], ask: "explain compound interest with a short worked example", must: &[&["principal", "initial", "start"], &["rate", "percent", "%"], &["year"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { system_extra: None, must_not: &[], ask: "a train leaves at 9:15 and the trip takes 2 hours and 50 minutes. when does it arrive?", must: &[], number: Some("12:05"), min_items: 0, sentences: None, max_chars: 1200 },
-    QualityCase { system_extra: None, must_not: &[], ask: "what is the difference between weather and climate?", must: &[&["weather"], &["climate"], &["long", "decade", "average", "pattern", "years"], &["short", "day", "daily", "hour", "now", "moment"]], number: None, min_items: 0, sentences: None, max_chars: 2000 },
-    QualityCase { system_extra: None, must_not: &[], ask: "give me three tips for a first vegetable garden", must: &[&["sun", "light"], &["water"], &["soil", "compost"]], number: None, min_items: 3, sentences: None, max_chars: 2500 },
-    QualityCase { system_extra: None, must_not: &[], ask: "summarize the plot of romeo and juliet in four sentences", must: &[&["verona", "montague", "capulet", "families", "feud"], &["die", "death", "dies", "poison", "dagger", "kill"]], number: None, min_items: 0, sentences: Some((3, 6)), max_chars: 1500 },
-    QualityCase { system_extra: None, must_not: &[], ask: "how does a vaccine work?", must: &[&["immune"], &["antibod", "antigen", "memory", "recogni"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
-    QualityCase { system_extra: None, must_not: &[], ask: "write a short friendly reply to a colleague who thanked me for helping with their presentation", must: &[&["welcome", "glad", "happy", "pleasure", "anytime", "any time", "no problem"]], number: None, min_items: 0, sentences: Some((1, 5)), max_chars: 600 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "explain compound interest with a short worked example", must: &[&["principal", "initial", "start"], &["rate", "percent", "%"], &["year"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "a train leaves at 9:15 and the trip takes 2 hours and 50 minutes. when does it arrive?", must: &[], number: Some("12:05"), min_items: 0, sentences: None, max_chars: 1200 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "what is the difference between weather and climate?", must: &[&["weather"], &["climate"], &["long", "decade", "average", "pattern", "years"], &["short", "day", "daily", "hour", "now", "moment"]], number: None, min_items: 0, sentences: None, max_chars: 2000 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "give me three tips for a first vegetable garden", must: &[&["sun", "light"], &["water"], &["soil", "compost"]], number: None, min_items: 3, sentences: None, max_chars: 2500 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "summarize the plot of romeo and juliet in four sentences", must: &[&["verona", "montague", "capulet", "families", "feud"], &["die", "death", "dies", "poison", "dagger", "kill"]], number: None, min_items: 0, sentences: Some((3, 6)), max_chars: 1500 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "how does a vaccine work?", must: &[&["immune"], &["antibod", "antigen", "memory", "recogni"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "write a short friendly reply to a colleague who thanked me for helping with their presentation", must: &[&["welcome", "glad", "happy", "pleasure", "anytime", "any time", "no problem"]], number: None, min_items: 0, sentences: Some((1, 5)), max_chars: 600 },
     // A document card with no matched passage (memory.ts loadDocumentContextUsed, cards-only shape):
     // an unrelated question must not drag the document in (2026-10-12: a why-is-the-sky-blue answer cited a lease).
-    QualityCase { system_extra: Some(DOC_CARDS_ONLY), must_not: &["lease", "tenancy", "deposit", "document"], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
+    QualityCase { may_decline: false, system_extra: Some(DOC_CARDS_ONLY), must_not: &["lease", "tenancy", "deposit", "document"], ask: "why is the sky blue?", must: &[&["rayleigh", "scatter"], &["wavelength", "shorter", "blue light"]], number: None, min_items: 0, sentences: None, max_chars: 2500 },
     // The same card, a question about it: the AI names the document it holds (it has no passage, so it offers what it knows).
-    QualityCase { system_extra: Some(DOC_CARDS_ONLY), must_not: &[], ask: "what does my lease say about the deposit?", must: &[&["lease", "tenancy agreement"]], number: None, min_items: 0, sentences: None, max_chars: 1500 },
+    QualityCase { may_decline: false, system_extra: Some(DOC_CARDS_ONLY), must_not: &[], ask: "what does my lease say about the deposit?", must: &[&["lease", "tenancy agreement"]], number: None, min_items: 0, sentences: None, max_chars: 1500 },
+    // Harder, short-answer questions (2026-11-16): the ten above no longer
+    // separate small models (seven of them scored 17 to 19 of 20). Each has
+    // one right answer a rubric can read; the form point is a short answer
+    // where one was asked for.
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "pens are sold at 3 for $2. how much do 18 pens cost? answer with the amount only.", must: &[], number: Some("12"), min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "today is wednesday. what day of the week will it be 10 days from now? answer with the day only.", must: &[&["saturday"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "anna is taller than ben. ben is taller than cara. dev is shorter than cara. who is the shortest? answer with the name only.", must: &[&["dev"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "what is 15% of 240? answer with the number only.", must: &[], number: Some("36"), min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "a recipe for 4 people uses 300 g of flour. how much flour is needed for 10 people? answer with the amount only.", must: &[], number: Some("750"), min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "it is 14:00 in london (utc+0). what time is it in tokyo (utc+9)? answer with the time only.", must: &[&["23:00", "23.00", "11 pm", "11:00 pm", "11pm", "11 p.m"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "sort these numbers from smallest to largest, on one line: 42, 7, 19, 103, 8", must: &[&["7, 8, 19, 42, 103", "7 8 19 42 103", "7 < 8 < 19 < 42 < 103", "7,8,19,42,103"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "read this note, then answer. note: the team meeting was planned for tuesday at 3 pm. because the room is being painted, it has moved to thursday at 10 am in room b. question: when and where is the meeting now?", must: &[&["thursday"], &["10"], &["room b"]], number: None, min_items: 0, sentences: None, max_chars: 600 },
+    QualityCase { may_decline: true, system_extra: None, must_not: &[], ask: "what is the population of the village of zarnevik-on-thrum?", must: &[&["don't know", "do not know", "not sure", "no information", "not familiar", "couldn't find", "could not find", "unable to", "not aware", "cannot find", "can't find", "don't have", "do not have", "no record", "fictional", "not a real", "doesn't appear", "does not appear", "not a known", "no reliable", "no data"]], number: None, min_items: 0, sentences: None, max_chars: 900 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "what does this python line print? print(sum([1, 2, 3]) * 2) answer with the output only.", must: &[], number: Some("12"), min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "translate into french: the book is on the table.", must: &[&["livre"], &["sur la table"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "return only json with the keys name and age for this sentence: maria is 34 years old.", must: &[&["\"name\""], &["maria"], &["\"age\""], &["34"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "a bat and a ball cost $1.10 together. the bat costs $1.00 more than the ball. how much does the ball cost? answer with the amount only.", must: &[&["0.05", "5 cents", "five cents", "$.05", "5¢"]], number: None, min_items: 0, sentences: None, max_chars: 400 },
+    QualityCase { may_decline: false, system_extra: None, must_not: &[], ask: "name the three primary colors of light as a comma-separated list on one line, and nothing else.", must: &[&["red"], &["green"], &["blue"]], number: None, min_items: 0, sentences: None, max_chars: 80 },
 ];
 /// The app's document block when no passage cleared the bar - header, one card, the closing instruction.
 const DOC_CARDS_ONLY: &str = "\n\n[From your documents]\nThis AI has one document from your library:\n- \"Flat lease 2026\": The tenancy runs twelve months from 1 March; rent 1,150 a month; deposit 1,325 held in the approved scheme.\n\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
@@ -759,7 +780,7 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
     let a = answer.to_lowercase();
     let mut missing = Vec::new();
     // Refusals and filler fail the whole question: an answer that is not one.
-    if a.trim().is_empty() || a.starts_with("i'm sorry") || a.starts_with("i am sorry") || a.contains("as an ai language model") {
+    if a.trim().is_empty() || (!case.may_decline && (a.starts_with("i'm sorry") || a.starts_with("i am sorry"))) || a.contains("as an ai language model") {
         return (0, vec!["no answer (empty, refusal or filler)".into()]);
     }
     let mut facts_ok = true;
@@ -800,7 +821,7 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
     (facts_ok as u8 + form_ok as u8, missing)
 }
 
-/// Answer quality on this machine's models: eight general questions with a
+/// Answer quality on this machine's models: general questions with a
 /// deterministic rubric, two points each, on the memory leg's candidates. The
 /// capability table (`model_caps`) scores by family name; the line shows the
 /// table's `overall` beside the measured points so the two can be compared
@@ -808,7 +829,7 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
 /// numbers, never by hand (the plan §A0).
 /// Time one model gets in the answer-quality leg before it is called too
 /// slow for this machine (not a failure).
-const QUALITY_MODEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(180);
+const QUALITY_MODEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(300);
 
 pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
     use std::time::Duration;
@@ -1785,8 +1806,8 @@ pub(crate) fn devices_failures(labels_read: bool, unlocked: bool, ai_count: usiz
 /// The page's own errors from the current app log (`[page] ...` lines the
 /// window's error and unhandled-rejection reporters write): the last ten,
 /// as time, message and code location. Never a failure: the section is for
-/// reading, not grading. Anything that looks like a path or an address in
-/// a message is blanked, so the report stays safe to share.
+/// reading, not grading. None of a message's own words are kept (see
+/// `page_error_line`), so the report stays safe to share.
 pub fn leg_page_errors(app: &AppHandle) -> Vec<String> {
     let Ok(dir) = app.path().app_log_dir() else { return vec!["log folder not found".into()] };
     let name = format!("{}.log", app.package_info().name);
@@ -1803,39 +1824,49 @@ pub fn leg_page_errors(app: &AppHandle) -> Vec<String> {
     out
 }
 
-/// One log line -> "date time  message" when it is a page error, else None.
-/// Paths and addresses inside the message are replaced by `<path>`.
+/// One log line -> "date time  kind @ our code location" when it is a page
+/// error, else None. NONE of the message's own words reach the report: a
+/// page error can quote a site, a file name, a key or the person's own
+/// text. What stays is the kind (`error` or `unhandled`, and an error class
+/// such as `TypeError` when the message names one) and where in our own
+/// code it happened (`q-XXXX.js:line:column`).
 fn page_error_line(line: &str) -> Option<String> {
-    let at = line.find("[page] ")?;
-    let msg = &line[at + "[page] ".len()..];
+    let at = line.find("[ui] [page] ")?;
+    let msg = &line[at + "[ui] [page] ".len()..];
     // "[2026-10-21][10:33:34][...]" -> "2026-10-21 10:33:34"
     let mut parts = line.splitn(3, ']');
     let date = parts.next()?.trim_start_matches('[');
     let time = parts.next()?.trim_start_matches('[');
-    // Our own code locations stay (they name a chunk of the app, not the
-    // person); anything else with a path or an address is blanked.
-    let safe: String = msg
+    let kind = if msg.starts_with("unhandled") { "unhandled" } else { "error" };
+    let clean = |w: &str| w.trim_matches(|c: char| !c.is_ascii_alphanumeric()).to_string();
+    let class = msg
         .split_whitespace()
-        .map(|w| w.replace("tauri://localhost/build/", ""))
-        .map(|w| if w.contains('/') || w.contains('\\') || w.contains("://") { "<path>".to_string() } else { w })
-        .collect::<Vec<_>>()
-        .join(" ");
-    Some(format!("{date} {time}  {}", safe.chars().take(220).collect::<String>()))
+        .map(clean)
+        .find(|w| w.len() > 5 && w.ends_with("Error") && w.chars().all(|c| c.is_ascii_alphabetic()))
+        .map(|c| format!(" {c}"))
+        .unwrap_or_default();
+    // Our own code locations: a build chunk's file name, line and column.
+    let places: Vec<String> = msg
+        .split(|c: char| c.is_whitespace() || c == '/' || c == '@' || c == '(' || c == ')')
+        .filter(|w| w.starts_with("q-") && w.contains(".js:") && w.len() < 40 && w.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':')))
+        .take(2)
+        .map(String::from)
+        .collect();
+    Some(format!("{date} {time}  {kind}{class}{}", if places.is_empty() { String::new() } else { format!(" @ {}", places.join(" | ")) }))
 }
 
 #[cfg(test)]
 mod page_error_tests {
     use super::page_error_line;
     #[test]
-    fn a_page_error_keeps_time_message_and_location_and_blanks_paths() {
-        let l = "[2026-10-21][10:33:34][app_lib::commands_holochain][ERROR] [ui] [page] unhandled: Can't find variable: lastRailEventAt @tauri://localhost/build/q-BC92XIMX.js:2:28375 | Do@tauri://localhost/build/q-BC92XIMX.js:2:1240";
-        let out = page_error_line(l).unwrap();
-        assert!(out.starts_with("2026-10-21 10:33:34  unhandled: Can't find variable: lastRailEventAt"), "{out}");
-        assert!(out.contains("q-BC92XIMX.js:2:28375") && !out.contains("tauri://"), "the code location stays, the address goes: {out}");
-        let l2 = "[2026-10-21][10:40:00][app_lib::commands_holochain][ERROR] [ui] [page] error: could not read /home/someone/Documents/tax.pdf at q-abc.js:1:2";
-        let out2 = page_error_line(l2).unwrap();
-        assert!(!out2.contains("someone") && out2.contains("<path>"), "a path in a message never reaches the report: {out2}");
+    fn a_page_error_keeps_its_time_kind_and_code_location_and_none_of_its_words() {
+        let l = "[2026-10-21][10:33:34][app_lib::commands_holochain][ERROR] [ui] [page] unhandled: ReferenceError: Can't find variable: lastRailEventAt @tauri://localhost/build/q-BC92XIMX.js:2:28375 | Do@tauri://localhost/build/q-ZZ.js:1:2";
+        assert_eq!(page_error_line(l).unwrap(), "2026-10-21 10:33:34  unhandled ReferenceError @ q-BC92XIMX.js:2:28375 | q-ZZ.js:1:2");
+        // A command's error quotes a site, a file and the person's own words: none of it is kept.
+        let l2 = "[2026-10-21][10:40:00][app_lib::commands_holochain][ERROR] [ui] [page] error: news.example.org answered 403. could not read tax return.pdf: Unexpected token 'I', \"I'm Sam and\" is not valid JSON";
+        assert_eq!(page_error_line(l2).unwrap(), "2026-10-21 10:40:00  error");
         assert!(page_error_line("[2026-10-21][10:33:34][app_lib::llm][INFO] [embed] 1 text(s)").is_none());
+        assert!(page_error_line("[2026-10-21][10:33:34][app_lib::llm][INFO] the model wrote [page] in its answer").is_none(), "only the window's own reporter counts");
     }
 }
 
@@ -1858,18 +1889,9 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
             "locked (backups wait for it)"
         }
     ));
-    // Which identity the lines below describe - by count, never by name: the
-    // report is made to be shared (10-20: the Vault had been unlocked as
-    // another identity, and its lines read as faults).
-    let identities = crate::profile::device_root(app)
-        .ok()
-        .and_then(|r| std::fs::read_dir(crate::profile::profiles_dir(&r)).ok())
-        .map(|d| d.flatten().filter(|e| e.path().is_dir()).count())
-        .unwrap_or(0);
-    sink(format!(
-        "identity: the one unlocked in the Vault now{}",
-        if identities > 1 { format!(" ({identities} identities have used Your Own AI on this computer)") } else { String::new() }
-    ));
+    // Which identity the lines below describe - never by name, and never how
+    // many have used this computer: the report is made to be shared.
+    sink("identity: the one unlocked in the Vault now".into());
     let ai_count = crate::profile::root(app)
         .ok()
         .and_then(|d| std::fs::read_to_string(d.join("ai-data.json")).ok())
@@ -1912,7 +1934,9 @@ pub async fn leg_devices(app: &AppHandle, sink: Sink<'_>) -> Vec<String> {
                     ));
                 }
             }
-            Err(e) => sink(format!("other devices: not read ({e})")),
+            // Never the error's own text: it carries the request's address,
+            // and that names the identity.
+            Err(e) => sink(format!("other devices: not read ({})", if e.starts_with("vault unreachable") { "the Vault did not answer" } else { "the Vault answered with an error" })),
         }
     }
     match crate::config_sync::config_sync_status(app.clone()) {
@@ -2225,7 +2249,7 @@ pub async fn leg_agent_probe(bin: &Path, dir: &Path, models: &[String], sink: Si
         }
         let path = dir.join(name);
         let Ok(meta) = crate::gguf::read_meta(&path) else {
-            sink(format!("{name}: not found in {}", dir.display()));
+            sink(format!("{name}: not found in the models folder"));
             continue;
         };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
@@ -2359,10 +2383,9 @@ async fn leg_routing_inner(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<S
     let embeddings = dir.join(crate::router::EMBED_MODEL).exists();
     let helper = dir.join(HELPER_FILE).exists();
     sink(format!(
-        "dial: {share} | online catalog: {} | everyday default listed: {} | entitled: {} | embedding model: {} | helper model: {}",
+        "dial: {share} | online catalog: {} | everyday default listed: {} | embedding model: {} | helper model: {}",
         catalog.as_ref().map(|m| format!("{} models", m.len())).unwrap_or_else(|| "unreachable (online rungs not exercised)".into()),
         if everyday_listed { "yes" } else { "no" },
-        if not_entitled { "no" } else { "yes or unknown" },
         if embeddings { "yes" } else { "no (semantic gates off - ordinary questions stay on the device)" },
         if helper { "yes" } else { "no (difficulty unknown)" },
     ));
@@ -2542,6 +2565,8 @@ async fn leg_routing_inner(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<S
                 if let Some(f) = fail {
                     entry.2 += 1;
                     if listed_fails < 25 {
+                        // A model on the person's own server is named by that server (it can be a path there).
+                        let model = if model.starts_with("external:") { "external:(a model on your own server)".to_string() } else { model.to_string() };
                         sink(format!("  FAIL {id} | {mode} | {dial} | {f} | {model} | {reason}"));
                     }
                     listed_fails += 1;
@@ -2709,18 +2734,18 @@ pub async fn matrix_run(
     let sink_app = app.clone();
     let sink_report = report.clone();
     let sink_path = path.clone();
-    // Every line is scrubbed of the home directory before it is written:
-    // the report is made to be sent to other people, and an engine error
-    // echoing an absolute path must not carry the OS account name.
-    let home_prefix = std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .unwrap_or_default();
+    // Every line passes the scrubber before it is written, shown or logged
+    // (`report_scrub`): the report is made to be sent to other people, and
+    // no line, whatever wrote it, carries the account name, a path, an
+    // address, a key or the name of a model the person made.
+    let scrub = {
+        let dir = crate::llm::get_models_dir(&app).unwrap_or_else(|_| std::env::temp_dir());
+        let mut names = gguf_files(&dir);
+        names.extend(std::fs::read_dir(&dir).map(|rd| rd.flatten().filter(|e| e.path().is_dir()).filter_map(|e| e.file_name().to_str().map(String::from)).collect::<Vec<_>>()).unwrap_or_default());
+        crate::report_scrub::Scrub::for_this_computer(&names)
+    };
     let sink = move |line: String| {
-        let line = if home_prefix.len() > 3 {
-            line.replace(&home_prefix, "~")
-        } else {
-            line
-        };
+        let line = scrub.line(&line);
         log::info!("[matrix] {line}");
         let _ = sink_app.emit("matrix-progress", &line);
         let mut r = sink_report.lock().unwrap();
@@ -2773,19 +2798,14 @@ pub async fn matrix_run(
         bin.file_name().and_then(|n| n.to_str()).unwrap_or("?")
     ));
     sink(format!("GPUs: {gpus}"));
-    // The report is made to be sent to other people: the models path is
-    // shown with the home directory folded to ~ so the OS account name
-    // never rides along.
+    // The report is made to be sent to other people: where the models
+    // folder is, never its path (a folder on another drive carries the
+    // account name or a name the person chose).
     let dir_shown = {
         let home = std::env::var("USERPROFILE")
             .or_else(|_| std::env::var("HOME"))
             .unwrap_or_default();
-        let d = dir.display().to_string();
-        if !home.is_empty() && d.starts_with(&home) {
-            format!("~{}", &d[home.len()..])
-        } else {
-            d
-        }
+        if !home.is_empty() && dir.starts_with(&home) { "in your home folder" } else { "outside your home folder" }
     };
     sink(format!(
         "RAM: {:.1} GB | models: {} ({} GGUF, {} MLX)",
