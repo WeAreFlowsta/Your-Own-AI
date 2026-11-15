@@ -37,16 +37,17 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          # spirv-headers/spirv-tools: required by llama.cpp's Vulkan backend
-          # (ggml-vulkan find_package(SPIRV-Headers)) since ~mid-2026.
-          sudo apt-get install -y build-essential cmake g++-12 libvulkan-dev glslang-tools spirv-headers spirv-tools
-          # glslc (the shader compiler the Vulkan backend builds with) is not
-          # packaged for 22.04: take it from the Vulkan SDK when apt has none.
-          if ! sudo apt-get install -y glslc; then
-            curl -fsSL -o /tmp/vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
-            mkdir -p /tmp/vulkan-sdk && tar -xJf /tmp/vulkan-sdk.tar.xz -C /tmp/vulkan-sdk --strip-components=1
-            echo "/tmp/vulkan-sdk/x86_64/bin" >> "$GITHUB_PATH"
-          fi
+          sudo apt-get install -y build-essential cmake g++-12 xz-utils
+          # 22.04's own Vulkan headers (1.3.204) are too old for llama.cpp's
+          # Vulkan backend: build against the Vulkan SDK (headers, glslc,
+          # SPIRV headers), pinned. The engine still loads the system's
+          # libvulkan.so.1 at run time.
+          SDK=1.4.363.1
+          curl -fsSL -o /tmp/vulkan-sdk.tar.xz "https://sdk.lunarg.com/sdk/download/${SDK}/linux/vulkansdk-linux-x86_64-${SDK}.tar.xz"
+          mkdir -p /tmp/vulkan-sdk && tar -xJf /tmp/vulkan-sdk.tar.xz -C /tmp/vulkan-sdk --strip-components=1
+          echo "VULKAN_SDK=/tmp/vulkan-sdk/x86_64" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=/tmp/vulkan-sdk/x86_64" >> "$GITHUB_ENV"
+          echo "/tmp/vulkan-sdk/x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
