@@ -139,6 +139,26 @@
     "agent": 5,
     "known": true
   },
+  "MiniCPM-OCR-1_0-Q4_K_M.gguf": {
+    "overall": 4,
+    "coding": 4,
+    "reasoning": 4,
+    "math": 4,
+    "vision": 0,
+    "medical": 3,
+    "agent": 3,
+    "known": false
+  },
+  "MiniCPM-OCR-1_0-mmproj-f16.gguf": {
+    "overall": 4,
+    "coding": 4,
+    "reasoning": 4,
+    "math": 4,
+    "vision": 0,
+    "medical": 3,
+    "agent": 3,
+    "known": false
+  },
   "Ministral-3-14B-Instruct-2512-Q4_K_M.gguf": {
     "overall": 6,
     "coding": 6,

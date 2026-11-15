@@ -138,7 +138,7 @@ pub async fn memory_helper_needed(app: tauri::AppHandle) -> bool {
         .map(|rd| {
             rd.flatten()
                 .filter_map(|e| e.file_name().to_str().map(String::from))
-                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj"))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj") && !crate::doc_reader::is_reader_file(n))
                 .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
                 .collect()
         })

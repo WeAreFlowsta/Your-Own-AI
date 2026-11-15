@@ -107,22 +107,47 @@ pub fn ocr_pdf(pdf_path: &Path, lib_dir: &Path, models_dir: &Path) -> Result<Str
     Ok(out)
 }
 
-/// Whether the optional OCR models are installed (FE gate for the offer card).
+/// Whether a scanned PDF can be read here: the document reader or the
+/// built-in reader's models are installed (FE gate for the offer card).
 #[tauri::command]
 pub async fn is_ocr_ready(app_handle: AppHandle) -> Result<bool, String> {
     let models_dir = crate::llm::get_models_dir(&app_handle)?;
-    Ok(ocr_models_present(&models_dir))
+    Ok(crate::doc_reader::present(&models_dir) || ocr_models_present(&models_dir))
 }
 
-/// OCR a scanned PDF and return its text. Errors if the models aren't installed.
+/// Read a scanned PDF and return its text: with the document reader when
+/// it is installed (page by page, `document-reader-progress` events saying
+/// which page), else with the built-in reader. If the document reader
+/// fails and the built-in one is installed, that one reads the file, so a
+/// scan is never left unread for the better reader's sake.
 #[tauri::command]
 pub async fn ocr_scanned_pdf(app_handle: AppHandle, file_path: String) -> Result<String, String> {
+    use tauri::Emitter;
     let models_dir = crate::llm::get_models_dir(&app_handle)?;
-    if !ocr_models_present(&models_dir) {
-        return Err("OCR models not installed".to_string());
-    }
+    let builtin = ocr_models_present(&models_dir);
     let lib_dir = pdfium_lib_dir(&app_handle)?;
     let pdf_path = PathBuf::from(&file_path);
+    if crate::doc_reader::present(&models_dir) {
+        let read = async {
+            let (bin, _) = crate::matrix::engine_binary(&app_handle)?;
+            let card = crate::doc_reader::on_card(crate::matrix::free_vram_gb(&bin));
+            let events = app_handle.clone();
+            crate::doc_reader::read_pdf(&bin, &models_dir, lib_dir.clone(), pdf_path.clone(), card, move |done, of| {
+                let _ = events.emit("document-reader-progress", serde_json::json!({ "done": done, "of": of }));
+            })
+            .await
+        };
+        match read.await {
+            Ok(text) => return Ok(text),
+            Err(e) if builtin => log::warn!("[reader] {e}; the built-in reader reads this file instead"),
+            Err(e) => {
+                log::error!("[reader] {e}");
+                return Err(e);
+            }
+        }
+    } else if !builtin {
+        return Err("OCR models not installed".to_string());
+    }
     // pdfium + ocrs are CPU-bound and not async; run off the async runtime.
     let result = tauri::async_runtime::spawn_blocking(move || ocr_pdf(&pdf_path, &lib_dir, &models_dir))
         .await
@@ -131,4 +156,32 @@ pub async fn ocr_scanned_pdf(app_handle: AppHandle, file_path: String) -> Result
         log::error!("[OCR] ocr_scanned_pdf failed: {e}");
     }
     result
+}
+
+#[cfg(test)]
+mod compare {
+    /// Reads every PDF in `YOAI_OCR_COMPARE_DIR` with this reader (pdfium and
+    /// ocrs, exactly as the app does for a scanned PDF) and writes the text
+    /// beside it as `<name>.ocrs.txt`, with the seconds it took: one half of
+    /// a reader comparison. `YOAI_MODELS_DIR` holds the two ocrs files.
+    #[test]
+    #[ignore]
+    fn live_reader_compare_ocrs() {
+        let Ok(dir) = std::env::var("YOAI_OCR_COMPARE_DIR") else { return };
+        let home = std::env::var("HOME").unwrap_or_default();
+        let models = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let lib = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/pdfium");
+        let mut pdfs: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "pdf")).collect();
+        pdfs.sort();
+        assert!(!pdfs.is_empty(), "no PDF in {dir}");
+        for pdf in pdfs {
+            let t = std::time::Instant::now();
+            let text = super::ocr_pdf(&pdf, &lib, &models).unwrap_or_else(|e| format!("ERROR: {e}"));
+            let secs = t.elapsed().as_secs_f64();
+            std::fs::write(pdf.with_extension("ocrs.txt"), &text).unwrap();
+            eprintln!("[ocrs] {} | {secs:.1} s | {} chars", pdf.file_name().unwrap().to_string_lossy(), text.chars().count());
+        }
+    }
 }

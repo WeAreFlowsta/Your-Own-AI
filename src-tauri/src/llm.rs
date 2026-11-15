@@ -5098,6 +5098,10 @@ pub async fn list_local_models(
             if is_draft_file(&models_dir, &filename) {
                 continue;
             }
+            // The document reader is a component with its own card, never a chat model.
+            if crate::doc_reader::is_reader_file(&filename) {
+                continue;
+            }
             // One bounded header read decides everything below: a readable
             // header upgrades the labels, a damaged file is listed AS damaged
             // (so the user can see and delete it), an unsupported-but-intact

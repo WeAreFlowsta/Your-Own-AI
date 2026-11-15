@@ -12,7 +12,7 @@ import LiquidMetalButton from "../../../components/LiquidMetalButton";
 import { Callout } from "../../../components/Callout";
 import { ComponentCard, BuildComponentCard } from "../../../components/ComponentCards";
 import { RequirementLine } from "../../../components/RequirementLine";
-import { EMBEDDING_MODEL, UTILITY_MODEL, VISION_PROJECTORS, OCR_MODELS } from "../../../data/recommended-models";
+import { EMBEDDING_MODEL, UTILITY_MODEL, VISION_PROJECTORS, OCR_MODELS, DOCUMENT_READER } from "../../../data/recommended-models";
 import { whichProgram } from "../../../utils/mcp";
 
 /** Programs tools ask for; the app installs these where it can. */
@@ -119,6 +119,7 @@ export default component$(() => {
               <ComponentCard key={projector.id} model={projector} icon="eye" activeLabel="Installed - this model can now see images you attach." />
             ))}
             <ComponentCard model={OCR_MODELS} icon="scan" activeLabel="Installed - scanned PDFs are read on your device." />
+            <ComponentCard model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs are read with it, on your device." />
           </div>
 
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Programs tools need</h2>

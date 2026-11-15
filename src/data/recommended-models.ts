@@ -475,6 +475,36 @@ export const OCR_MODELS: CapabilityModel = {
   ],
 };
 
+/**
+ * The document reader: MiniCPM-OCR 1.0 (OpenBMB, Apache 2.0), a small vision
+ * model that reads a picture of a document into text (Rust `doc_reader.rs`).
+ * Better than the built-in reader on photos, tables and forms; many times
+ * slower; an option. Both files pinned to the maker's GGUF repository at
+ * 0133ad8 (pre-flighted and run 2026-11-16 on engine b12359; needs b11960
+ * or later). The vision file is saved under the model's own name: the
+ * maker's `mmproj-model-f16-4x.gguf` says nothing of what it belongs to.
+ */
+export const DOCUMENT_READER: CapabilityModel = {
+  id: 'document-reader',
+  name: 'Document reader',
+  role: 'ocr',
+  description:
+    'Reads photos of documents, tables and forms far more accurately than the built-in reader, which can misread figures and pull table columns apart. Slower: a page takes from 20 seconds to over a minute. When installed it reads scanned PDFs; the built-in reader stays as the fallback. Runs entirely on your device.',
+  filename: 'MiniCPM-OCR-1_0-Q4_K_M.gguf',
+  downloadUrl: 'https://huggingface.co/openbmb/MiniCPM-OCR-1.0-gguf/resolve/0133ad8db635210441a55dcf421e25bfb9915142/MiniCPM-OCR-1_0-Q4_K_M.gguf',
+  size: 1.4, // 0.53 GB model + 0.90 GB vision file
+  files: [
+    {
+      filename: 'MiniCPM-OCR-1_0-Q4_K_M.gguf',
+      downloadUrl: 'https://huggingface.co/openbmb/MiniCPM-OCR-1.0-gguf/resolve/0133ad8db635210441a55dcf421e25bfb9915142/MiniCPM-OCR-1_0-Q4_K_M.gguf',
+    },
+    {
+      filename: 'MiniCPM-OCR-1_0-mmproj-f16.gguf',
+      downloadUrl: 'https://huggingface.co/openbmb/MiniCPM-OCR-1.0-gguf/resolve/0133ad8db635210441a55dcf421e25bfb9915142/mmproj-model-f16-4x.gguf',
+    },
+  ],
+};
+
 export const modelFamilies: ModelFamily[] = [
   // ─── Recommended / Balanced ────────────────────────────────────────────
   {

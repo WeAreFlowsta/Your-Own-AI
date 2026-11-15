@@ -1,4 +1,4 @@
-import { component$, $, type Signal } from '@builder.io/qwik';
+import { component$, $, useSignal, useVisibleTask$, type Signal } from '@builder.io/qwik';
 import type { AttachedFile } from '../types';
 import { OcrOfferCard } from './OcrOfferCard';
 
@@ -17,6 +17,21 @@ interface OcrAttachStatusProps {
  * reads have a clean reactive scope — see Qwik gotchas #2 and #10.
  */
 export const OcrAttachStatus = component$<OcrAttachStatusProps>((props) => {
+  // The document reader says which page it is on (Rust emits
+  // `document-reader-progress` before each page); the built-in reader says
+  // nothing, and the line then reads as before.
+  const page = useSignal<{ done: number; of: number } | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    let off: (() => void) | undefined;
+    let gone = false;
+    void import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<{ done: number; of: number }>('document-reader-progress', (e) => {
+        page.value = e.payload.done >= e.payload.of ? null : e.payload;
+      }).then((un) => { if (gone) un(); else off = un; }),
+    ).catch(() => {});
+    cleanup(() => { gone = true; off?.(); });
+  });
   return (
     <>
       {props.reading?.value && !props.ocrProcessing.value && (
@@ -29,7 +44,9 @@ export const OcrAttachStatus = component$<OcrAttachStatusProps>((props) => {
       {props.ocrProcessing.value && (
         <div class="mt-2 flex items-center gap-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-2 text-xs text-[var(--text-secondary)]">
           <span class="inline-block w-2 h-2 rounded-full bg-[var(--bg-button-primary)] animate-pulse shrink-0" />
-          Reading “{props.ocrProcessing.value}” — scanned documents can take a moment.
+          {page.value
+            ? `Reading “${props.ocrProcessing.value}”: page ${page.value.done + 1} of ${page.value.of}. The document reader can take a minute a page.`
+            : `Reading “${props.ocrProcessing.value}”. Scanned documents can take a moment.`}
         </div>
       )}
 

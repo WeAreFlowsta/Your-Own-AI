@@ -79,6 +79,8 @@ pub fn inference() -> u16 { 11435 + offset() }
 pub fn admin_ws() -> u16 { 4477 + offset() }
 /// The truth matrix / tune bench server.
 pub fn bench() -> u16 { 18098 + offset() }
+/// The document reader, while it reads (started for a job, stopped after).
+pub fn reader() -> u16 { 18097 + offset() }
 
 #[cfg(test)]
 mod tests {
