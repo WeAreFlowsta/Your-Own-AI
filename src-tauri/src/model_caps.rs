@@ -161,8 +161,10 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("qwen3") || n.contains("qwen-3") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 8, vision: 0, medical: 3 });
     }
+    // Phi-4 Mini: overall 6 from our own question set (2026-11-16: 41 of 48,
+    // with the 6-graded models; wrong on simple reasoning steps).
     if n.contains("phi-4") || n.contains("phi4") {
-        return Some(Caps { overall: 7, coding: 6, reasoning: 7, math: 8, vision: 0, medical: 3 });
+        return Some(Caps { overall: 6, coding: 6, reasoning: 7, math: 8, vision: 0, medical: 3 });
     }
     if n.contains("gemma-4") || n.contains("gemma4") || n.contains("gemma-3") || n.contains("gemma3") {
         return Some(Caps { overall: 7, coding: 6, reasoning: 6, math: 6, vision: 7, medical: 3 });

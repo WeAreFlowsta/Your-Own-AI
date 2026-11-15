@@ -310,7 +310,7 @@
     "known": true
   },
   "Phi-4-mini-instruct-Q4_K_M.gguf": {
-    "overall": 7,
+    "overall": 6,
     "coding": 6,
     "reasoning": 7,
     "math": 7,

@@ -1995,6 +1995,27 @@ export const MEASURED_SPEED: Record<string, Partial<Record<'cpu' | 'gpu' | 'moe-
   'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf': { cpu: { firstReplyS: 19.2, tps: 6.7 }, gpu: { firstReplyS: 3.6, tps: 29.2 } },
   'Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf': { cpu: { firstReplyS: 35.4, tps: 5.1 }, gpu: { firstReplyS: 7.6, tps: 23.5 } },
   'LFM2.5-8B-A1B-Q4_K_M.gguf': { cpu: { firstReplyS: 16.4, tps: 12.2 }, 'moe-split': { firstReplyS: 11.9, tps: 19.2 } },
+  // Too large for the reference card: the processor figures only.
+  'gemma-4-E4B_q4_0-it.gguf': { cpu: { firstReplyS: 29.3, tps: 4.1 } },
+  'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf': { cpu: { firstReplyS: 24.9, tps: 4.0 } },
+};
+
+/**
+ * Measured answer quality: points of 48 on the truth matrix's question set
+ * (`matrix.rs` QUALITY_GOLD, 24 questions, rubric-scored), bundled engine
+ * b12359, 2026-11-16. It tells the stronger small models (44 and up) from
+ * the weaker (42 and under); it does not order the strong ones among
+ * themselves, so only a gap of three points or more counts.
+ */
+export const MEASURED_QUALITY: Record<string, number> = {
+  'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf': 46,
+  'gemma-4-E2B-it-Q4_K_M.gguf': 45,
+  'gemma-4-E4B_q4_0-it.gguf': 44,
+  'Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf': 43,
+  'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf': 42,
+  'Phi-4-mini-instruct-Q4_K_M.gguf': 41,
+  'LFM2.5-8B-A1B-Q4_K_M.gguf': 39,
+  'Qwen3.8-2B-Q4_K_M.gguf': 38,
 };
 
 /** The measured first-reply time of a pick where it would run here, if measured. */
@@ -2021,7 +2042,8 @@ export function gradeOf(v: ModelVariant, modes: CatalogModes | null, grade: Grad
  *   1. where it runs: on the card, then quick on the processor, then oversized;
  *   2. the app's own grade for the job asked about (higher wins): file size
  *      and release date are not quality;
- *   3. a tie: a family the catalog recommends first; an oversized model, the smaller; at first launch, the smaller
+ *   3. a tie: a family the catalog recommends first; for general use, the
+ *      higher score on our own question set where it tells the two apart; an oversized model, the smaller; at first launch, the smaller
  *      model with the quicker measured first reply, then the smaller
  *      download (the wait before the first word); otherwise the given
  *      category order, then the newer release, then the larger file.
@@ -2043,6 +2065,11 @@ export function rankPicks(
     const g = gradeOf(b.variant, modes, grade) - gradeOf(a.variant, modes, grade);
     if (g !== 0) return g;
     if (a.family.recommended !== b.family.recommended) return a.family.recommended ? -1 : 1;
+    if (grade === 'overall') {
+      // Our own question set, where both were run and it tells them apart.
+      const qa = MEASURED_QUALITY[a.variant.filename], qb = MEASURED_QUALITY[b.variant.filename];
+      if (qa !== undefined && qb !== undefined && Math.abs(qa - qb) >= 3) return qb - qa;
+    }
     if (opts.firstLaunch) {
       // The quicker first reply, where both were measured (more than a second apart).
       const sa = measuredFirstReplyS(a.variant, modes), sb = measuredFirstReplyS(b.variant, modes);
