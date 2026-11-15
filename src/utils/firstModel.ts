@@ -12,7 +12,7 @@
  */
 
 import type { SystemInfo } from '../components/ModelDownloader';
-import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, type ModelVariant, type CatalogModes } from '../data/recommended-models';
+import { modelFamilies, getBestFamilyForRAM, getBestVariantForSystem, getRunMode, rankPicks, type CatalogPick, type ModelVariant, type CatalogModes } from '../data/recommended-models';
 
 export interface RecommendedModel {
   familyId: string;
@@ -69,26 +69,16 @@ export function getRecommendedModel(
     // branch used to check VRAM alone; a big card on a RAM-poor machine
     // was sold a model the system could not stage (silent first-run
     // crash, found in the field).
-    const candidates: { family: typeof modelFamilies[0]; variant: ModelVariant }[] = [];
-
-    for (const family of modelFamilies) {
-      if (family.category === 'specialist') continue;
-      for (const variant of family.variants) {
-        if (getRunMode(variant, modes) === 'gpu') {
-          candidates.push({ family, variant });
-        }
-      }
-    }
+    // The largest variant of each general family that runs on the card,
+    // recommended families first, then the one order every pick uses.
+    const onCard = modelFamilies
+      .filter((family) => family.category !== 'specialist')
+      .map((family) => ({ family, variant: [...family.variants].filter((v) => getRunMode(v, modes) === 'gpu').sort((a, b) => b.size - a.size)[0] }))
+      .filter((p): p is CatalogPick => !!p.variant);
+    const fromRecommended = onCard.filter((p) => p.family.recommended);
+    const candidates = rankPicks(fromRecommended.length ? fromRecommended : onCard, modes, 'overall', { firstLaunch: true });
 
     if (candidates.length > 0) {
-      // Sort: recommended families first, then by largest size
-      candidates.sort((a, b) => {
-        if (a.family.recommended !== b.family.recommended) {
-          return a.family.recommended ? -1 : 1;
-        }
-        return b.variant.size - a.variant.size;
-      });
-
       const best = candidates[0];
       // Unified memory (Apple Silicon) reads oddly as "VRAM" - name it honestly.
       const isUnified = gpuName.toLowerCase().includes('apple');

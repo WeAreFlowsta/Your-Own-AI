@@ -1,0 +1,722 @@
+{
+  "DeepSeek-R1-0528-Qwen3-8B-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 6,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "DeepSeek-V4-Flash-0731-UD-IQ4_XS-00001-of-00004.gguf": {
+    "overall": 8,
+    "coding": 6,
+    "reasoning": 9,
+    "math": 9,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "DeepSeek-V4-Flash-0731-UD-Q2_K_XL-00001-of-00003.gguf": {
+    "overall": 8,
+    "coding": 6,
+    "reasoning": 9,
+    "math": 9,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Devstral-Small-2-24B-Instruct-2512-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 9,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "GLM-4.7-Flash-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "GLM-5.2-UD-Q2_K_XL-00001-of-00007.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "GLM-5.2-UD-Q4_K_S-00001-of-00010.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Hemmingway-1-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 4,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "LFM2.5-24B-A2B-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 5,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 6,
+    "known": true
+  },
+  "LFM2.5-8B-A1B-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 5,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 6,
+    "known": true
+  },
+  "LFM3-1.7B-Q4_K_M.gguf": {
+    "overall": 5,
+    "coding": 4,
+    "reasoning": 5,
+    "math": 4,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "LFM3-VL-2B-Q4_K_M.gguf": {
+    "overall": 5,
+    "coding": 4,
+    "reasoning": 5,
+    "math": 4,
+    "vision": 6,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "LFM3-VL-2B-mmproj-F16.gguf": {
+    "overall": 5,
+    "coding": 4,
+    "reasoning": 5,
+    "math": 4,
+    "vision": 6,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Ling-mini-2.0-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Ministral-3-14B-Instruct-2512-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Ministral-3-8B-Instruct-2512-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Muse-Glimmer-30B-UD-Q2_K_XL.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 3,
+    "known": true
+  },
+  "Muse-Glimmer-30B-UD-Q4_K_XL.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 3,
+    "known": true
+  },
+  "Muse-Glimmer-30B-mmproj-Q8_0.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 3,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-mmproj.gguf": {
+    "overall": 7,
+    "coding": 7,
+    "reasoning": 7,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf": {
+    "overall": 9,
+    "coding": 8,
+    "reasoning": 9,
+    "math": 8,
+    "vision": 7,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-mmproj-Q8_0.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Ornith-1.5-35B-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 9,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 7,
+    "medical": 3,
+    "agent": 9,
+    "known": true
+  },
+  "Ornith-1.5-35B-mmproj-BF16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 9,
+    "known": true
+  },
+  "Ornith-1.5-9B-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 9,
+    "known": true
+  },
+  "Phi-4-mini-instruct-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 7,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 3,
+    "known": true
+  },
+  "Qwen3-Coder-30B-A3B-Instruct-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 9,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Qwen3.5-27B-Opus-Distilled-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-27B-Uncensored-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-2B-Uncensored-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 7,
+    "reasoning": 7,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-4B-Uncensored-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 7,
+    "reasoning": 7,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-9B-Opus-Distilled-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.5-9B-Uncensored-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.6-27B-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.6-35B-A3B-UD-Q2_K_XL.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.6-35B-A3B-UD-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.8-27B-Q4_K_M.gguf": {
+    "overall": 9,
+    "coding": 9,
+    "reasoning": 9,
+    "math": 9,
+    "vision": 7,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Qwen3.8-27B-Uncensored-Q4_K_M.gguf": {
+    "overall": 9,
+    "coding": 9,
+    "reasoning": 9,
+    "math": 9,
+    "vision": 7,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Qwen3.8-27B-Uncensored-mmproj-F16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Qwen3.8-27B-mmproj-F16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 8,
+    "known": true
+  },
+  "Qwen3.8-2B-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 5,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "Qwen3.8-4B-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 7,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwen3.8-9B-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 7,
+    "reasoning": 8,
+    "math": 8,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "Qwythos-9B-v2-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 5,
+    "reasoning": 7,
+    "math": 5,
+    "vision": 7,
+    "medical": 3,
+    "agent": 6,
+    "known": true
+  },
+  "Qwythos-9B-v2-mmproj-BF16.gguf": {
+    "overall": 6,
+    "coding": 5,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 6,
+    "medical": 3,
+    "agent": 6,
+    "known": true
+  },
+  "Skyfall-31B-v4.2-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 3,
+    "reasoning": 5,
+    "math": 4,
+    "vision": 0,
+    "medical": 3,
+    "agent": 4,
+    "known": true
+  },
+  "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf": {
+    "overall": 8,
+    "coding": 6,
+    "reasoning": 9,
+    "math": 9,
+    "vision": 0,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "embeddinggemma-300M-Q8_0.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 3,
+    "known": true
+  },
+  "gemma-4-12b-it-qat-q4_0.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-26B-A4B-it-UD-Q2_K_XL.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-26B_q4_0-it.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-31B_q4_0-it.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-E2B-it-Q4_K_M.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-E2B-mmproj-F16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-E4B-mmproj-F16.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 6,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gemma-4-E4B_q4_0-it.gguf": {
+    "overall": 7,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 6,
+    "vision": 7,
+    "medical": 3,
+    "agent": 5,
+    "known": true
+  },
+  "gpt-oss-120b-F16.gguf": {
+    "overall": 8,
+    "coding": 7,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 6,
+    "agent": 8,
+    "known": true
+  },
+  "gpt-oss-20b-Q4_K_M.gguf": {
+    "overall": 8,
+    "coding": 7,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 6,
+    "agent": 8,
+    "known": true
+  },
+  "granite-4.0-h-tiny-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 6,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 0,
+    "medical": 3,
+    "agent": 6,
+    "known": true
+  },
+  "medgemma-1.5-4b-it-Q4_K_M.gguf": {
+    "overall": 5,
+    "coding": 3,
+    "reasoning": 6,
+    "math": 4,
+    "vision": 7,
+    "medical": 7,
+    "agent": 1,
+    "known": true
+  },
+  "medgemma-1.5-4b-it-mmproj-F16.gguf": {
+    "overall": 5,
+    "coding": 3,
+    "reasoning": 6,
+    "math": 4,
+    "vision": 6,
+    "medical": 6,
+    "agent": 1,
+    "known": true
+  },
+  "medgemma-27b-it-Q4_K_M.gguf": {
+    "overall": 6,
+    "coding": 3,
+    "reasoning": 7,
+    "math": 5,
+    "vision": 8,
+    "medical": 10,
+    "agent": 1,
+    "known": true
+  },
+  "medgemma-27b-it-mmproj-F16.gguf": {
+    "overall": 6,
+    "coding": 3,
+    "reasoning": 6,
+    "math": 5,
+    "vision": 6,
+    "medical": 6,
+    "agent": 1,
+    "known": true
+  },
+  "mtp-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-Q4_0.gguf": {
+    "overall": 8,
+    "coding": 8,
+    "reasoning": 8,
+    "math": 7,
+    "vision": 0,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  },
+  "mtp-NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-Q4_0.gguf": {
+    "overall": 9,
+    "coding": 8,
+    "reasoning": 9,
+    "math": 8,
+    "vision": 7,
+    "medical": 3,
+    "agent": 7,
+    "known": true
+  }
+}

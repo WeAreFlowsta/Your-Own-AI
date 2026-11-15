@@ -1922,7 +1922,13 @@ export type RunMode = 'gpu' | 'cpu' | 'moe-split' | 'too-big';
 /** The grader's fit, the same four words the downloaded rows use. */
 export type CatalogFit = 'green' | 'split' | 'yellow' | 'red';
 /** The grader's verdict per catalog filename (see getRunMode). */
-export type CatalogModes = Record<string, { mode: RunMode; fit: CatalogFit }>;
+export type CatalogModes = Record<string, { mode: RunMode; fit: CatalogFit; grades?: ModelGrades }>;
+/** The app's own grades for a model, 0 to 10 (Rust `model_caps_for`): the
+ *  same figures Auto routes on. `known` is false for a name the registry
+ *  does not hold (middling defaults). */
+export interface ModelGrades { overall: number; coding: number; reasoning: number; math: number; vision: number; medical: number; agent: number; known: boolean }
+export type GradeKey = Exclude<keyof ModelGrades, 'known'>;
+export interface CatalogPick { family: ModelFamily; variant: ModelVariant }
 
 /** A mixture-of-experts artifact: its experts (most of the file) can live in
  *  main memory while attention and the KV cache use the graphics card, so it
@@ -1974,31 +1980,113 @@ export function catalogVariantsForGrading(): { key: string; size_gb: number; min
 }
 
 /**
- * Get the best model family for this machine, from the graded catalog.
+ * Measured speed, per place a model runs: seconds from a question to the end
+ * of a short first reply (about 500 tokens of instructions, the model already
+ * loaded) and tokens written per second. Reference computer: Intel Core
+ * i7-8750H (6 cores, 2018) with a GeForce GTX 1050 Ti (4 GB), bundled engine
+ * b12359, 2026-11-16, two runs each. The order between models is what is
+ * used, not the figures themselves: a faster computer is faster for all.
+ * A file with no row here has not been measured.
+ */
+export const MEASURED_SPEED: Record<string, Partial<Record<'cpu' | 'gpu' | 'moe-split', { firstReplyS: number; tps: number }>>> = {
+  'Qwen3.8-2B-Q4_K_M.gguf': { cpu: { firstReplyS: 9.9, tps: 11.3 }, gpu: { firstReplyS: 2.2, tps: 47.8 } },
+  'gemma-4-E2B-it-Q4_K_M.gguf': { cpu: { firstReplyS: 10.7, tps: 10.3 }, gpu: { firstReplyS: 2.7, tps: 38.9 } },
+  'Phi-4-mini-instruct-Q4_K_M.gguf': { cpu: { firstReplyS: 19.6, tps: 5.7 }, gpu: { firstReplyS: 4.7, tps: 26.1 } },
+  'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf': { cpu: { firstReplyS: 19.2, tps: 6.7 }, gpu: { firstReplyS: 3.6, tps: 29.2 } },
+  'Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf': { cpu: { firstReplyS: 35.4, tps: 5.1 }, gpu: { firstReplyS: 7.6, tps: 23.5 } },
+  'LFM2.5-8B-A1B-Q4_K_M.gguf': { cpu: { firstReplyS: 16.4, tps: 12.2 }, 'moe-split': { firstReplyS: 11.9, tps: 19.2 } },
+};
+
+/** The measured first-reply time of a pick where it would run here, if measured. */
+export function measuredFirstReplyS(v: ModelVariant, modes: CatalogModes | null): number | null {
+  const m = getRunMode(v, modes);
+  return m && m !== 'too-big' ? MEASURED_SPEED[v.filename]?.[m]?.firstReplyS ?? null : null;
+}
+
+/** Where a pick runs, as a rank: 2 on the card, 1 quick on the processor
+ *  (5 GB and under, or a split model), 0 oversized for the processor. */
+export function runClass(v: ModelVariant, modes: CatalogModes | null): 0 | 1 | 2 {
+  const m = getRunMode(v, modes);
+  return m === 'gpu' ? 2 : m === 'moe-split' || v.size <= 5 ? 1 : 0;
+}
+
+/** The grade a pick is ranked on; 0 until the grades have arrived. */
+export function gradeOf(v: ModelVariant, modes: CatalogModes | null, grade: GradeKey): number {
+  return modes?.[v.filename]?.grades?.[grade] ?? 0;
+}
+
+/**
+ * One order for every recommendation in the app (the welcome screen, the
+ * "Best for you" badge, the "Best for this computer" panel):
+ *   1. where it runs: on the card, then quick on the processor, then oversized;
+ *   2. the app's own grade for the job asked about (higher wins): file size
+ *      and release date are not quality;
+ *   3. a tie: a family the catalog recommends first; an oversized model, the smaller; at first launch, the smaller
+ *      model with the quicker measured first reply, then the smaller
+ *      download (the wait before the first word); otherwise the given
+ *      category order, then the newer release, then the larger file.
+ * `preferId` puts one family first when it is a candidate at all.
+ */
+export function rankPicks(
+  picks: CatalogPick[],
+  modes: CatalogModes | null,
+  grade: GradeKey,
+  opts: { firstLaunch?: boolean; preferId?: string; catOrder?: Record<string, number> } = {},
+): CatalogPick[] {
+  return [...picks].sort((a, b) => {
+    if (opts.preferId) {
+      const d = (a.family.id === opts.preferId ? 0 : 1) - (b.family.id === opts.preferId ? 0 : 1);
+      if (d !== 0) return d;
+    }
+    const ca = runClass(a.variant, modes), cb = runClass(b.variant, modes);
+    if (ca !== cb) return cb - ca;
+    const g = gradeOf(b.variant, modes, grade) - gradeOf(a.variant, modes, grade);
+    if (g !== 0) return g;
+    if (a.family.recommended !== b.family.recommended) return a.family.recommended ? -1 : 1;
+    if (opts.firstLaunch) {
+      // The quicker first reply, where both were measured (more than a second apart).
+      const sa = measuredFirstReplyS(a.variant, modes), sb = measuredFirstReplyS(b.variant, modes);
+      if (sa !== null && sb !== null && Math.abs(sa - sb) > 1) return sa - sb;
+    }
+    if (ca === 0 || opts.firstLaunch) {
+      if (a.variant.size !== b.variant.size) return a.variant.size - b.variant.size;
+    }
+    if (opts.catOrder) {
+      const d = (opts.catOrder[a.family.category] ?? 9) - (opts.catOrder[b.family.category] ?? 9);
+      if (d !== 0) return d;
+    }
+    const ar = a.family.released ?? '', br = b.family.released ?? '';
+    if (ar !== br) return ar > br ? -1 : 1;
+    if (a.variant.size !== b.variant.size) return b.variant.size - a.variant.size;
+    return a.family.name.localeCompare(b.family.name);
+  });
+}
+
+/** Each family's best variant for this machine, for the families that have one. */
+export function picksFor(families: ModelFamily[], modes: CatalogModes | null): CatalogPick[] {
+  return families
+    .map((family) => ({ family, variant: getBestVariantForSystem(family, modes) }))
+    .filter((p): p is CatalogPick => p.variant !== null);
+}
+
+/** One short line that says why a pick was made, for the card. */
+export function pickReason(v: ModelVariant, modes: CatalogModes | null, job: string): string {
+  if (!modes?.[v.filename]?.grades) return '';
+  const c = runClass(v, modes);
+  const where = c === 2 ? 'that run on your graphics card' : c === 1 ? 'that run well on this computer' : 'that fit this computer';
+  return `Our highest-graded model for ${job}, of those ${where}.`;
+}
+
+/**
+ * The best model family for this machine at first launch, from the graded
+ * catalog: recommended general models, ranked by rankPicks.
  */
 export function getBestFamilyForRAM(modes: CatalogModes | null): ModelFamily | undefined {
   if (!modes) return undefined;
-  const suitableFamilies = modelFamilies.filter(family => getBestVariantForSystem(family, modes) !== null);
-  const recommended = suitableFamilies.filter(f => f.recommended);
-  if (recommended.length === 0) return suitableFamilies[0];
-
-  // Rank families by the SAME philosophy the variant picker uses:
-  //   1. a pick that runs on the GPU (fast) beats any CPU pick;
-  //      among GPU picks, larger = more capable and still fast.
-  //   2. among CPU picks, a fast-class (<=5GB) pick beats an oversized
-  //      one; larger wins WITHIN fast-class, smaller wins outside it.
-  const rank = (f: ModelFamily) => {
-    const v = getBestVariantForSystem(f, modes);
-    if (!v) return { mode: -1, size: 0 };
-    const mode = getRunMode(v, modes);
-    return { mode: mode === 'gpu' ? 2 : mode === 'moe-split' || v.size <= 5 ? 1 : 0, size: v.size };
-  };
-  return recommended.sort((a, b) => {
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra.mode !== rb.mode) return rb.mode - ra.mode;
-    return ra.mode === 0 ? ra.size - rb.size : rb.size - ra.size;
-  })[0];
+  const all = picksFor(modelFamilies, modes);
+  const recommended = all.filter((p) => p.family.recommended);
+  if (recommended.length === 0) return all[0]?.family;
+  return rankPicks(recommended, modes, 'overall', { firstLaunch: true })[0].family;
 }
 
 /**
