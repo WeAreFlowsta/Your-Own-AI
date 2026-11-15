@@ -1,0 +1,113 @@
+name: Rebuild Linux llama-server (hotfix)
+
+# Targeted rebuild of ONLY the bundled Linux llama-server, replacing that
+# asset on an existing llama-* release. The b12359 engine was built on
+# ubuntu-latest and needed glibc 2.43, which Ubuntu 24.04 (2.39) does not
+# have. The permanent fix lives in build-llama-binaries.yml; this gets it
+# onto a release without a full 6-platform rebuild.
+
+on:
+  workflow_dispatch:
+    inputs:
+      llama_cpp_version:
+        description: 'llama.cpp git tag (must match the release, e.g. b12359)'
+        required: true
+        default: 'b12359'
+      release_tag:
+        description: 'Release to replace the asset on (e.g. llama-b12359)'
+        required: true
+        default: 'llama-b12359'
+      upload:
+        description: 'Replace the release asset (no = build and check only)'
+        required: true
+        default: 'no'
+        type: choice
+        options: ['yes', 'no']
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    env:
+      CC: gcc-12
+      CXX: g++-12
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          # spirv-headers/spirv-tools: required by llama.cpp's Vulkan backend
+          # (ggml-vulkan find_package(SPIRV-Headers)) since ~mid-2026.
+          sudo apt-get install -y build-essential cmake g++-12 libvulkan-dev glslang-tools spirv-headers spirv-tools
+          # glslc (the shader compiler the Vulkan backend builds with) is not
+          # packaged for 22.04: take it from the Vulkan SDK when apt has none.
+          if ! sudo apt-get install -y glslc; then
+            curl -fsSL -o /tmp/vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan-sdk.tar.xz
+            mkdir -p /tmp/vulkan-sdk && tar -xJf /tmp/vulkan-sdk.tar.xz -C /tmp/vulkan-sdk --strip-components=1
+            echo "/tmp/vulkan-sdk/x86_64/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: Checkout llama.cpp
+        uses: actions/checkout@v4
+        with:
+          repository: ggml-org/llama.cpp
+          ref: ${{ github.event.inputs.llama_cpp_version }}
+
+      - name: Build binary with Vulkan GPU support
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_STATIC=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON \
+            -DGGML_AVX2=ON \
+            -DGGML_FMA=ON \
+            -DGGML_F16C=ON \
+            -DGGML_VULKAN=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_SERVER_SSL=OFF \
+            -DCMAKE_DISABLE_FIND_PACKAGE_OpenSSL=ON \
+            -DLLAMA_SERVER_WEBUI=OFF
+          cmake --build build --config Release --target llama-server -j $(nproc)
+
+      - name: Verify binary
+        run: |
+          ldd build/bin/llama-server || echo "Static binary (expected)"
+          # Runner-only libraries are the classic silent killer: present in CI
+          # (so --version passes) but absent on user machines. Fail the build
+          # if any ssl/crypto/curl dependency sneaks in.
+          if ldd build/bin/llama-server 2>/dev/null | grep -E "libssl|libcrypto|libcurl"; then
+            echo "llama-server links SSL/curl libraries - it will fail on machines without them"; exit 1
+          fi
+          # The oldest Linux this engine must start on is Ubuntu 22.04
+          # (glibc 2.35, libstdc++ 3.4.30), the release the app itself is
+          # built on. A newer runner stamps a newer floor into the binary and
+          # it then refuses to start on every older system (b12359 built on
+          # ubuntu-latest needed glibc 2.43: Ubuntu 24.04 has 2.39).
+          need() { objdump -T build/bin/llama-server | grep -oE "$1_[0-9.]+" | sed "s/$1_//" | sort -V | tail -1; }
+          GLIBC=$(need GLIBC); GLIBCXX=$(need GLIBCXX)
+          echo "needs glibc $GLIBC, libstdc++ $GLIBCXX"
+          [ "$(printf '%s\n' "$GLIBC" 2.35 | sort -V | tail -1)" = "2.35" ] || { echo "the engine needs glibc $GLIBC, newer than 2.35"; exit 1; }
+          [ "$(printf '%s\n' "$GLIBCXX" 3.4.30 | sort -V | tail -1)" = "3.4.30" ] || { echo "the engine needs libstdc++ $GLIBCXX, newer than 3.4.30"; exit 1; }
+          ./build/bin/llama-server --version
+          strip build/bin/llama-server
+
+      - name: Keep the binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-server-linux-x64
+          path: build/bin/llama-server
+          retention-days: 7
+
+      - name: Replace the release asset
+        if: ${{ github.event.inputs.upload == 'yes' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp build/bin/llama-server llama-server-x86_64-unknown-linux-gnu
+          gh release upload "${{ github.event.inputs.release_tag }}" \
+            llama-server-x86_64-unknown-linux-gnu \
+            --repo "${{ github.repository }}" --clobber
+          echo "Replaced llama-server-x86_64-unknown-linux-gnu on ${{ github.event.inputs.release_tag }}"
