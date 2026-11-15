@@ -81,6 +81,17 @@ jobs:
           ./build/bin/llama-server --version
           strip build/bin/llama-server
 
+      # Built on the oldest system we support, so this run is the proof the
+      # engine starts and answers there: a 1 MB model on the processor.
+      - name: The engine answers on this system
+        run: |
+          curl -fsSL -o /tmp/tiny.gguf https://huggingface.co/ggml-org/models/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories260K.gguf
+          ./build/bin/llama-server --model /tmp/tiny.gguf -ngl 0 --host 127.0.0.1 --port 8099 --no-webui > /tmp/engine.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8099/health > /dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:8099/completion -H 'Content-Type: application/json' -d '{"prompt":"Once upon a time","n_predict":8}' | tee /tmp/answer.json | head -c 300; echo
+          grep -q '"content"' /tmp/answer.json || { echo "the engine did not answer"; tail -20 /tmp/engine.log; exit 1; }
+          kill %1 || true
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
