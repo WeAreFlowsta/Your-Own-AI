@@ -969,6 +969,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
         }
         let registry = crate::model_caps::caps_for(&model).overall;
         let tps = if gen_ms > 0 { gen_tokens as f64 / (gen_ms as f64 / 1000.0) } else { 0.0 };
+        figure(serde_json::json!({"kind": "quality", "model": model, "points": points, "of": max_points}));
         sink(format!(
             "quality: {model}: {points}/{max_points} points ({}) | registry overall {registry} | {gen_tokens} tokens at {tps:.1} tok/s in {:.0} s",
             per.join(", "),
@@ -2211,6 +2212,141 @@ pub async fn leg_vision(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     failures
 }
 
+/// The figures a report carries for merging into the catalog's measured
+/// tables: one object per measurement, written by the legs as they run and
+/// printed as one block at the end of the report. Fixed keys, model file
+/// names and numbers only.
+static FIGURES: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
+
+fn figure(v: serde_json::Value) {
+    if let Ok(mut f) = FIGURES.lock() {
+        f.push(v);
+    }
+}
+
+/// About 500 tokens, the size of a new AI's instructions: a fixed text, the
+/// same on every computer (never the person's own AI).
+fn first_reply_instructions() -> String {
+    let mut s = String::from("You are Reeves, a personal assistant that runs on this person's own computer. ");
+    for part in [
+        "You are warm, direct and practical. You answer the question that was asked, in plain words, and you say so when you do not know. ",
+        "You remember what the person tells you about their life, their work and their preferences, and you use it when it helps. ",
+        "You never invent facts about the person. When a request is unclear you ask one short question. ",
+    ] {
+        s.push_str(&part.repeat(6));
+    }
+    s.push_str("Keep answers short unless the person asks for depth.");
+    s
+}
+const FIRST_REPLY_ASK: &str = "Hello. In two sentences, what can you help me with?";
+/// A model's file size above which the processor run is left out: it would
+/// take minutes and say what its size already says.
+const FIRST_REPLY_PROCESSOR_MAX_BYTES: u64 = 7 * 1024 * 1024 * 1024;
+
+/// How long a new person waits for the first words, and how fast a model
+/// writes, per downloaded model and per place it can run: where the app
+/// would put it (the card when there is one, with the app's own split for
+/// a mixture-of-experts file), and the processor alone. One short question
+/// on fixed instructions, the model already loaded: seconds to the end of
+/// the reply, tokens read and written per second. Nothing fails: these are
+/// the figures the first-model recommendation is made from.
+pub async fn leg_first_reply(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    use std::time::Duration;
+    let client = crate::llm::local_http();
+    let card = free_vram_gb(bin);
+    let system = first_reply_instructions();
+    for name in gguf_files(dir) {
+        if cancelled() {
+            sink("cancelled".into());
+            break;
+        }
+        if name.to_lowercase().contains("mmproj") {
+            continue;
+        }
+        let path = dir.join(&name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else { continue };
+        if meta.is_embedding() {
+            continue;
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let free_now = crate::llm::grading_memory_bytes();
+        if free_now > 0 && free_now < load_room_needed(size, false) {
+            sink(format!("{name}: not tried - {:.1} GB of memory free", free_now as f64 / 1024f64.powi(3)));
+            continue;
+        }
+        let ctx = 8192u64;
+        let mut places: Vec<(&str, Vec<String>)> = Vec::new();
+        if card.is_some() {
+            let mut a: Vec<String> = Vec::new();
+            if let Some(n) = moe_decision(&meta, size, ctx, card).filter(|n| *n > 0) {
+                if (n as usize) < meta.expert_bytes_per_layer.len() {
+                    a.extend(["--n-cpu-moe".to_string(), n.to_string()]);
+                } else {
+                    a.push("--cpu-moe".into());
+                }
+            }
+            places.push(("card", a));
+        }
+        if size <= FIRST_REPLY_PROCESSOR_MAX_BYTES {
+            places.push(("processor", vec!["--device".into(), "none".into(), "-ngl".into(), "0".into()]));
+        }
+        for (place, extra) in places {
+            if cancelled() {
+                break;
+            }
+            let mut args: Vec<String> = vec![
+                "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
+                "--no-webui".into(), "--reasoning".into(), "off".into(),
+                "--ctx-size".into(), ctx.to_string(), "--fit".into(), "off".into(),
+                "--model".into(), name.clone(),
+            ];
+            args.extend(extra);
+            if meta.surfaces_special_tokens() {
+                args.push("--special".into());
+            }
+            let loading = std::time::Instant::now();
+            let _guard = match spawn_bench_server(bin, dir, args).await {
+                Ok(g) => g,
+                Err(_) => {
+                    sink(format!("first reply: {name} | {place} | did not load"));
+                    continue;
+                }
+            };
+            let load_s = loading.elapsed().as_secs_f64();
+            let mut body = serde_json::json!({
+                "model": name,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": FIRST_REPLY_ASK}],
+                "max_tokens": 96, "temperature": 0.0, "stream": false,
+                "stop": crate::llm::chat_stop_strings(&name),
+            });
+            crate::llm::apply_no_think(&mut body, dir, &name);
+            let t0 = std::time::Instant::now();
+            let v: Result<serde_json::Value, String> = async {
+                client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(240)).send().await
+                    .map_err(|_| "no reply in 240 s".to_string())?.json().await.map_err(|_| "an unreadable reply".to_string())
+            }.await;
+            let Ok(v) = v else {
+                sink(format!("first reply: {name} | {place} | no reply in 240 s"));
+                continue;
+            };
+            let first_reply_s = t0.elapsed().as_secs_f64();
+            let t = &v["timings"];
+            let (read_tps, write_tps) = (t["prompt_per_second"].as_f64().unwrap_or(0.0), t["predicted_per_second"].as_f64().unwrap_or(0.0));
+            sink(format!(
+                "first reply: {name} | {place} | {first_reply_s:.1} s | writes {write_tps:.1} tok/s | reads {read_tps:.0} tok/s ({} tokens of instructions) | loaded in {load_s:.0} s",
+                t["prompt_n"].as_u64().unwrap_or(0)
+            ));
+            figure(serde_json::json!({
+                "kind": "first_reply", "model": name, "place": place,
+                "first_reply_s": (first_reply_s * 10.0).round() / 10.0,
+                "write_tps": (write_tps * 10.0).round() / 10.0,
+                "read_tps": read_tps.round(),
+            }));
+        }
+    }
+    Vec::new()
+}
+
 /// The project tasks an agent is given, and the tool each one needs.
 const AGENT_PROBE_TASKS: [(&str, &str); 8] = [
     ("What files are in this project?", "list_dir"),
@@ -2788,6 +2924,9 @@ pub async fn matrix_run(
                 .join(", ")
         }
     };
+    if let Ok(mut f) = FIGURES.lock() {
+        f.clear();
+    }
     sink("Your Own AI - truth matrix report".into());
     sink(format!(
         "app {} | {} {} | engine {}: {}",
@@ -2798,6 +2937,19 @@ pub async fn matrix_run(
         bin.file_name().and_then(|n| n.to_str()).unwrap_or("?")
     ));
     sink(format!("GPUs: {gpus}"));
+    // The machine's class, so reports from different computers can be read
+    // side by side: the processor's model and core count and the OS
+    // version. Never the computer's name.
+    let (cpu, cores, threads) = {
+        let sys = sysinfo::System::new_with_specifics(sysinfo::RefreshKind::nothing().with_cpu(sysinfo::CpuRefreshKind::nothing()));
+        (
+            sys.cpus().first().map(|c| c.brand().trim().to_string()).unwrap_or_default(),
+            sys.physical_core_count().unwrap_or(0),
+            sys.cpus().len(),
+        )
+    };
+    let os_version = sysinfo::System::long_os_version().unwrap_or_default();
+    sink(format!("CPU: {cpu} | {cores} cores, {threads} threads | OS: {os_version}"));
     // The report is made to be sent to other people: where the models
     // folder is, never its path (a folder on another drive carries the
     // account name or a name the person chose).
@@ -2841,6 +2993,12 @@ pub async fn matrix_run(
     if !cancelled() && want("vision") {
         sink("== Vision (one image, two in one message, one in each of two turns) ==".into());
         failures.extend(leg_vision(&bin, &dir, sink).await);
+        sink(String::new());
+    }
+
+    if !cancelled() && want("firstreply") {
+        sink("== First reply (a short question on fixed instructions: the wait, and the writing speed) ==".into());
+        failures.extend(leg_first_reply(&bin, &dir, sink).await);
         sink(String::new());
     }
 
@@ -3001,6 +3159,26 @@ pub async fn matrix_run(
         sink(String::new());
     }
 
+    // The figures as one block, one JSON object a line, so reports from many
+    // computers can be merged without retyping. Fixed keys, numbers, the
+    // machine's class and model file names: nothing else.
+    {
+        let figures = FIGURES.lock().map(|f| f.clone()).unwrap_or_default();
+        if !figures.is_empty() {
+            sink("== Figures (one JSON object a line) ==".into());
+            sink(format!("figure: {}", serde_json::json!({
+                "kind": "machine", "report": 1, "app": app.package_info().version.to_string(),
+                "os": std::env::consts::OS, "os_version": os_version, "arch": std::env::consts::ARCH,
+                "engine": bin.file_name().and_then(|n| n.to_str()).unwrap_or("?"), "backend": backend,
+                "cpu": cpu, "cores": cores, "threads": threads,
+                "ram_gb": (total_ram_gb() * 10.0).round() / 10.0, "gpus": gpus,
+            })));
+            for f in figures {
+                sink(format!("figure: {f}"));
+            }
+            sink(String::new());
+        }
+    }
     if cancelled() {
         sink("MATRIX CANCELLED".into());
     } else if failures.is_empty() {
