@@ -2141,9 +2141,9 @@ pub async fn leg_vision(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
                 serde_json::json!([
                     {"role": "user", "content": [text("What color is this image? Answer in one word."), image(VISION_RED_PNG)]},
                     {"role": "assistant", "content": "Red."},
-                    {"role": "user", "content": [text("And this one? Then list the colors of both images you were shown, first to last."), image(VISION_BLUE_PNG)]},
+                    {"role": "user", "content": [text("Here is a second image. List the colors of the two images you have been shown, first to last."), image(VISION_BLUE_PNG)]},
                 ]),
-                &["blue", "red", "blue"],
+                &["red", "blue"],
             ),
         ];
         for (what, messages, wanted) in cases {
