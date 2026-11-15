@@ -38,13 +38,15 @@ describe("Restart to update with the Vault closed, and an install that fails", (
   it("says the Vault is not running, offers to open it first, and after a failed install says nothing changed", async () => {
     expect(PORT).not.toBe("");
     await waitForChat();
-    // Something to back up, so the update's backup is owed.
-    await ask(`Vault closed test ${STAMP}: name one fruit and nothing else.`);
-    await waitForReplyDone(300_000);
-
     const pid = closeTheVault();
     console.log(`e2e: the test Vault (pid ${pid}) was closed`);
     await browser.waitUntil(async () => !(await fetch(`http://127.0.0.1:${PORT}/status`).then((r) => r.ok, () => false)), { timeout: 30_000, timeoutMsg: "the test Vault still answers" });
+
+    // Something to back up, written after the Vault closed, so the update's
+    // backup is owed. Written before, the app's own backup can finish within
+    // seconds of the reply, and then the update rightly needs no Vault.
+    await ask(`Vault closed test ${STAMP}: name one fruit and nothing else.`);
+    await waitForReplyDone(300_000);
 
     // 1. The Vault is not running: no install, and the two choices.
     await offerUpdate();
