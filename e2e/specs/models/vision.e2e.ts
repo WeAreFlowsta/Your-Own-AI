@@ -30,7 +30,9 @@ describe("vision", () => {
   const red = resolve(dir, "first.png");
   const blue = resolve(dir, "second.png");
 
-  it("has a model here that can see", async function () {
+  // Without a model that can see, the whole spec stands aside (a `before`
+  // skip takes every test with it; a skip inside one test would not).
+  before(async function () {
     await waitForChat();
     const models = await invoke<{ name: string }[]>("list_local_models").catch(() => []);
     const sees = await invoke<unknown>("find_vision_model", { query: null, queryVec: null }).catch(() => null);
