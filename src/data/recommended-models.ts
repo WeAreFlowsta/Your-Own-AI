@@ -1994,7 +1994,7 @@ export const MEASURED_SPEED: Record<string, Partial<Record<'cpu' | 'gpu' | 'moe-
   'Phi-4-mini-instruct-Q4_K_M.gguf': { cpu: { firstReplyS: 19.6, tps: 5.7 }, gpu: { firstReplyS: 4.7, tps: 26.1 } },
   'Ministral-3-3B-Instruct-2512-Q4_K_M.gguf': { cpu: { firstReplyS: 19.2, tps: 6.7 }, gpu: { firstReplyS: 3.6, tps: 29.2 } },
   'Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf': { cpu: { firstReplyS: 35.4, tps: 5.1 }, gpu: { firstReplyS: 7.6, tps: 23.5 } },
-  'LFM2.5-8B-A1B-Q4_K_M.gguf': { cpu: { firstReplyS: 16.4, tps: 12.2 }, 'moe-split': { firstReplyS: 11.9, tps: 19.2 } },
+  'LFM2.5-8B-A1B-Q4_K_M.gguf': { cpu: { firstReplyS: 16.4, tps: 12.2 }, 'moe-split': { firstReplyS: 6.1, tps: 26.2 } },
   // Too large for the reference card: the processor figures only.
   'gemma-4-E4B_q4_0-it.gguf': { cpu: { firstReplyS: 29.3, tps: 4.1 } },
   'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf': { cpu: { firstReplyS: 24.9, tps: 4.0 } },
