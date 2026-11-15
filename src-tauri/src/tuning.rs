@@ -1090,6 +1090,35 @@ mod tests {
         assert!(failures.is_empty(), "quality failures:\n{}", failures.join("\n"));
     }
 
+    /// Headless matrix leg: the wait for a first reply and the writing speed
+    /// (`matrix::leg_first_reply`) for the models in `YOAI_MODELS_DIR`
+    /// (default: the app's models folder), where the app would run each and
+    /// on the processor alone. It measures; nothing fails.
+    #[tokio::test]
+    #[ignore]
+    async fn live_matrix_first_reply() {
+        let _one_at_a_time = crate::llm::LIVE_MATRIX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dir = std::env::var("YOAI_MODELS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
+        assert!(bin.exists());
+        let seen = std::sync::Mutex::new(0usize);
+        let sink = |l: String| {
+            if l.starts_with("first reply: ") && l.contains("tok/s") {
+                *seen.lock().unwrap() += 1;
+            }
+            eprintln!("[first-reply] {l}");
+        };
+        let failures = crate::matrix::leg_first_reply(&bin, &dir, &sink).await;
+        assert!(failures.is_empty());
+        assert!(*seen.lock().unwrap() > 0, "no model in {} was measured", dir.display());
+    }
+
     /// Headless matrix leg: the sampling knobs REACH the engine. One server,
     /// three completions through `apply_sampling`: temperature 0 twice must
     /// answer identically (greedy is deterministic); high temperature with

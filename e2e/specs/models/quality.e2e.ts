@@ -2,6 +2,7 @@
 // §A0): eight plain questions with a deterministic rubric,
 // graded per model, the registry's family score printed beside each measured
 // grade. Slow (a load per model, eight answers each): a long timeout.
+import os from "node:os";
 import { invoke, waitForChat } from "./_helpers";
 
 describe("answer quality leg", () => {
@@ -29,5 +30,12 @@ describe("answer quality leg", () => {
     const graded = lines.filter((l) => /^quality: .+: \d+\/\d+ points/.test(l));
     expect(graded.length).toBeGreaterThan(0);
     for (const l of graded) expect(/registry overall \d/.test(l)).toBe(true);
+    // The report is made to be sent to us by hand: no line of a real run
+    // names this computer's account or its home folder, and the figures
+    // block is there to merge.
+    const secrets = [os.homedir(), os.userInfo().username].filter((x) => x.length >= 3).map((x) => x.toLowerCase());
+    for (const l of lines) for (const x of secrets) expect(l.toLowerCase().includes(x) ? `"${x}" in: ${l}` : "").toBe("");
+    expect(lines.some((l) => l.startsWith("figure: {") && l.includes('"kind":"quality"'))).toBe(true);
+    expect(lines.some((l) => l.startsWith("figure: {") && l.includes('"kind":"machine"'))).toBe(true);
   });
 });
