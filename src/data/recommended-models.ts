@@ -377,6 +377,20 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     size: 1.0,
   },
   {
+    id: 'lfm3-vl-vision',
+    name: 'LFM3 vision',
+    role: 'vision-projector',
+    description:
+      'Lets the LFM3 Vision model see images you attach - photos, charts, screenshots. Needs the LFM3 Vision model downloaded.',
+    // Saved under OUR model-first name (upstream is mmproj-first): the key
+    // "lfm3-vl-2b" prefixes the model filename for pairing.
+    filename: 'LFM3-VL-2B-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/7c3b4a43c9023e80bf234fec5e826a3365c8dda8/mmproj-LFM3-VL-2B-F16.gguf',
+    size: 0.35,
+    sha256: '1d8e6e58eefc093e09d6332f081516e1ddbd5b35cfca7f35463fb270db230b1e',
+  },
+  {
     id: 'gemma-4-e2b-vision',
     name: 'Gemma 4 vision (E2B)',
     role: 'vision-projector',
@@ -899,6 +913,85 @@ export const modelFamilies: ModelFamily[] = [
         downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-GGUF/resolve/f97fc8a443da86c71818adf91baecde5b7ef4c50/LFM2.5-24B-A2B-Q4_K_M.gguf',
         filename: 'LFM2.5-24B-A2B-Q4_K_M.gguf',
         sha256: 'd3334405b96228eb9908cdebb5c6194908f2da64282bda852afc3a3910c64e7d',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // Liquid AI's LFM3-1.7B (2026-10-24): the text model of the LFM3 family,
+    // about 1 GB at 4-bit, post-trained for agent harnesses, 256K context.
+    // Liquid's own GGUF. The `lfm3` architecture needs llama.cpp v1.0.0
+    // (b12359): pre-flighted on it 2026-11-15.
+    id: 'lfm3',
+    maker: 'Liquid AI',
+    quantizedBy: 'Liquid AI',
+    contextWindow: 262144,
+    released: '2026-10-24',
+    name: 'LFM3',
+    description: 'Liquid AI\'s smallest general model - 1.7B in about 1 GB, so it runs on almost any machine, with a 256K context. Built for quick everyday chat and simple tool use.',
+    category: 'fast',
+    recommended: false,
+    capabilities: ['chat', 'writing', 'long-context'],
+    traits: ['new'],
+    license: {
+      id: 'lfm-open-1.0',
+      name: 'LFM Open License v1.0',
+      url: 'https://huggingface.co/LiquidAI/LFM3-1.7B/blob/main/LICENSE',
+      notice: 'LFM3-1.7B is licensed under the LFM Open License v1.0.',
+      points: [
+        'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
+        'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
+        'Keep the license and attribution notices with any copies or derivatives you distribute.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '1.7B',
+        size: 1.0,
+        minRAM: 4,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/b3f2ae5d73cd3c91bf40e8ba752c648aa05dffdf/LFM3-1.7B-Q4_K_M.gguf',
+        filename: 'LFM3-1.7B-Q4_K_M.gguf',
+        sha256: '3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // Liquid AI's LFM3-VL-2B (2026-10-19): the LFM3 language model with
+    // Liquid's own vision encoder; images in, thinks before it answers.
+    // Liquid's own GGUF and projector; needs llama.cpp v1.0.0 (b12359):
+    // pre-flighted on it 2026-11-15 (model and projector).
+    id: 'lfm3-vl',
+    maker: 'Liquid AI',
+    quantizedBy: 'Liquid AI',
+    contextWindow: 128000,
+    released: '2026-10-19',
+    name: 'LFM3 Vision',
+    description: 'Liquid AI\'s small model that sees - about 1 GB plus a 0.35 GB vision file, for reading images, charts and screenshots on modest machines.',
+    category: 'fast',
+    recommended: false,
+    capabilities: ['chat', 'analysis'],
+    traits: ['new', 'thinking'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    license: {
+      id: 'lfm-open-1.0',
+      name: 'LFM Open License v1.0',
+      url: 'https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/main/LICENSE',
+      notice: 'LFM3-VL-2B is licensed under the LFM Open License v1.0.',
+      points: [
+        'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
+        'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
+        'Keep the license and attribution notices with any copies or derivatives you distribute.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '2B',
+        size: 1.0,
+        minRAM: 4,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/7c3b4a43c9023e80bf234fec5e826a3365c8dda8/LFM3-VL-2B-Q4_K_M.gguf',
+        filename: 'LFM3-VL-2B-Q4_K_M.gguf',
+        sha256: '56dac2e192ff0d9ab8507f4f1aeb4aed0463449bbbefaac79497f041c95f21eb',
         quantization: 'Q4_K_M'
       }
     ]

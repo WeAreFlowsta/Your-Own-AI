@@ -81,6 +81,14 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0, medical: 3 });
     }
+    // Liquid's LFM3 (2026-10): the smallest models in the catalog, about
+    // 1 GB. Graded low until measured here; the VL one sees.
+    if n.contains("lfm3-vl") {
+        return Some(Caps { overall: 5, coding: 4, reasoning: 5, math: 4, vision: 6, medical: 3 });
+    }
+    if n.contains("lfm3") {
+        return Some(Caps { overall: 5, coding: 4, reasoning: 5, math: 4, vision: 0, medical: 3 });
+    }
     // Small MoEs for ordinary machines (2026 catalog adds): capable chat /
     // instruction-following / tool use for their size, not frontier coders.
     if n.contains("lfm2") {
@@ -205,6 +213,10 @@ pub fn agent_caps(model_name: &str) -> u8 {
     }
     if n.contains("lfm2") {
         return 6;
+    }
+    // LFM3: conservative until the agent probe grades it.
+    if n.contains("lfm3") {
+        return 5;
     }
     // Granite 4.0 Tiny: promoted by the agent probe (11-09, the dev box's
     // 4 GB card, experts in RAM): the right tool in 8 of 8 project tasks and
