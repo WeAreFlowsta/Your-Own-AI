@@ -334,6 +334,10 @@ export interface UseChatProps {
  *  by the running model's own tokenizer when one is up (a dense-text ratio
  *  when not), plus persona room and ~1000 per image. Shared by the router's
  *  context filter and the reading-room check. */
+/** How many images one message may carry. Each one costs context (counted at
+ *  about 1,000 tokens in turnTokensFor) and memory in the vision tower. */
+export const MAX_IMAGES_PER_MESSAGE = 4;
+
 async function turnTokensFor(
   history: { content?: string }[],
   userInput: string,
@@ -517,10 +521,11 @@ export function useChat(props: UseChatProps) {
           : { role: "user", content: historyContent },
       );
 
-      // llama.cpp's multimodal path CRASHES on more than one image in a single
-      // request, so keep only the single most-recent image across the whole
-      // conversation and strip the rest back to text. (A follow-up references the
-      // latest image; older ones stay as their text.) When vision ISN'T needed this
+      // Only the most recent message that carries images sends them, all of them;
+      // older image messages go back to text (the assistant's own words about them
+      // stay in context, and a follow-up refers to the latest pictures). Every
+      // image costs context and memory, so a long conversation does not keep
+      // re-sending every picture it ever held. When vision ISN'T needed this
       // turn, strip ALL images so the history is clean text for the text model.
       let lastImageMsg = -1;
       if (needsVision) {
@@ -540,8 +545,8 @@ export function useChat(props: UseChatProps) {
         if (i !== lastImageMsg) {
           msg.content = text; // older image messages → text only
         } else {
-          const firstImage = msg.content.find((p) => p.type === "image_url");
-          msg.content = firstImage ? [{ type: "text", text }, firstImage] : text;
+          const pictures = msg.content.filter((p) => p.type === "image_url").slice(-MAX_IMAGES_PER_MESSAGE);
+          msg.content = pictures.length > 0 ? [{ type: "text", text }, ...pictures] : text;
         }
       });
 

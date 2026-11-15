@@ -67,6 +67,12 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     if n.contains("nemotron-3.5-super-vl") || n.contains("nemotron-3-5-super-vl") {
         return Some(Caps { overall: 9, coding: 8, reasoning: 9, math: 8, vision: 7, medical: 3 });
     }
+    // Nemotron 3.5 Bolt E4B (2026-10): Gemma 4 E4B tuned by NVIDIA, text only.
+    // Graded as Gemma 4 without sight, BEFORE the 74B Bolt arm its name also
+    // matches. Re-rank after the agent probe.
+    if n.contains("nemotron-3.5-bolt-e4b") || n.contains("nemotron-3-5-bolt-e4b") {
+        return Some(Caps { overall: 7, coding: 6, reasoning: 6, math: 6, vision: 0, medical: 3 });
+    }
     if n.contains("nemotron-3.5-bolt") || n.contains("nemotron-3-5-bolt") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 7, medical: 3 });
     }
@@ -74,6 +80,14 @@ pub fn known_caps(model_name: &str) -> Option<Caps> {
     // reasoning/agentic/coding in the gpt-oss class. Re-rank after field use.
     if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {
         return Some(Caps { overall: 8, coding: 8, reasoning: 8, math: 7, vision: 0, medical: 3 });
+    }
+    // Liquid's LFM3 (2026-10): the smallest models in the catalog, about
+    // 1 GB. Graded low until measured here; the VL one sees.
+    if n.contains("lfm3-vl") {
+        return Some(Caps { overall: 5, coding: 4, reasoning: 5, math: 4, vision: 6, medical: 3 });
+    }
+    if n.contains("lfm3") {
+        return Some(Caps { overall: 5, coding: 4, reasoning: 5, math: 4, vision: 0, medical: 3 });
     }
     // Small MoEs for ordinary machines (2026 catalog adds): capable chat /
     // instruction-following / tool use for their size, not frontier coders.
@@ -188,12 +202,21 @@ pub fn agent_caps(model_name: &str) -> u8 {
     if n.contains("glm") {
         return 8;
     }
+    // Bolt E4B is a Gemma 4 E4B tune: Gemma 4's grade until the agent probe
+    // promotes it (before the Nemotron arm its name also matches).
+    if n.contains("nemotron-3.5-bolt-e4b") || n.contains("nemotron-3-5-bolt-e4b") {
+        return 5;
+    }
     // Conservative until a live folder test promotes them (registry rule).
     if n.contains("nemotron-3.5") || n.contains("nemotron-3-5") {
         return 7;
     }
     if n.contains("lfm2") {
         return 6;
+    }
+    // LFM3: conservative until the agent probe grades it.
+    if n.contains("lfm3") {
+        return 5;
     }
     // Granite 4.0 Tiny: promoted by the agent probe (11-09, the dev box's
     // 4 GB card, experts in RAM): the right tool in 8 of 8 project tasks and
@@ -543,6 +566,16 @@ mod specialist_tests {
     fn the_qwen38_2b_distill_is_not_given_project_work() {
         assert!(super::agent_caps("Qwen3.8-2B-Q4_K_M.gguf") < 6, "it does not call a required tool");
         assert!(super::agent_caps("Qwen3.8-4B-Q4_K_M.gguf") >= 6, "the 4B calls it");
+    }
+
+    #[test]
+    fn bolt_e4b_is_graded_as_the_small_text_model_it_is() {
+        let small = super::caps_for("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf");
+        assert_eq!((small.overall, small.vision), (7, 0));
+        assert_eq!(super::agent_caps("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf"), 5);
+        let big = super::caps_for("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf");
+        assert_eq!((big.overall, big.vision), (8, 7));
+        assert_eq!(super::agent_caps("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf"), 7);
     }
 
     #[test]

@@ -1529,7 +1529,14 @@ pub async fn get_conversations(
         {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("conversation list read failed for lineage agent {}: {}", key, e);
+                // A line that is not running this session cannot know the
+                // agent: that is its absence, said once elsewhere, not a
+                // failed read per AI.
+                if e.contains("Agent not found") && !crate::conductor::supervisor().has(flowsta_hc_lines::Line::V06) {
+                    log::debug!("conversation list: lineage agent {} is on a line that is not running", key);
+                } else {
+                    log::warn!("conversation list read failed for lineage agent {}: {}", key, e);
+                }
                 if !e.contains("Agent not found") || crate::conductor::old_line_coming() {
                     unanswered.push(key.clone());
                 }

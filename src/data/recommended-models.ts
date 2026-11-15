@@ -377,6 +377,20 @@ export const VISION_PROJECTORS: CapabilityModel[] = [
     size: 1.0,
   },
   {
+    id: 'lfm3-vl-vision',
+    name: 'LFM3 vision',
+    role: 'vision-projector',
+    description:
+      'Lets the LFM3 Vision model see images you attach - photos, charts, screenshots. Needs the LFM3 Vision model downloaded.',
+    // Saved under OUR model-first name (upstream is mmproj-first): the key
+    // "lfm3-vl-2b" prefixes the model filename for pairing.
+    filename: 'LFM3-VL-2B-mmproj-F16.gguf',
+    downloadUrl:
+      'https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/7c3b4a43c9023e80bf234fec5e826a3365c8dda8/mmproj-LFM3-VL-2B-F16.gguf',
+    size: 0.35,
+    sha256: '1d8e6e58eefc093e09d6332f081516e1ddbd5b35cfca7f35463fb270db230b1e',
+  },
+  {
     id: 'gemma-4-e2b-vision',
     name: 'Gemma 4 vision (E2B)',
     role: 'vision-projector',
@@ -864,7 +878,7 @@ export const modelFamilies: ModelFamily[] = [
     contextWindow: 128000,
     released: '2026-05-28',
     name: 'LFM2.5',
-    description: 'Liquid AI\'s small mixture-of-experts - 8B total, 1.5B active per token, so it runs fast on ordinary machines. Strong instruction following and tool use for its size; 10 languages.',
+    description: 'Liquid AI\'s small mixture-of-experts models - 8B total with 1.5B active per token, or 24B with 2B active, so they run fast on ordinary machines. Strong instruction following and tool use for their size; 10 languages.',
     category: 'fast',
     recommended: true,
     capabilities: ['chat', 'agentic', 'multilingual', 'reasoning', 'writing'],
@@ -873,7 +887,7 @@ export const modelFamilies: ModelFamily[] = [
       id: 'lfm-open-1.0',
       name: 'LFM Open License v1.0',
       url: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B/blob/main/LICENSE',
-      notice: 'LFM2.5-8B-A1B is licensed under the LFM Open License v1.0.',
+      notice: 'LFM2.5-8B-A1B and LFM2.5-24B-A2B are licensed under the LFM Open License v1.0.',
       points: [
         'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
         'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
@@ -887,6 +901,97 @@ export const modelFamilies: ModelFamily[] = [
         minRAM: 12,
         downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-8B-A1B-GGUF/resolve/dfd5fdcad7a1c0d31473fb4ca443b8befbacddf0/LFM2.5-8B-A1B-Q4_K_M.gguf',
         filename: 'LFM2.5-8B-A1B-Q4_K_M.gguf',
+        quantization: 'Q4_K_M'
+      },
+      // The largest LFM2.5 (2026-10-09): 24B total, 2B active per token, 64
+      // experts. Liquid's own GGUF; `lfm2moe`, pre-flighted and load-checked
+      // on b11669 2026-11-15.
+      {
+        parameterCount: '24B-A2B (MoE)',
+        size: 13.5,
+        minRAM: 24,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM2.5-24B-A2B-GGUF/resolve/f97fc8a443da86c71818adf91baecde5b7ef4c50/LFM2.5-24B-A2B-Q4_K_M.gguf',
+        filename: 'LFM2.5-24B-A2B-Q4_K_M.gguf',
+        sha256: 'd3334405b96228eb9908cdebb5c6194908f2da64282bda852afc3a3910c64e7d',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // Liquid AI's LFM3-1.7B (2026-10-24): the text model of the LFM3 family,
+    // about 1 GB at 4-bit, post-trained for agent harnesses, 256K context.
+    // Liquid's own GGUF. The `lfm3` architecture needs llama.cpp v1.0.0
+    // (b12359): pre-flighted on it 2026-11-15.
+    id: 'lfm3',
+    maker: 'Liquid AI',
+    quantizedBy: 'Liquid AI',
+    contextWindow: 262144,
+    released: '2026-10-24',
+    name: 'LFM3',
+    description: 'Liquid AI\'s smallest general model - 1.7B in about 1 GB, so it runs on almost any machine, with a 256K context. Built for quick everyday chat and simple tool use.',
+    category: 'fast',
+    recommended: false,
+    capabilities: ['chat', 'writing', 'long-context'],
+    traits: ['new'],
+    license: {
+      id: 'lfm-open-1.0',
+      name: 'LFM Open License v1.0',
+      url: 'https://huggingface.co/LiquidAI/LFM3-1.7B/blob/main/LICENSE',
+      notice: 'LFM3-1.7B is licensed under the LFM Open License v1.0.',
+      points: [
+        'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
+        'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
+        'Keep the license and attribution notices with any copies or derivatives you distribute.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '1.7B',
+        size: 1.0,
+        minRAM: 4,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/b3f2ae5d73cd3c91bf40e8ba752c648aa05dffdf/LFM3-1.7B-Q4_K_M.gguf',
+        filename: 'LFM3-1.7B-Q4_K_M.gguf',
+        sha256: '3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4',
+        quantization: 'Q4_K_M'
+      }
+    ]
+  },
+  {
+    // Liquid AI's LFM3-VL-2B (2026-10-19): the LFM3 language model with
+    // Liquid's own vision encoder; images in, thinks before it answers.
+    // Liquid's own GGUF and projector; needs llama.cpp v1.0.0 (b12359):
+    // pre-flighted on it 2026-11-15 (model and projector).
+    id: 'lfm3-vl',
+    maker: 'Liquid AI',
+    quantizedBy: 'Liquid AI',
+    contextWindow: 128000,
+    released: '2026-10-19',
+    name: 'LFM3 Vision',
+    description: 'Liquid AI\'s small model that sees - about 1 GB plus a 0.35 GB vision file, for reading images, charts and screenshots on modest machines.',
+    category: 'fast',
+    recommended: false,
+    capabilities: ['chat', 'analysis'],
+    traits: ['new', 'thinking'],
+    modality: { in: ['text', 'vision'], out: ['text'] },
+    license: {
+      id: 'lfm-open-1.0',
+      name: 'LFM Open License v1.0',
+      url: 'https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/main/LICENSE',
+      notice: 'LFM3-VL-2B is licensed under the LFM Open License v1.0.',
+      points: [
+        'Free to use, including commercially, for individuals and organizations under US$10 million in annual revenue.',
+        'Organizations at or above that threshold need a separate license from Liquid AI for commercial use.',
+        'Keep the license and attribution notices with any copies or derivatives you distribute.',
+      ],
+    },
+    variants: [
+      {
+        parameterCount: '2B',
+        size: 1.0,
+        minRAM: 4,
+        downloadUrl: 'https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF/resolve/7c3b4a43c9023e80bf234fec5e826a3365c8dda8/LFM3-VL-2B-Q4_K_M.gguf',
+        filename: 'LFM3-VL-2B-Q4_K_M.gguf',
+        sha256: '56dac2e192ff0d9ab8507f4f1aeb4aed0463449bbbefaac79497f041c95f21eb',
         quantization: 'Q4_K_M'
       }
     ]
@@ -995,6 +1100,45 @@ export const modelFamilies: ModelFamily[] = [
           downloadUrl: 'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr-GGUF/resolve/182d2987939e12f458298b5d5f6ef98912f4ad6c/NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-LiLiCorr.gguf',
           size: 1.0,
           sha256: '080e1ea41c9562a7804dbf30c6fbd4d17e216c6b8ff666f88e6edb1816010194',
+        },
+      }
+    ]
+  },
+  {
+    // NVIDIA's Nemotron 3.5 Bolt E4B (2026-10-05): Gemma 4 E4B post-trained
+    // by NVIDIA for multi-turn tool use, instruction following and input
+    // grounding. Text in, text out (NVIDIA's card lists no image input), 64K
+    // context. NVIDIA's own Q4_K_M and its DFlash drafter. The `gemma4`
+    // architecture: pre-flighted and load-checked on b11669 2026-11-15 (the
+    // model, and the model with its draft). OpenMDW-1.1.
+    id: 'nemotron-3-5-bolt-e4b',
+    maker: 'NVIDIA',
+    quantizedBy: 'NVIDIA',
+    contextWindow: 65536,
+    released: '2026-10-05',
+    name: 'Nemotron 3.5 Bolt E4B',
+    description: 'NVIDIA\'s small assistant model - Gemma 4 E4B further trained by NVIDIA to follow instructions and use tools across many turns. A 5.8 GB file for everyday machines. Text only.',
+    category: 'fast',
+    recommended: false,
+    capabilities: ['chat', 'writing', 'multilingual'],
+    traits: ['new'],
+    variants: [
+      {
+        parameterCount: 'E4B',
+        size: 5.8,
+        minRAM: 16,
+        downloadUrl: 'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB/resolve/1db54d5b12533ff1bcaa8e42cf4c667988a1f1be/Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf',
+        filename: 'Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf',
+        sha256: 'c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612',
+        quantization: 'Q4_K_M',
+        // NVIDIA's DFlash drafter for this model: several drafted tokens
+        // verified per pass.
+        draft: {
+          type: 'draft-dflash',
+          filename: 'Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf',
+          downloadUrl: 'https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Bolt-E4B-4GB-DFlash/resolve/33b5a2b0bbd9b0ab016f6a7fca4c3e9a60277c36/Nemotron-3.5-Bolt-E4B-DFlash-BF16.gguf',
+          size: 0.7,
+          sha256: '8103aa42fd31fb661c3fbe8701d04d698ea2c5d09351dc3e8c9da639958de989',
         },
       }
     ]

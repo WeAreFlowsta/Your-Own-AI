@@ -35,6 +35,17 @@ fn memory_policy(total_bytes: u64) -> MemoryPolicy {
 
 static WATCHDOG: Watchdog = Watchdog::new();
 
+/// Whether the watch's next try at the 0.6 line is due: the first a minute
+/// after the line was seen not running (a conductor that was slow to answer
+/// is usually fine a minute later; ten minutes was a long wait for a
+/// working line), every later one ten minutes after the try before it.
+fn next_06_try_due(tries: u32, not_started_for: Option<Duration>, since_last_try: Option<Duration>) -> bool {
+    match (tries, since_last_try) {
+        (0, _) | (_, None) => not_started_for.is_some_and(|t| t >= Duration::from_secs(60)),
+        (_, Some(since)) => since >= Duration::from_secs(600),
+    }
+}
+
 /// What a 0.7 start needs, from the store as it stands.
 fn line_07_now(app: &tauri::AppHandle, data_dir: &std::path::Path, resource_dir: &std::path::Path) -> Option<Line07> {
     let hc = app.state::<Arc<crate::commands_holochain::HolochainState>>();
@@ -76,6 +87,11 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
         let mut holding = false;
         let mut last_memory_restart: Option<Instant> = None;
         let mut last_06_attach: Option<Instant> = None;
+        // Tries at the 0.6 line since it last ran, and when its not having
+        // started was first seen: the first try comes a minute after that,
+        // the next ones ten minutes apart.
+        let mut attaches_06 = 0u32;
+        let mut not_started_06: Option<Instant> = None;
         let total_memory = {
             let mut sys = sysinfo::System::new();
             sys.refresh_memory();
@@ -120,8 +136,20 @@ pub fn start(app: tauri::AppHandle, data_dir: PathBuf, resource_dir: PathBuf) {
             if conductor::leading() == Line::V07 && supervisor().session().is_some() {
                 let d = crate::line_facts::decision(&app, &data_dir);
                 let has_06 = supervisor().has(Line::V06);
-                if d.decision.wanted() && !has_06 && last_06_attach.map(|t| t.elapsed() > Duration::from_secs(600)).unwrap_or(true) {
-                    log::info!("[watch] the 0.6 line is wanted ({}): attaching it", d.why);
+                // A start of it still waiting for its conductor is not a
+                // line to attach again (the watch's first look used to say
+                // "attaching it" beside the session's own try).
+                let starting_06 = supervisor().state(Line::V06) == flowsta_hc_lines::supervisor::LineState::Starting;
+                if has_06 {
+                    attaches_06 = 0;
+                    not_started_06 = None;
+                } else if !starting_06 && d.decision.wanted() {
+                    not_started_06.get_or_insert_with(Instant::now);
+                }
+                let due = next_06_try_due(attaches_06, not_started_06.map(|t| t.elapsed()), last_06_attach.map(|t| t.elapsed()));
+                if d.decision.wanted() && !has_06 && !starting_06 && due {
+                    log::info!("[watch] the 0.6 line is wanted ({}): attaching it (try {})", d.why, attaches_06 + 1);
+                    attaches_06 += 1;
                     last_06_attach = Some(Instant::now());
                     if let Err(e) = conductor::attach_06(app.clone(), data_dir.clone()) {
                         log::warn!("[watch] the 0.6 line was not attached: {e}");
@@ -167,5 +195,20 @@ mod memory_policy_tests {
         let eight = memory_policy(8 * GIB).over_bytes;
         assert!(eight < GIB && eight > 600 << 20, "about 650 MB on 8 GB ({} MB)", eight >> 20);
         assert_eq!(memory_policy(0).over_bytes, GIB, "an unread total keeps the default");
+    }
+}
+
+#[cfg(test)]
+mod attach_06_tests {
+    use super::next_06_try_due;
+    use std::time::Duration;
+    const S: fn(u64) -> Duration = Duration::from_secs;
+    #[test]
+    fn the_first_try_waits_a_minute_and_later_ones_ten() {
+        assert!(!next_06_try_due(0, None, None), "nothing seen yet");
+        assert!(!next_06_try_due(0, Some(S(30)), None), "the session's own try may still be finishing");
+        assert!(next_06_try_due(0, Some(S(60)), None));
+        assert!(!next_06_try_due(1, Some(S(120)), Some(S(60))), "the second try is ten minutes after the first");
+        assert!(next_06_try_due(1, Some(S(700)), Some(S(600))));
     }
 }

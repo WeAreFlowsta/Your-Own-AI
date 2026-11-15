@@ -19,7 +19,7 @@ use tauri::{AppHandle, Emitter, Manager};
 /// installer build fails when they disagree. Optional engine downloads
 /// use the same tag, so the bundled engine and any downloaded backend
 /// stay version-locked.
-pub const LLAMA_ENGINE_TAG: &str = "llama-b11669";
+pub const LLAMA_ENGINE_TAG: &str = "llama-b12359";
 
 /// Repo whose `llama-<tag>` releases hold the bundled binaries AND the
 /// optional engine zips (built by build-llama-binaries.yml).
@@ -32,8 +32,8 @@ const ENGINE_RELEASE_REPO: &str = "WeAreFlowsta/Your-Own-AI";
 /// the release page is the only thing standing between a download and a
 /// swapped binary otherwise. Update WITH every LLAMA_ENGINE_TAG bump.
 const CUDA_ZIP_SHA256: &[(&str, &str)] = &[
-    ("x86_64-unknown-linux-gnu", "02b03fdd420312b6b5bcf25c5ffa7e97c140dbd3c19119c81cfb6dcffcb3e876"),
-    ("x86_64-pc-windows-msvc", "c34165dc9bb02672352382e66907f9beec43f1b8df40e1d5a2f7eaca2a277e77"),
+    ("x86_64-unknown-linux-gnu", "c533f1aba1011511df0fcfbc80f9af290aefb2db6303f5b8f2b75494aa37388d"),
+    ("x86_64-pc-windows-msvc", "22349d6a142aec0546cd8a50c01d1448cd71c0848e598803f10e74e17b9cdcb3"),
 ];
 
 /// Size in bytes of each CUDA engine zip on the pinned release (GitHub's
@@ -41,8 +41,8 @@ const CUDA_ZIP_SHA256: &[(&str, &str)] = &[
 /// offer and Settings say this number - the tray counts the same bytes.
 /// Update WITH every LLAMA_ENGINE_TAG bump, beside the checksums.
 const CUDA_ZIP_BYTES: &[(&str, u64)] = &[
-    ("x86_64-unknown-linux-gnu", 801_995_225),
-    ("x86_64-pc-windows-msvc", 763_739_906),
+    ("x86_64-unknown-linux-gnu", 870_661_526),
+    ("x86_64-pc-windows-msvc", 790_346_417),
 ];
 
 fn cuda_zip_bytes() -> Option<u64> {

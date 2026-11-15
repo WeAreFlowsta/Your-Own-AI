@@ -12,7 +12,7 @@ import { setMedicalOnlineAlways } from "../../utils/medicalModel";
 
 import { ThemeContext } from "../layout";
 import { useAiData, useAiDataActions } from "../../contexts/AiDataContext";
-import { useChat } from "../../hooks/useChat";
+import { useChat, MAX_IMAGES_PER_MESSAGE } from "../../hooks/useChat";
 import { useAgentSession, readRecentFolders, resolveBinaryPath } from "../../hooks/useAgentSession";
 import { permissionModeForTools, setPermissionModeForTools, type AgentPermissionMode } from "../../utils/agentPermissions";
 import { ConversationsDrawer } from "../../components/ConversationsDrawer";
@@ -2143,8 +2143,9 @@ export default component$(() => {
 
   const handleAttachFiles = $(async (paths: string[]) => {
     // WebP is excluded: llama.cpp (stb_image) can't decode it — the model would
-    // silently receive no image. One image at a time: llama.cpp's multimodal path
-    // crashes on more than one image per request, so a new image replaces the last.
+    // silently receive no image. A message carries up to MAX_IMAGES_PER_MESSAGE
+    // images (each costs context and memory); past that, the newest replace the
+    // oldest, so what was dropped last is what the message carries.
     const imageExts = ["png", "jpg", "jpeg", "gif", "bmp"];
     for (const filePath of paths) {
       // Dropping a FOLDER opens it (like dropping a folder on an editor);
@@ -2168,9 +2169,12 @@ export default component$(() => {
             "read_image_for_context",
             { filePath },
           );
+          const added = { filename: img.filename, dataUrl: img.data_url, sizeBytes: img.size_bytes };
           attachedImages.value = [
-            { filename: img.filename, dataUrl: img.data_url, sizeBytes: img.size_bytes },
-          ];
+            // The same picture attached twice is one picture.
+            ...attachedImages.value.filter((i) => i.dataUrl !== added.dataUrl),
+            added,
+          ].slice(-MAX_IMAGES_PER_MESSAGE);
         } catch (err) {
           console.error(`[ChatPage] Failed to read image ${filePath}:`, err);
         } finally {
@@ -2243,6 +2247,13 @@ export default component$(() => {
         console.error(`[ChatPage] Failed to read file ${filePath}:`, err);
       }
     }
+  });
+  // Test aid: the UI tests attach files without the native picker or a drop.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(() => {
+    try {
+      (window as any).__yoaiAttach = (paths: string[]) => handleAttachFiles(paths);
+    } catch { /* no window */ }
   });
 
   const handleDownloadModel = $(() => {
@@ -2558,6 +2569,7 @@ export default component$(() => {
                               }
                             }}
                             class="px-4 py-2 text-sm"
+                            testId="vision-use"
                           >
                             Use vision model
                           </LiquidMetalButton>
