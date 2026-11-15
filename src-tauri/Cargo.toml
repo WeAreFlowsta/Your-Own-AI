@@ -69,7 +69,7 @@ log = "0.4"
 tauri-plugin-updater = "~2.12.0"
 flowsta-update-check = { git = "https://github.com/WeAreFlowsta/flowsta-update-check", rev = "1e892e20aa577a3ece65945b3d8f0fd4b95532f6" }
 url = "2"
-flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "06b1318f4a10e6093a170476fba32e38b2641fc8" }
+flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "3a8a319e22aedb94f5c91f77f2efab2538e52d6f" }
 async-trait = "0.1"
 lair_keystore_api = "=0.6.3"
 holochain_client = { version = "=0.8.1", default-features = false }
