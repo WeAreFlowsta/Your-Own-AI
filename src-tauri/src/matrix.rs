@@ -2046,6 +2046,147 @@ pub async fn leg_tool_call(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String
     failures
 }
 
+// ───────────── vision: images reach the model, one and several ─────────────
+
+/// Two 96 px squares, one solid red and one solid blue (PNG, base64). A
+/// model that sees them names them; nothing about them depends on taste.
+const VISION_RED_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAAiklEQVR42u3QMQ0AAAjAsPk3DQ44uZpUQZvioECQIEGCBAkSJAhBggQJEiRIkCAECRIkSJAgQYJQIEiQIEGCBAkShCBBggQJEiRIEIIECRIkSJAgQQgSJEiQIEGCBAlCkCBBggQJEiQIQYIECRIkSJAgBAkSJEiQIEGCBCFIkCBBggQJEoQgQYIeLWwZ3g4lE9hgAAAAAElFTkSuQmCC";
+const VISION_BLUE_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAAAiklEQVR42u3QMQ0AAAjAsPk3DQ44uZpUQavhpECQIEGCBAkSJAhBggQJEiRIkCAECRIkSJAgQYJQIEiQIEGCBAkShCBBggQJEiRIEIIECRIkSJAgQQgSJEiQIEGCBAlCkCBBggQJEiQIQYIECRIkSJAgBAkSJEiQIEGCBCFIkCBBggQJEoQgQYLeLK/h3g6RPleGAAAAAElFTkSuQmCC";
+
+/// What a vision answer must show: every wanted color named, in the order
+/// the images were given.
+pub(crate) fn names_colors_in_order(answer: &str, wanted: &[&str]) -> bool {
+    let lower = answer.to_lowercase();
+    let mut from = 0;
+    for color in wanted {
+        match lower[from..].find(color) {
+            Some(at) => from += at + color.len(),
+            None => return false,
+        }
+    }
+    true
+}
+
+/// Every downloaded chat model that has its projector beside it, loaded the
+/// way the app loads it for an image turn (`--mmproj`, the vision tower on
+/// the processor), is shown one image, two images in one message, and one
+/// image in each of two turns. The engine once crashed on more than one
+/// image per request; this is the leg that would say so again.
+pub async fn leg_vision(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let projectors = crate::llm::projector_map(dir);
+    let image = |b64: &str| serde_json::json!({"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{b64}")}});
+    let text = |t: &str| serde_json::json!({"type": "text", "text": t});
+    let mut tried = 0;
+    for name in gguf_files(dir) {
+        if cancelled() {
+            sink("cancelled".into());
+            break;
+        }
+        let Some(projector) = crate::llm::find_projector_in(&projectors, &name) else { continue };
+        let path = dir.join(&name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else { continue };
+        if meta.is_embedding() {
+            continue;
+        }
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            + std::fs::metadata(&projector).map(|m| m.len()).unwrap_or(0);
+        let free_now = crate::llm::grading_memory_bytes();
+        if free_now > 0 && free_now < load_room_needed(size, false) {
+            sink(format!("{name}: not tried - {:.1} GB of memory free", free_now as f64 / 1024f64.powi(3)));
+            continue;
+        }
+        tried += 1;
+        let free = free_vram_gb(bin);
+        let ctx = 8192;
+        let pname = projector.file_name().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let mut args: Vec<String> = vec![
+            "--port".into(), bench_port().to_string(),
+            "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), ctx.to_string(),
+            "--fit".into(), "off".into(),
+            "--model".into(), name.clone(),
+            "--mmproj".into(), pname,
+            "--no-mmproj-offload".into(),
+        ];
+        if let Some(n) = moe_decision(&meta, size, ctx, free).filter(|n| *n > 0) {
+            args.push("--n-cpu-moe".into());
+            args.push(n.to_string());
+        }
+        if meta.surfaces_special_tokens() {
+            args.push("--special".into());
+        }
+        let mut guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("{name}: FAIL - did not load with its projector: {e}"));
+                failures.push(format!("vision: {name} did not load with its projector"));
+                continue;
+            }
+        };
+        let cases: [(&str, serde_json::Value, &[&str]); 3] = [
+            (
+                "one image",
+                serde_json::json!([{"role": "user", "content": [text("What color is this image? Answer in one word."), image(VISION_RED_PNG)]}]),
+                &["red"],
+            ),
+            (
+                "two images in one message",
+                serde_json::json!([{"role": "user", "content": [text("Name the color of the first image, then the color of the second."), image(VISION_RED_PNG), image(VISION_BLUE_PNG)]}]),
+                &["red", "blue"],
+            ),
+            (
+                "an image in each of two turns",
+                serde_json::json!([
+                    {"role": "user", "content": [text("What color is this image? Answer in one word."), image(VISION_RED_PNG)]},
+                    {"role": "assistant", "content": "Red."},
+                    {"role": "user", "content": [text("And this one? Then list the colors of both images you were shown, first to last."), image(VISION_BLUE_PNG)]},
+                ]),
+                &["blue", "red", "blue"],
+            ),
+        ];
+        for (what, messages, wanted) in cases {
+            let body = serde_json::json!({"model": name, "messages": messages, "max_tokens": 300, "temperature": 0, "stream": false});
+            let started = std::time::Instant::now();
+            let answer = match crate::llm::local_http()
+                .post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port()))
+                .json(&body)
+                .timeout(std::time::Duration::from_secs(300))
+                .send()
+                .await
+            {
+                Ok(r) => r.json::<serde_json::Value>().await.ok().and_then(|v| v["choices"][0]["message"]["content"].as_str().map(str::to_string)),
+                Err(_) => None,
+            };
+            // An engine that dies on the request is the old fault: say that, not "no answer".
+            if let Ok(Some(status)) = guard.0.try_wait() {
+                sink(format!("{name}: FAIL - {what}: the engine stopped ({status})"));
+                failures.push(format!("vision: the engine stopped on {what} with {name}"));
+                break;
+            }
+            match answer {
+                Some(a) if names_colors_in_order(&a, wanted) => {
+                    sink(format!("{name}: ok - {what} ({} ms)", started.elapsed().as_millis()))
+                }
+                Some(a) => {
+                    let said: String = a.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect();
+                    sink(format!("{name}: FAIL - {what}: wanted {} in that order, it said \"{said}\"", wanted.join(", ")));
+                    failures.push(format!("vision: {name} did not name the colors for {what}"));
+                }
+                None => {
+                    sink(format!("{name}: FAIL - {what}: no answer"));
+                    failures.push(format!("vision: {name} gave no answer for {what}"));
+                }
+            }
+        }
+    }
+    if tried == 0 {
+        sink("no model here has its vision file beside it - nothing to show".into());
+    }
+    failures
+}
+
 /// The project tasks an agent is given, and the tool each one needs.
 const AGENT_PROBE_TASKS: [(&str, &str); 8] = [
     ("What files are in this project?", "list_dir"),
@@ -2677,6 +2818,12 @@ pub async fn matrix_run(
         sink(String::new());
     }
 
+    if !cancelled() && want("vision") {
+        sink("== Vision (one image, two in one message, one in each of two turns) ==".into());
+        failures.extend(leg_vision(&bin, &dir, sink).await);
+        sink(String::new());
+    }
+
     if !cancelled() && want("toolcall") {
         sink("== Tool call (one named tool, asked the way a program asks) ==".into());
         failures.extend(leg_tool_call(&bin, &dir, sink).await);
@@ -2983,5 +3130,18 @@ mod memory_grade_tests {
         let invented = format!("{good}\n- The team meets on Fridays at the pub");
         assert_eq!(score_prose(&invented), 4, "one invented line costs grounding and the length band");
         assert_eq!(score_prose(""), 0);
+    }
+}
+
+#[cfg(test)]
+mod vision_leg_tests {
+    use super::names_colors_in_order;
+    #[test]
+    fn colors_must_all_be_named_and_in_the_order_shown() {
+        assert!(names_colors_in_order("First: Red, Second: Blue", &["red", "blue"]));
+        assert!(names_colors_in_order("Blue. You were shown red, then blue.", &["blue", "red", "blue"]));
+        assert!(!names_colors_in_order("Blue, then red.", &["red", "blue"]));
+        assert!(!names_colors_in_order("Red.", &["red", "blue"]));
+        assert!(!names_colors_in_order("I cannot see images.", &["red"]));
     }
 }
