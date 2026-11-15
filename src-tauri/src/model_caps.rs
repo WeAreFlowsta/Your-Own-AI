@@ -558,12 +558,12 @@ mod specialist_tests {
 
     #[test]
     fn bolt_e4b_is_graded_as_the_small_text_model_it_is() {
-        let small = caps_for("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf");
+        let small = super::caps_for("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf");
         assert_eq!((small.overall, small.vision), (7, 0));
-        assert_eq!(agent_caps("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf"), 5);
-        let big = caps_for("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf");
+        assert_eq!(super::agent_caps("Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf"), 5);
+        let big = super::caps_for("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf");
         assert_eq!((big.overall, big.vision), (8, 7));
-        assert_eq!(agent_caps("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf"), 7);
+        assert_eq!(super::agent_caps("NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf"), 7);
     }
 
     #[test]
