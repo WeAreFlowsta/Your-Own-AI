@@ -8,10 +8,11 @@
 //
 // The fit here is a plain stand-in for the app's grader (which reads the real
 // machine): on the card when the file plus 1.5 GB fits its memory, a split
-// model with a card, else the processor when minRAM fits.
+// model with a card, else the processor when minRAM fits; a file measured on
+// the reference 4 GB card counts as running on a card.
 // `node scripts/check-model-picks.mjs --print` shows every pick.
 import { readFileSync } from 'node:fs';
-import { modelFamilies, rankPicks, picksFor, isMoeVariant, getModality } from '../src/data/recommended-models.ts';
+import { modelFamilies, rankPicks, picksFor, isMoeVariant, getModality, MEASURED_SPEED } from '../src/data/recommended-models.ts';
 
 const grades = JSON.parse(readFileSync(new URL('./catalog-grades.json', import.meta.url), 'utf8'));
 const MACHINES = [
@@ -26,8 +27,8 @@ const MACHINES = [
 const FIRST = {
   '8 GB, no card': 'gemma-4',
   '16 GB, no card': 'gemma-4',
-  '16 GB, 4 GB card': 'phi-4-mini',
-  '16 GB, 8 GB card': 'phi-4-mini',
+  '16 GB, 4 GB card': 'gemma-4',
+  '16 GB, 8 GB card': 'gemma-4',
   '32 GB, 16 GB card': 'qwen-3.6',
   '64 GB, 24 GB card': 'qwen-3.8',
 };
@@ -35,7 +36,8 @@ const FIRST = {
 function modesFor(m) {
   const modes = {};
   for (const f of modelFamilies) for (const v of f.variants) {
-    const mode = m.vram > 0 && v.size + 1.5 <= m.vram ? 'gpu'
+    // A file measured on the reference 4 GB card runs on any card that size or larger.
+    const mode = m.vram > 0 && (v.size + 1.5 <= m.vram || (m.vram >= 4 && MEASURED_SPEED[v.filename]?.gpu)) ? 'gpu'
       : m.vram > 0 && isMoeVariant(v) && v.minRAM <= m.ram ? 'moe-split'
       : v.minRAM <= m.ram ? 'cpu' : 'too-big';
     modes[v.filename] = { mode, fit: 'green', grades: grades[v.filename] };
