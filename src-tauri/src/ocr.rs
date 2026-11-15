@@ -211,9 +211,15 @@ pub async fn read_picture_as_document(app_handle: AppHandle, file_path: String) 
 /// slow part begins. A picture this cannot open, an ordinary photo, or a
 /// reader that fails all answer `None`: the picture stays a picture.
 pub async fn picture_as_document(bin: &Path, models_dir: &Path, path: PathBuf, card: bool, reading: impl Fn()) -> (usize, Option<String>) {
+    let Ok(bytes) = std::fs::read(&path) else { return (0, None) };
+    picture_bytes_as_document(bin, models_dir, bytes, card, reading).await
+}
+
+/// The same for a picture already in memory (one that arrived in a request).
+pub async fn picture_bytes_as_document(bin: &Path, models_dir: &Path, bytes: Vec<u8>, card: bool, reading: impl Fn()) -> (usize, Option<String>) {
     let check = models_dir.join(crate::doc_reader::CHECK_FILE);
     let seen = tauri::async_runtime::spawn_blocking(move || -> Result<(usize, String), String> {
-        let img = image::open(&path).map_err(|_| "not a picture this can open".to_string())?;
+        let img = image::load_from_memory(&bytes).map_err(|_| "not a picture this can open".to_string())?;
         // A phone photo is far larger than the reader needs.
         let max = crate::doc_reader::PICTURE_MAX_SIDE;
         let img = if img.width() > max || img.height() > max { img.resize(max, max, image::imageops::FilterType::Triangle) } else { img };
@@ -306,7 +312,8 @@ mod compare {
         let mut wrong = Vec::new();
         for f in files {
             let name = f.file_name().unwrap().to_string_lossy().to_string();
-            if !only.is_empty() && !only.iter().any(|o| name.starts_with(o.as_str())) {
+            let picture = [".png", ".jpg", ".jpeg"].iter().any(|e| name.to_lowercase().ends_with(e));
+            if !picture || (!only.is_empty() && !only.iter().any(|o| name.starts_with(o.as_str()))) {
                 continue;
             }
             let t = std::time::Instant::now();

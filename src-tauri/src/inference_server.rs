@@ -1417,6 +1417,18 @@ async fn chat_completions(
     if online_id.is_none() {
         let state = app.state::<crate::llm::LLMState>();
         let has_eyes = state.current_mmproj.lock().await.is_some();
+        // The document reader first, when it is installed: a picture that
+        // is mostly text is given as its text (in the picture's place for
+        // a model that cannot see it), so only ordinary pictures are left
+        // for the steps below.
+        if has_image_parts {
+            if let Some(msgs) = body.get_mut("messages").and_then(Value::as_array_mut) {
+                let given = read_document_parts(&app, msgs, !has_eyes).await;
+                if given > 0 {
+                    log::info!("[inference] {given} picture(s) given to '{}' as text by the document reader", ai.name);
+                }
+            }
+        }
         if !has_eyes {
             // The caption sidecar: before a picture becomes a note, let the
             // vision pick describe it once (cached by the image's bytes, so
@@ -2135,6 +2147,101 @@ async fn caption_image_parts(app: &AppHandle, messages: &mut [Value], session_mo
         }
     }
     captioned
+}
+
+/// What the document reader made of a picture, by the picture's hash:
+/// its text, or `None` for a picture that is not a document. A harness
+/// re-sends the whole conversation every call, so each picture is checked
+/// and read once. Bounded.
+static DOCUMENT_TEXT_CACHE: OnceLock<Mutex<HashMap<u64, Option<String>>>> = OnceLock::new();
+const DOCUMENT_TEXT_PREFIX: &str = "[Text of the attached picture, read on this device by the document reader:\n";
+
+/// The bytes of a picture given as a base64 `data:` address.
+fn data_url_bytes(url: &str) -> Option<Vec<u8>> {
+    use base64::Engine as _;
+    let (head, data) = url.strip_prefix("data:")?.split_once(',')?;
+    if !head.ends_with(";base64") {
+        return None;
+    }
+    base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()
+}
+
+/// Where the picture parts are that the reader should look at: every one
+/// (`all`), or only those of the last user message (the picture just
+/// attached, when the model sees the rest itself).
+fn document_candidates(messages: &[Value], all: bool) -> Vec<(usize, usize)> {
+    let last_user = messages.iter().rposition(|m| m.get("role").and_then(Value::as_str) == Some("user"));
+    let mut out = Vec::new();
+    for (mi, m) in messages.iter().enumerate() {
+        if !all && Some(mi) != last_user {
+            continue;
+        }
+        let Some(parts) = m.get("content").and_then(Value::as_array) else { continue };
+        for (pi, p) in parts.iter().enumerate() {
+            if image_part_url(p).is_some() {
+                out.push((mi, pi));
+            }
+        }
+    }
+    out
+}
+
+/// Put a read document's text into the message: in place of the picture
+/// (`replace`, for a model that cannot see it) or right after it.
+fn place_document_text(messages: &mut [Value], mi: usize, pi: usize, text: &str, replace: bool) {
+    let Some(parts) = messages.get_mut(mi).and_then(|m| m.get_mut("content")).and_then(Value::as_array_mut) else { return };
+    let note = json!({ "type": "text", "text": format!("{DOCUMENT_TEXT_PREFIX}{text}]") });
+    if replace {
+        if let Some(p) = parts.get_mut(pi) {
+            *p = note;
+        }
+    } else if pi < parts.len() {
+        parts.insert(pi + 1, note);
+    }
+}
+
+/// The document reader's rule for a request, the same as in the app's own
+/// chat: with the reader installed, a picture that is mostly text is read
+/// into text before the AI answers. For a model that cannot see pictures
+/// (`replace`), every picture is looked at and a document's text takes
+/// the picture's place; for one that can, only the pictures of the last
+/// user message are, and the text follows the picture. Returns how many
+/// pictures were given as text. A picture that is not a document, not a
+/// `data:` address, or not readable is left exactly as it was.
+async fn read_document_parts(app: &AppHandle, messages: &mut [Value], replace: bool) -> usize {
+    let Ok(models_dir) = crate::llm::get_models_dir(app) else { return 0 };
+    if !crate::doc_reader::present(&models_dir) || !models_dir.join(crate::doc_reader::CHECK_FILE).exists() {
+        return 0;
+    }
+    let mut given = 0;
+    // Back to front, so a text placed after a picture never shifts a place still to visit.
+    for (mi, pi) in document_candidates(messages, replace).into_iter().rev() {
+        let Some(url) = messages.get(mi).and_then(|m| m.get("content")).and_then(Value::as_array).and_then(|p| p.get(pi)).and_then(image_part_url) else { continue };
+        let key = caption_key(&url);
+        let cached = DOCUMENT_TEXT_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock().ok().and_then(|c| c.get(&key).cloned());
+        let text = match cached {
+            Some(known) => known,
+            None => {
+                let Some(bytes) = data_url_bytes(&url) else { continue };
+                let Ok((bin, _)) = crate::matrix::engine_binary(app) else { return given };
+                let card = crate::doc_reader::on_card(crate::matrix::free_vram_gb(&bin));
+                let (words, text) = crate::ocr::picture_bytes_as_document(&bin, &models_dir, bytes, card, || {}).await;
+                log::info!("[inference] a picture checked by the document reader: {words} word(s) found, {}", if text.is_some() { "read as a document" } else { "left as a picture" });
+                if let Ok(mut c) = DOCUMENT_TEXT_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
+                    if c.len() >= CAPTION_CACHE_MAX {
+                        c.clear();
+                    }
+                    c.insert(key, text.clone());
+                }
+                text
+            }
+        };
+        if let Some(text) = text {
+            place_document_text(messages, mi, pi, &text, replace);
+            given += 1;
+        }
+    }
+    given
 }
 
 /// Stands in for an image the serving model cannot see. Worded for the
@@ -3221,7 +3328,35 @@ mod think_tests {
 #[cfg(test)]
 mod vision_guard_tests {
     use super::{strip_image_parts, NO_VISION_NOTE};
+    use super::{data_url_bytes, document_candidates, place_document_text, DOCUMENT_TEXT_PREFIX};
     use serde_json::json;
+
+
+    #[test]
+    fn a_read_document_takes_the_pictures_place_or_follows_it() {
+        let img = |u: &str| json!({ "type": "image_url", "image_url": { "url": u } });
+        let fresh = || vec![
+            json!({ "role": "user", "content": [{ "type": "text", "text": "old" }, img("data:image/png;base64,AAAA")] }),
+            json!({ "role": "assistant", "content": "ok" }),
+            json!({ "role": "user", "content": [img("data:image/png;base64,BBBB"), { "type": "text", "text": "what does it say?" }] }),
+        ];
+        let msgs = fresh();
+        assert_eq!(document_candidates(&msgs, true), vec![(0, 1), (2, 0)], "a model that cannot see: every picture");
+        assert_eq!(document_candidates(&msgs, false), vec![(2, 0)], "a model that can: the last user message only");
+        let mut blind = fresh();
+        place_document_text(&mut blind, 2, 0, "Dear Ms Okafor", true);
+        let parts = blind[2]["content"].as_array().unwrap();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["text"].as_str().unwrap(), format!("{DOCUMENT_TEXT_PREFIX}Dear Ms Okafor]"));
+        assert_eq!(strip_image_parts(&mut blind), 1, "only the unread picture is left to replace");
+        let mut seeing = fresh();
+        place_document_text(&mut seeing, 2, 0, "Dear Ms Okafor", false);
+        let parts = seeing[2]["content"].as_array().unwrap();
+        assert_eq!((parts.len(), parts[0]["type"].as_str(), parts[1]["type"].as_str(), parts[2]["text"].as_str()), (3, Some("image_url"), Some("text"), Some("what does it say?")));
+        assert_eq!(data_url_bytes("data:image/png;base64,AAEC"), Some(vec![0, 1, 2]));
+        assert_eq!(data_url_bytes("https://example.org/a.png"), None);
+        assert_eq!(data_url_bytes("data:image/png,plain"), None);
+    }
 
     #[test]
     fn replaces_both_image_part_shapes_and_counts() {

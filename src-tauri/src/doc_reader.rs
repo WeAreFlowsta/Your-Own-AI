@@ -68,9 +68,15 @@ impl Drop for KillOnDrop {
     }
 }
 
-/// The reader, running for one job. Dropping it stops the engine.
+/// One reading job at a time: the reader has one port, and two engines
+/// side by side would halve each other's speed. A second job waits.
+static ONE_JOB: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// The reader, running for one job. Dropping it stops the engine and lets
+/// the next job start.
 pub struct Reader {
     _engine: KillOnDrop,
+    _job: tokio::sync::SemaphorePermit<'static>,
     port: u16,
     pub card: bool,
 }
@@ -82,16 +88,18 @@ impl Reader {
         if !present(models_dir) {
             return Err("The document reader is not installed".into());
         }
-        match Self::start_at(bin, models_dir, card).await {
+        let job = ONE_JOB.acquire().await.map_err(|_| "The document reader is closing".to_string())?;
+        let engine = match Self::start_at(bin, models_dir, card).await {
             Err(e) if card => {
                 log::warn!("[reader] did not start on the card ({e}); on the processor instead");
-                Self::start_at(bin, models_dir, false).await
+                (Self::start_at(bin, models_dir, false).await?, false)
             }
-            r => r,
-        }
+            r => (r?, card),
+        };
+        Ok(Reader { _engine: engine.0 .0, _job: job, port: engine.0 .1, card: engine.1 })
     }
 
-    async fn start_at(bin: &Path, models_dir: &Path, card: bool) -> Result<Reader, String> {
+    async fn start_at(bin: &Path, models_dir: &Path, card: bool) -> Result<(KillOnDrop, u16), String> {
         let port = crate::ports::reader();
         let mut args: Vec<String> = [
             "--model", MODEL_FILE, "--mmproj", VISION_FILE,
@@ -121,7 +129,7 @@ impl Reader {
             if let Ok(r) = client.get(format!("http://127.0.0.1:{port}/health")).send().await {
                 if r.status().is_success() {
                     log::info!("[reader] ready on the {}", if card { "card" } else { "processor" });
-                    return Ok(Reader { _engine: engine, port, card });
+                    return Ok((engine, port));
                 }
             }
             if Instant::now() >= deadline {
