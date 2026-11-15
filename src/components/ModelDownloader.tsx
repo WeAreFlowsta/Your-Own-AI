@@ -24,8 +24,11 @@ import {
   isVariantSuitable,
   isFamilyRunnable,
   getModality,
-  getRunMode,
   getCatalogFit,
+  rankPicks,
+  picksFor,
+  pickReason,
+  type GradeKey,
   type CatalogModes,
   shardFilename,
   shardUrl,
@@ -1177,95 +1180,57 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   // Where a pick would run outranks its category: fully on the card, then
   // MoE split / fast-class, then an oversized CPU run - the welcome modal's
   // order, so both screens name the same model for the same machine.
-  const modeClass = (v: ModelVariant) => {
-    const m = getRunMode(v, store.catalogModes);
-    return m === 'gpu' ? 2 : m === 'moe-split' || v.size <= 5 ? 1 : 0;
-  };
-
-  // Find the single best recommended family + variant for this system.
-  // Prefers models that fit fully in VRAM (fastest), then largest suitable.
-  const bestPick = (() => {
-    const candidates = modelFamilies
-      .filter(f => f.recommended && getBestVariantForSystem(f, store.catalogModes) !== null)
-      .map(f => {
-        const variant = getBestVariantForSystem(f, store.catalogModes)!;
-        return { family: f, variant };
-      });
-
-    // Sort by where it runs (getRunMode, not raw file size vs VRAM), then
-    // size: bigger wins on the card and in fast-class, smaller wins oversized.
-    candidates.sort((a, b) => {
-      const d = modeClass(b.variant) - modeClass(a.variant);
-      if (d !== 0) return d;
-      return modeClass(a.variant) === 0
-        ? a.variant.size - b.variant.size
-        : b.variant.size - a.variant.size;
-    });
-
-    return candidates[0] || null;
-  })();
+  // Every pick on this page ranks the same way (rankPicks): where it runs,
+  // then the app's own grade for the job, never file size or age as quality.
+  const bestPick = rankPicks(picksFor(modelFamilies.filter(f => f.recommended), store.catalogModes).filter(p => !isMedicalSpecialist(p.variant.filename)), store.catalogModes, 'overall')[0] ?? null;
 
   // "Best for this computer" - one honest pick per activity. Candidates
   // are fit-filtered FIRST (getBestVariantForSystem returns null when
-  // nothing fits), so a small machine is never sold a model it can't
-  // run; ranking then follows the catalog's own relevance data.
+  // nothing fits), so a small machine is never sold a model it can't run.
   const catRank: Record<string, number> = { quality: 0, balanced: 1, specialist: 2, fast: 3 };
   const pickFor = (
     match: (f: ModelFamily) => boolean,
+    grade: GradeKey,
     preferId?: string,
     catOrder?: Record<string, number>,
   ) => {
-    const order = catOrder ?? catRank;
-    const candidates = modelFamilies
-      .filter(match)
-      .map(f => ({ f, v: getBestVariantForSystem(f, store.catalogModes) }))
-      .filter((x): x is { f: ModelFamily; v: ModelVariant } => x.v !== null);
-    candidates.sort((a, b) => {
-      if (preferId) {
-        const ap = a.f.id === preferId ? 0 : 1;
-        const bp = b.f.id === preferId ? 0 : 1;
-        if (ap !== bp) return ap - bp;
-      }
-      const am = modeClass(a.v);
-      const bm = modeClass(b.v);
-      if (am !== bm) return bm - am;
-      const ac = order[a.f.category] ?? 9;
-      const bc = order[b.f.category] ?? 9;
-      if (ac !== bc) return ac - bc;
-      const ar = a.f.released ?? '', br = b.f.released ?? '';
-      if (ar !== br) return ar > br ? -1 : 1;
-      return a.f.name.localeCompare(b.f.name);
-    });
-    return candidates[0] ?? null;
+    const fit = picksFor(modelFamilies.filter(match), store.catalogModes)
+      .filter(p => grade === 'medical' || !isMedicalSpecialist(p.variant.filename));
+    const p = rankPicks(fit, store.catalogModes, grade, { preferId, catOrder: catOrder ?? catRank })[0];
+    return p ? { f: p.family, v: p.variant } : null;
   };
   const medicalPick =
-    pickFor(f => f.capabilities.includes('medical'), 'medgemma',
+    pickFor(f => f.capabilities.includes('medical'), 'medical', 'medgemma',
       { specialist: 0, quality: 1, balanced: 2, fast: 3 }) ??
-    pickFor(f => f.capabilities.includes('reasoning') || f.capabilities.includes('chat'));
+    pickFor(f => f.capabilities.includes('reasoning') || f.capabilities.includes('chat'), 'overall');
   const medicalIsSpecialist = medicalPick !== null && medicalPick.f.capabilities.includes('medical');
   const activityPicks = [
     {
       key: 'coding',
+      job: 'project work',
       title: 'Codes with you',
       blurb: 'The strongest project agent that fits this machine.',
       // 'agentic' = the agent mode drives it (a unit test holds the catalog
       // to the agent gate); a coding model it does not drive is no pick here.
-      pick: pickFor(f => f.capabilities.includes('agentic')),
+      pick: pickFor(f => f.capabilities.includes('agentic'), 'agent'),
     },
     {
       key: 'chat',
+      job: 'everyday chat',
       title: 'Everyday chat',
       blurb: 'The best all-rounder for your memory.',
-      pick: pickFor(f => f.capabilities.includes('chat')),
+      pick: pickFor(f => f.capabilities.includes('chat'), 'overall'),
     },
     {
       key: 'vision',
+      job: 'reading images',
       title: 'Sees images',
       blurb: 'Reads screenshots and documents you attach.',
-      pick: pickFor(f => getModality(f).in.includes('vision')),
+      pick: pickFor(f => getModality(f).in.includes('vision'), 'vision'),
     },
     {
       key: 'medical',
+      job: medicalIsSpecialist ? 'health questions' : '',
       title: 'Health questions',
       blurb: medicalIsSpecialist
         ? 'A medical specialist - and health questions always stay on your device.'
@@ -1431,7 +1396,7 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                 </span>
               )}
               {isBestPick && (
-                <span class="px-2 py-0.5 bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] text-[10px] rounded-full font-semibold whitespace-nowrap">
+                <span title={pickReason(selectedVariant, store.catalogModes, 'everyday use')} class="px-2 py-0.5 bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] text-[10px] rounded-full font-semibold whitespace-nowrap">
                   Best for you
                 </span>
               )}
@@ -1769,6 +1734,9 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
                   </p>
                   <p class="text-xs text-[var(--text-secondary)] flex-1">
                     {a.blurb} {v.size} GB.
+                    {a.job && pickReason(v, store.catalogModes, a.job) && (
+                      <span class="block mt-1 text-[var(--text-muted)]" data-testid="pick-why">{pickReason(v, store.catalogModes, a.job)}</span>
+                    )}
                   </p>
                   {store.loadingModels && (
                     <p class="flex items-center justify-center gap-2 text-xs text-[var(--text-muted)] py-1.5">

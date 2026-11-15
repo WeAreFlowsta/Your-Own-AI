@@ -488,6 +488,42 @@ mod tests {
         assert!(wrong.is_empty(), "the catalog and the agent gate disagree:\n{}", wrong.join("\n"));
     }
 
+    /// `scripts/catalog-grades.json` is this file's grade for every catalog
+    /// file, for the build's check of who is recommended what
+    /// (`scripts/check-model-picks.mjs`). It is written from here, never by
+    /// hand: `UPDATE_CATALOG_GRADES=1 cargo test --lib catalog_grades_file`.
+    #[test]
+    fn catalog_grades_file_is_current() {
+        let catalog = include_str!("../../src/data/recommended-models.ts");
+        let mut rows = std::collections::BTreeMap::new();
+        let mut size_gb = 0.0;
+        for l in catalog.lines() {
+            let l = l.trim_start();
+            if let Some(rest) = l.strip_prefix("size: ") {
+                size_gb = rest.trim_end_matches(',').trim().parse().unwrap_or(size_gb);
+            }
+            // The .gguf a variant downloads (not its other packagings).
+            let Some(rest) = l.strip_prefix("filename: '") else { continue };
+            let file = rest.split('\'').next().unwrap_or("").to_string();
+            if !file.ends_with(".gguf") {
+                continue;
+            }
+            let g = catalog_grades(&file, size_gb);
+            rows.insert(file, serde_json::json!({
+                "overall": g.overall, "coding": g.coding, "reasoning": g.reasoning, "math": g.math,
+                "vision": g.vision, "medical": g.medical, "agent": g.agent, "known": g.known,
+            }));
+        }
+        assert!(rows.len() > 20, "the catalog's shape changed");
+        let want = serde_json::to_string_pretty(&rows).unwrap() + "\n";
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/catalog-grades.json");
+        if std::env::var_os("UPDATE_CATALOG_GRADES").is_some() {
+            std::fs::write(&path, &want).unwrap();
+        }
+        let have = std::fs::read_to_string(&path).unwrap_or_default().replace("\r\n", "\n");
+        assert!(have == want, "scripts/catalog-grades.json is out of date: run UPDATE_CATALOG_GRADES=1 cargo test --lib catalog_grades_file");
+    }
+
     #[test]
     fn by_task_prefers_a_coder_for_code() {
         let coder = caps_for("qwen2.5-coder-7b-instruct-q4_k_m.gguf");
@@ -606,6 +642,55 @@ pub struct CapsRow {
     pub agent: u8,
     /// True when the family is in the registry (else middling defaults).
     pub known: bool,
+}
+
+/// Bits per weight a catalog file's name says it was packed at; the usual
+/// 4-bit packing when the name does not say.
+fn catalog_bpw(file: &str) -> f64 {
+    let n = file.to_lowercase();
+    let has = |t: &str| n.contains(t);
+    if has("bf16") || has("f16") {
+        16.0
+    } else if has("q8_") {
+        8.5
+    } else if has("q6_") {
+        6.6
+    } else if has("q5_") {
+        5.7
+    } else if has("q3_") {
+        3.9
+    } else if has("q2_") {
+        3.0
+    } else {
+        4.9
+    }
+}
+
+/// A catalog file's parameter count in billions, from its size and packing:
+/// the figure the fit reads from a downloaded file's header, estimated for
+/// one that is not downloaded yet.
+pub fn catalog_params_b(file: &str, size_gb: f64) -> f64 {
+    size_gb * 8.0 / catalog_bpw(file)
+}
+
+/// The grades a recommendation ranks a catalog file on: the family's
+/// grades, bounded by what a model of that size can be
+/// (`router::size_capped`), so a small model never carries its large
+/// sibling's grade. The agent grade is left as it is: the agent probe sets it.
+pub fn catalog_grades(file: &str, size_gb: f64) -> CapsRow {
+    let (c, b) = (caps_for(file), catalog_params_b(file, size_gb));
+    let cap = |g: u8| crate::router::size_capped(g, b);
+    CapsRow {
+        name: file.to_string(),
+        overall: cap(c.overall),
+        coding: cap(c.coding),
+        reasoning: cap(c.reasoning),
+        math: cap(c.math),
+        vision: cap(c.vision),
+        medical: cap(c.medical),
+        agent: agent_caps(file),
+        known: known_caps(file).is_some(),
+    }
 }
 
 #[tauri::command]

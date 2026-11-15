@@ -704,6 +704,9 @@ pub struct CatalogGrade {
     /// Where it would run: "gpu" | "moe-split" | "cpu" | "too-big".
     pub mode: String,
     pub fit: Fit,
+    /// The app's grades for it, bounded by its size as Auto bounds them:
+    /// what every recommendation ranks on.
+    pub grades: crate::model_caps::CapsRow,
 }
 
 /// One rule for a not-yet-downloaded model, from the same figures and
@@ -740,7 +743,7 @@ pub fn grade_catalog_variant(v: &CatalogVariantIn, f: &MachineFigures, unified: 
             }
         }
     };
-    CatalogGrade { key: v.key.clone(), mode: mode.to_string(), fit }
+    CatalogGrade { key: v.key.clone(), mode: mode.to_string(), fit, grades: crate::model_caps::catalog_grades(&v.key, v.size_gb) }
 }
 
 /// Apple Silicon runs models in unified memory through Metal: no discrete

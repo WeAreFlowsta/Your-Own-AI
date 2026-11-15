@@ -19,6 +19,7 @@ const CHECKS = [
   "check-unsaved-settings.mjs",
   "check-tools-gate.mjs",
   "check-action-labels.mjs",
+  "check-model-picks.mjs",
 ];
 // Every check script must be listed here or named as skipped.
 // check-no-e2e-feature reads Cargo.toml and the workflows, not source with line endings to normalise.
