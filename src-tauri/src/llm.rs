@@ -5806,21 +5806,53 @@ pub async fn is_model_downloaded(
     filename: String,
 ) -> Result<bool, String> {
     let models_dir = get_models_dir(&app_handle)?;
-    let file_path = models_dir.join(&filename);
-    // A damaged file (incomplete or corrupted) is not a downloaded model -
-    // the download surfaces offer to fetch it again. A sharded model is
-    // downloaded only when every shard is present and sound.
-    if !file_path.exists() || crate::gguf::damage(&file_path).is_some() {
-        return Ok(false);
+    Ok(file_is_downloaded(&models_dir.join(&filename)))
+}
+
+/// Whether a catalog file is here and whole. A damaged model file
+/// (incomplete or corrupted) is not a downloaded model - the download
+/// surfaces offer to fetch it again - and a sharded model is downloaded
+/// only when every shard is present and sound. A component's file that is
+/// not a model at all (the scanned-document readers' `.rten` files) is
+/// downloaded when it is here: read as a model it would always be
+/// "damaged", and its card never said Installed.
+fn file_is_downloaded(file_path: &std::path::Path) -> bool {
+    if !file_path.exists() {
+        return false;
     }
-    if let Ok(m) = crate::gguf::read_meta(&file_path) {
+    let is_model = file_path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gguf"));
+    if !is_model {
+        return true;
+    }
+    if crate::gguf::damage(file_path).is_some() {
+        return false;
+    }
+    if let Ok(m) = crate::gguf::read_meta(file_path) {
         if m.split_count > 1 {
-            return Ok(crate::gguf::shard_paths(&file_path, m.split_count)
+            return crate::gguf::shard_paths(file_path, m.split_count)
                 .iter()
-                .all(|p| p.exists() && crate::gguf::damage(p).is_none()));
+                .all(|p| p.exists() && crate::gguf::damage(p).is_none());
         }
     }
-    Ok(true)
+    true
+}
+
+#[cfg(test)]
+mod downloaded_tests {
+    #[test]
+    fn a_component_file_that_is_not_a_model_is_downloaded_when_it_is_here() {
+        let dir = std::env::temp_dir().join(format!("yoai-downloaded-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reader = dir.join("text-detection.rten");
+        assert!(!super::file_is_downloaded(&reader));
+        std::fs::write(&reader, b"RTEN not a model file").unwrap();
+        assert!(super::file_is_downloaded(&reader));
+        // A model file with the same bytes is damaged, so not downloaded.
+        let model = dir.join("broken.gguf");
+        std::fs::write(&model, b"RTEN not a model file").unwrap();
+        assert!(!super::file_is_downloaded(&model));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /**
