@@ -1979,6 +1979,15 @@ export function isMoeVariant(variant: ModelVariant): boolean {
 
 /** Human-readable context window, e.g. 262144 → "256K", 1048576 → "1M". */
 export function formatContext(tokens: number): string {
+  // A round number of thousands, as online providers state theirs (128,000;
+  // 500,000; 1,000,000), reads in thousands, so it matches their page. A
+  // downloaded model's context is a power of two and reads in units of 1,024.
+  if (tokens % 1000 === 0 || tokens % 1024 !== 0) {
+    const trim = (n: number) => String(Number(n.toFixed(2)));
+    if (tokens >= 1_000_000) return `${trim(tokens / 1_000_000)}M`;
+    if (tokens >= 1_000) return `${trim(tokens / 1_000)}K`;
+    return String(tokens);
+  }
   if (tokens >= 1_048_576) {
     const m = tokens / 1_048_576;
     return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
