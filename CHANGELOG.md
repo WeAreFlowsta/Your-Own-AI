@@ -40,6 +40,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it. A photo of anything else stays a picture.
 - **Up to four images on one message.** Two or more images on one
   message no longer stop the engine.
+- The built-in scanned-PDF reader's card says Installed once it is, and
+  it is listed in Settings, where it can be removed. It kept offering
+  Download before.
 
 ### Online models
 - Each online model says who serves it and where that company is based,
