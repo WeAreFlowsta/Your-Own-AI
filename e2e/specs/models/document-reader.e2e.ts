@@ -107,4 +107,24 @@ describe("the document reader", () => {
     expect(r.status).toBe(200);
     expect(text.replace(/\s+/g, " ")).toContain("GL5 2HT");
   });
+
+  it("reads a document sent to the local endpoint's read route, and never takes a path", async function () {
+    this.timeout(900_000);
+    const port = await invoke<number>("inference_port");
+    const read = async (body: unknown) => {
+      const r = await fetch(`http://127.0.0.1:${port}/v1/documents/read`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer local" }, body: JSON.stringify(body) });
+      return { status: r.status, json: (await r.json().catch(() => null)) as any };
+    };
+    const letter = await read({ data: readFileSync(resolve(FIX, "1-letter.pdf")).toString("base64") });
+    console.log(`e2e: the read route answered ${letter.status}: ${JSON.stringify(letter.json).slice(0, 200)}`);
+    expect(letter.status).toBe(200);
+    expect(letter.json.pages).toBe(1);
+    expect(letter.json.reader).toBe("document-reader");
+    expect(String(letter.json.text)).toContain("186.50");
+    // A path is not a document: the route opens nothing of the person's.
+    const path = await read({ data: resolve(FIX, "1-letter.pdf") });
+    expect(path.status).toBe(400);
+    const nothing = await read({ path: resolve(FIX, "1-letter.pdf") });
+    expect(nothing.status).toBe(400);
+  });
 });
