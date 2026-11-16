@@ -432,6 +432,12 @@ pub fn device_root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path().app_data_dir().map_err(|e| format!("no app data dir: {}", e))
 }
 
+/// This profile's root when it has been chosen (no app handle needed):
+/// `None` before the profile opens, and on the legacy single root.
+pub fn root_if_open() -> Option<PathBuf> {
+    ROOT.get().cloned()
+}
+
 /// This profile's root - where every identity-scoped file lives.
 pub fn root(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     match ROOT.get() {

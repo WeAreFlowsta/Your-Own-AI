@@ -201,6 +201,57 @@ pub struct FlowstaSession {
 /// One shared client so repeated Vault/proxy calls reuse connections
 /// instead of opening (and leaking into TIME_WAIT) a fresh socket each
 /// time — the churn that helped wedge Vault's IPC accept loop.
+/// The link token the Vault handed this install when it linked: proof, on
+/// every later request, that the request is from the app that holds the
+/// link. Kept in the profile's own folder (a link belongs to one identity,
+/// as a profile does) and read from there, so no call can be made before
+/// "loading" it. Never logged.
+const LINK_TOKEN_FILE: &str = "vault-link-token";
+static LINK_TOKEN: std::sync::Mutex<Option<(std::path::PathBuf, Option<String>)>> = std::sync::Mutex::new(None);
+
+fn link_token_path() -> Option<std::path::PathBuf> {
+    crate::profile::root_if_open().map(|r| r.join(LINK_TOKEN_FILE))
+}
+
+/// This profile's link token, if the Vault has handed it one.
+pub(crate) fn link_token() -> Option<String> {
+    let path = link_token_path()?;
+    let mut cache = LINK_TOKEN.lock().ok()?;
+    if let Some((at, token)) = cache.as_ref() {
+        if *at == path {
+            return token.clone();
+        }
+    }
+    let token = std::fs::read_to_string(&path).ok().map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    *cache = Some((path, token.clone()));
+    token
+}
+
+/// Keep (or, with `None`, forget) this profile's link token.
+pub(crate) fn set_link_token(token: Option<&str>) {
+    let Some(path) = link_token_path() else { return };
+    match token.filter(|t| !t.is_empty()) {
+        Some(t) => {
+            let tmp = path.with_extension("tmp");
+            let wrote = std::fs::write(&tmp, t).and_then(|_| std::fs::rename(&tmp, &path));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            if let Err(e) = wrote {
+                log::warn!("[flowsta] the link token was not saved: {e}");
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+    if let Ok(mut cache) = LINK_TOKEN.lock() {
+        *cache = Some((path, token.filter(|t| !t.is_empty()).map(String::from)));
+    }
+}
+
 /// A Vault request body that names this profile's identity
 /// (`expected_identity`): a Vault holding another identity refuses with 409
 /// `identity_mismatch` instead of acting as it - closing the moment between
@@ -210,9 +261,21 @@ pub(crate) fn with_identity(body: serde_json::Value) -> serde_json::Value {
     add_identity(body, crate::profile::expected_identity())
 }
 
-fn add_identity(mut body: serde_json::Value, key: Option<String>) -> serde_json::Value {
-    if let (Some(key), Some(obj)) = (key, body.as_object_mut()) {
-        obj.entry("expected_identity").or_insert(serde_json::Value::String(key));
+fn add_identity(body: serde_json::Value, key: Option<String>) -> serde_json::Value {
+    add_identity_and_link(body, key, link_token())
+}
+
+/// The identity this profile expects, and which app is asking: its client
+/// id and, once the Vault has handed one over, its link token.
+fn add_identity_and_link(mut body: serde_json::Value, key: Option<String>, token: Option<String>) -> serde_json::Value {
+    if let Some(obj) = body.as_object_mut() {
+        if let Some(key) = key {
+            obj.entry("expected_identity").or_insert(serde_json::Value::String(key));
+        }
+        obj.entry("client_id").or_insert(serde_json::Value::String(YOAI_HOLOCHAIN_CLIENT_ID.to_string()));
+        if let Some(token) = token {
+            obj.entry("link_token").or_insert(serde_json::Value::String(token));
+        }
     }
     body
 }
@@ -224,18 +287,39 @@ pub(crate) fn identity_query(url: String) -> String {
 }
 
 fn query_with_identity(url: String, key: Option<String>) -> String {
-    match key {
-        Some(key) => {
-            let enc = percent_encoding::utf8_percent_encode(&key, percent_encoding::NON_ALPHANUMERIC);
-            format!("{url}{}expected_identity={enc}", if url.contains('?') { '&' } else { '?' })
-        }
-        None => url,
+    query_with_identity_and_link(url, key, link_token())
+}
+
+fn query_with_identity_and_link(mut url: String, key: Option<String>, token: Option<String>) -> String {
+    let mut add = |name: &str, value: &str| {
+        let enc = percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC);
+        url = format!("{url}{}{name}={enc}", if url.contains('?') { '&' } else { '?' });
+    };
+    if let Some(key) = key {
+        add("expected_identity", &key);
     }
+    if let Some(token) = token {
+        add("link_token", &token);
+    }
+    url
+}
+
+/// A Vault GET URL that says which app is asking (its link token), without
+/// naming an identity: for `/status`, which answers whatever identity the
+/// Vault holds.
+pub(crate) fn linked_query(url: String) -> String {
+    query_with_identity_and_link(url, None, link_token())
 }
 
 #[cfg(test)]
 mod identity_naming_tests {
-    use super::{add_identity, query_with_identity};
+    use super::{add_identity_and_link, query_with_identity_and_link};
+    fn add_identity(body: serde_json::Value, key: Option<String>) -> serde_json::Value {
+        add_identity_and_link(body, key, None)
+    }
+    fn query_with_identity(url: String, key: Option<String>) -> String {
+        query_with_identity_and_link(url, key, None)
+    }
     const KEY: &str = "uhCAkTestIdentityKeyForTheNamingTestsOnly000000000000";
 
     #[test]
@@ -247,6 +331,19 @@ mod identity_naming_tests {
         assert!(none.get("expected_identity").is_none(), "a first link names none");
         let kept = add_identity(serde_json::json!({ "expected_identity": "other" }), Some(KEY.into()));
         assert_eq!(kept["expected_identity"], "other", "a body that names one keeps it");
+    }
+
+    #[test]
+    fn a_request_says_which_app_it_is_from_and_carries_its_link_token_once_it_has_one() {
+        let b = add_identity_and_link(serde_json::json!({ "label": "ais" }), Some(KEY.into()), Some("tok".into()));
+        assert_eq!((b["client_id"].as_str(), b["link_token"].as_str()), (Some(super::YOAI_HOLOCHAIN_CLIENT_ID), Some("tok")));
+        let before = add_identity_and_link(serde_json::json!({ "label": "ais" }), None, None);
+        assert!(before.get("link_token").is_none() && before["client_id"] == super::YOAI_HOLOCHAIN_CLIENT_ID);
+        let named = add_identity_and_link(serde_json::json!({ "client_id": "its-own" }), None, Some("tok".into()));
+        assert_eq!(named["client_id"], "its-own", "a body that names a client keeps it");
+        let u = query_with_identity_and_link("http://127.0.0.1:27777/devices".into(), Some(KEY.into()), Some("a+b".into()));
+        assert!(u.contains("expected_identity=uhCAk") && u.ends_with("&link_token=a%2Bb"), "{u}");
+        assert_eq!(query_with_identity_and_link("http://127.0.0.1:27777/status".into(), None, Some("t".into())), "http://127.0.0.1:27777/status?link_token=t");
     }
 
     #[test]
@@ -597,6 +694,9 @@ async fn ensure_linked(
             "app_name": "Your Own AI",
             "client_id": YOAI_HOLOCHAIN_CLIENT_ID,
             "app_agent_pub_key": link_key,
+            // A Vault that hands out link tokens then answers this link
+            // only to requests that carry ours; an older Vault ignores it.
+            "require_link_token": true,
         })))
         .send()
         .await
@@ -607,6 +707,9 @@ async fn ensure_linked(
     if !resp["success"].as_bool().unwrap_or(false) {
         return Err(resp["error"].as_str().unwrap_or("link_denied").to_string());
     }
+    // The new link's token replaces any older one; a Vault that sent none
+    // (an older Vault) leaves this profile with none.
+    set_link_token(resp["link_token"].as_str());
     store.set("link_done", serde_json::json!(true));
     store.save().map_err(|e| e.to_string())?;
     // What syncs with the other devices, in the activity tray.
@@ -621,11 +724,16 @@ async fn fetch_vault_profile(
     port: u16,
 ) {
     if let Ok(resp) = client
-        .get(format!("http://127.0.0.1:{}/status", port))
+        .get(linked_query(format!("http://127.0.0.1:{}/status", port)))
         .header("Origin", VAULT_ORIGIN)
         .send()
         .await
     {
+        // A refusal (a token the Vault no longer knows) is no profile:
+        // what is stored stays as it is.
+        if !resp.status().is_success() {
+            return;
+        }
         if let Ok(v) = resp.json::<serde_json::Value>().await {
             if let Ok(store) = app.store(crate::profile::store_path(&app, AUTH_STORE)) {
                 store.set("display_name", v["display_name"].clone());
