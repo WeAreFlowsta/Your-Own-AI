@@ -182,6 +182,15 @@ async fn lan_guard(
     next: axum::middleware::Next,
 ) -> Response {
     if peer.ip().is_loopback() {
+        // Being on the machine is the credential here, so the request must
+        // really be addressed to this machine by a program on it.
+        let allowed = {
+            let header = |name: axum::http::HeaderName| req.headers().get(name).and_then(|v| v.to_str().ok());
+            addressed_to_this_computer(header(axum::http::header::HOST), header(axum::http::header::ORIGIN))
+        };
+        if !allowed {
+            return err(StatusCode::FORBIDDEN, "This endpoint answers programs on this computer, at 127.0.0.1 or localhost.", "not_addressed_here");
+        }
         return next.run(req).await;
     }
     let cfg = lan_config(&app);
@@ -203,6 +212,76 @@ async fn lan_guard(
         );
     }
     next.run(req).await
+}
+
+/// The host part of a `Host` header or of an origin's authority, without
+/// its port: `127.0.0.1:11435` -> `127.0.0.1`, `[::1]:11435` -> `[::1]`.
+fn host_only(authority: &str) -> &str {
+    let a = authority.trim();
+    if a.starts_with('[') {
+        return a.split_inclusive(']').next().unwrap_or(a);
+    }
+    a.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map(|(h, _)| h).unwrap_or(a)
+}
+
+fn names_this_computer(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    h == "localhost" || h == "[::1]" || h == "::1" || h.parse::<std::net::Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
+}
+
+/// A keyless request from this machine is answered only when it names this
+/// machine: its `Host` is a loopback name or address, and if a browser sent
+/// it (an `Origin` header), the page it came from is one served from this
+/// machine too (or the app's own window). A program on the computer passes
+/// as it always did; a page on the web cannot reach the endpoint under a
+/// name of its own.
+fn addressed_to_this_computer(host: Option<&str>, origin: Option<&str>) -> bool {
+    // HTTP/1.0 clients send no Host; HTTP/2 carries it elsewhere. Absent is a program, not a browser.
+    if let Some(h) = host {
+        if !names_this_computer(host_only(h)) {
+            return false;
+        }
+    }
+    match origin.map(str::trim) {
+        None | Some("") => true,
+        Some("null") => false,
+        Some(o) => match o.split_once("://") {
+            Some(("http" | "https", authority)) => names_this_computer(host_only(authority)),
+            // The app's own window and other local program schemes.
+            Some(("tauri", authority)) => names_this_computer(host_only(authority)),
+            _ => false,
+        },
+    }
+}
+
+#[cfg(test)]
+mod addressed_here_tests {
+    use super::addressed_to_this_computer as ok;
+
+    #[test]
+    fn a_program_on_this_computer_is_answered_and_a_page_on_the_web_is_not() {
+        // Programs: curl, an SDK, an editor.
+        assert!(ok(Some("127.0.0.1:11435"), None));
+        assert!(ok(Some("localhost:11435"), None));
+        assert!(ok(Some("LOCALHOST"), None));
+        assert!(ok(Some("[::1]:11435"), None));
+        assert!(ok(None, None));
+        // A web interface the person runs on this computer, and the app's own window.
+        assert!(ok(Some("127.0.0.1:11435"), Some("http://localhost:3000")));
+        assert!(ok(Some("localhost:11435"), Some("http://127.0.0.1:8080")));
+        assert!(ok(Some("127.0.0.1:11435"), Some("tauri://localhost")));
+        // A page that reached this port under a name of its own.
+        assert!(!ok(Some("example.org:11435"), None));
+        assert!(!ok(Some("example.org:11435"), Some("http://example.org:11435")));
+        assert!(!ok(Some("127.0.0.1.example.org:11435"), None));
+        assert!(!ok(Some("localhost.example.org"), None));
+        // A page elsewhere asking this address.
+        assert!(!ok(Some("127.0.0.1:11435"), Some("https://example.org")));
+        assert!(!ok(Some("127.0.0.1:11435"), Some("null")));
+        assert!(!ok(Some("127.0.0.1:11435"), Some("file://")));
+        // This computer's address on the network is not the keyless door.
+        assert!(!ok(Some("192.168.1.20:11435"), None));
+    }
 }
 
 /// Spawn the inference server in a background task. At app startup the
