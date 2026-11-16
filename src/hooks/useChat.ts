@@ -427,9 +427,22 @@ export function useChat(props: UseChatProps) {
       images: string[] = [],
       modelOverride?: string,
       consentGranted: boolean = false,
-      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string } },
+      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string }; readAsText?: string[] },
     ) => {
       if (!userInput.trim() || state.isLoading) return;
+      // Pictures the document reader already read into text (`readAsText`:
+      // their text rides in fileContext). When every picture of the turn is
+      // one of those and the loaded model cannot see pictures right now,
+      // the text is enough: the turn goes on without the pictures, and
+      // without a vision offer for a letter that has already been read.
+      if (images.length > 0 && options?.readAsText?.length && images.every((i) => options.readAsText!.includes(i))) {
+        let sees = false;
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          sees = await invoke<boolean>("is_vision_ready");
+        } catch { /* not seeing is the safe reading */ }
+        if (!sees) images = [];
+      }
       // Attached document names for the bubble's file chips - parsed from
       // the context's own "--- <name> ---" headers so the call signature
       // stays put. The text itself never enters the bubble.

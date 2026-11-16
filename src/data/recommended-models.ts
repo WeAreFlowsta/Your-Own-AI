@@ -489,7 +489,7 @@ export const DOCUMENT_READER: CapabilityModel = {
   name: 'Document reader',
   role: 'ocr',
   description:
-    'Reads photos of documents, tables and forms far more accurately than the built-in reader, which can misread figures and pull table columns apart. Slower: a page takes from 20 seconds to over a minute. When installed it reads scanned PDFs; the built-in reader stays as the fallback. Runs entirely on your device.',
+    'Reads photos of documents, tables and forms far more accurately than the built-in reader, which can misread figures and pull table columns apart. Slower: a page takes from 20 seconds to over a minute. When installed it reads scanned PDFs and any picture you attach that is mostly text; the built-in reader stays as the fallback. Runs entirely on your device.',
   filename: 'MiniCPM-OCR-1_0-Q4_K_M.gguf',
   downloadUrl: 'https://huggingface.co/openbmb/MiniCPM-OCR-1.0-gguf/resolve/0133ad8db635210441a55dcf421e25bfb9915142/MiniCPM-OCR-1_0-Q4_K_M.gguf',
   size: 1.4, // 0.53 GB model + 0.90 GB vision file
@@ -501,6 +501,13 @@ export const DOCUMENT_READER: CapabilityModel = {
     {
       filename: 'MiniCPM-OCR-1_0-mmproj-f16.gguf',
       downloadUrl: 'https://huggingface.co/openbmb/MiniCPM-OCR-1.0-gguf/resolve/0133ad8db635210441a55dcf421e25bfb9915142/mmproj-model-f16-4x.gguf',
+    },
+    {
+      // The quick check that tells a picture of a document from an ordinary
+      // photo (the built-in reader's text detection, 2.5 MB), under this
+      // component's own name so removing either reader leaves the other whole.
+      filename: 'document-check.rten',
+      downloadUrl: 'https://ocrs-models.s3-accelerate.amazonaws.com/text-detection.rten',
     },
   ],
 };

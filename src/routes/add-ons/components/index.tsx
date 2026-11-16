@@ -119,7 +119,7 @@ export default component$(() => {
               <ComponentCard key={projector.id} model={projector} icon="eye" activeLabel="Installed - this model can now see images you attach." />
             ))}
             <ComponentCard model={OCR_MODELS} icon="scan" activeLabel="Installed - scanned PDFs are read on your device." />
-            <ComponentCard model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs are read with it, on your device." />
+            <ComponentCard model={DOCUMENT_READER} icon="scan" activeLabel="Installed - scanned PDFs and pictures of documents are read with it, on your device." />
           </div>
 
           <h2 class="mt-8 text-lg font-semibold text-[var(--text-primary)]">Programs tools need</h2>

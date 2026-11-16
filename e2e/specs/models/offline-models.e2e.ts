@@ -82,6 +82,20 @@ describe("offline models", () => {
     console.log(`e2e: fine-tune model: ${model}`);
   });
 
+  it("says which model is best for this computer for each job, and why", async () => {
+    // The panel's picks come from one order (where a model runs, then the
+    // app's own grade for the job): each card names a model and carries
+    // the one line that says why it was picked.
+    const read = () => browser.execute(() =>
+      [...document.querySelectorAll('[data-testid="pick-why"]')].map((e) => (e.textContent ?? "").replace(/\s+/g, " ").trim()));
+    // The catalog is graded a moment after the page is up.
+    await browser.waitUntil(async () => (await read()).length > 0, { timeout: 60_000, interval: 2_000, timeoutMsg: "the Best for this computer panel never showed a pick with its reason" });
+    const picks = await read();
+    console.log(`e2e: best for this computer: ${JSON.stringify(picks)}`);
+    expect(picks.length).toBeGreaterThan(0);
+    for (const why of picks) expect(why).toMatch(/^Our highest-graded model for .+, of those that (run on your graphics card|run well on this computer|fit this computer)\.$/);
+  });
+
   it("filters the catalog by task", async () => {
     const tabs = await $$('[data-testid="catalog-tab"]');
     expect(tabs.length).toBeGreaterThan(1);

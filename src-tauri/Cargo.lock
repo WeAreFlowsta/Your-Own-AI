@@ -221,6 +221,7 @@ dependencies = [
  "hex",
  "holochain_client 0.8.1",
  "holochain_types 0.6.1",
+ "image",
  "lair_keystore_api 0.6.3",
  "libc",
  "log",

@@ -18,6 +18,21 @@ use std::time::{Duration, Instant};
 /// `mmproj-model-f16-4x.gguf`).
 pub const MODEL_FILE: &str = "MiniCPM-OCR-1_0-Q4_K_M.gguf";
 pub const VISION_FILE: &str = "MiniCPM-OCR-1_0-mmproj-f16.gguf";
+/// The quick check's model: the built-in reader's text detection, kept as
+/// this component's own file so removing either component leaves the other
+/// whole.
+pub const CHECK_FILE: &str = "document-check.rten";
+/// A picture with at least this many words found in it is a document.
+/// Measured 2026-11-16: nine documents and screenshots had 62 words or
+/// more, ten ordinary pictures 18 or fewer, a picture with a caption 12.
+pub const DOCUMENT_WORDS: usize = 40;
+/// The longest side a picture is read at.
+pub const PICTURE_MAX_SIDE: u32 = 1800;
+
+pub fn is_document(words_found: usize) -> bool {
+    words_found >= DOCUMENT_WORDS
+}
+
 /// The model's own instruction for plain reading (its SDK's default).
 const READ_PROMPT: &str = "Text Recognition:";
 /// Width a PDF page is drawn at for the reader: A4 at 150 dpi, the size
@@ -53,9 +68,15 @@ impl Drop for KillOnDrop {
     }
 }
 
-/// The reader, running for one job. Dropping it stops the engine.
+/// One reading job at a time: the reader has one port, and two engines
+/// side by side would halve each other's speed. A second job waits.
+static ONE_JOB: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// The reader, running for one job. Dropping it stops the engine and lets
+/// the next job start.
 pub struct Reader {
     _engine: KillOnDrop,
+    _job: tokio::sync::SemaphorePermit<'static>,
     port: u16,
     pub card: bool,
 }
@@ -67,16 +88,18 @@ impl Reader {
         if !present(models_dir) {
             return Err("The document reader is not installed".into());
         }
-        match Self::start_at(bin, models_dir, card).await {
+        let job = ONE_JOB.acquire().await.map_err(|_| "The document reader is closing".to_string())?;
+        let engine = match Self::start_at(bin, models_dir, card).await {
             Err(e) if card => {
                 log::warn!("[reader] did not start on the card ({e}); on the processor instead");
-                Self::start_at(bin, models_dir, false).await
+                (Self::start_at(bin, models_dir, false).await?, false)
             }
-            r => r,
-        }
+            r => (r?, card),
+        };
+        Ok(Reader { _engine: engine.0 .0, _job: job, port: engine.0 .1, card: engine.1 })
     }
 
-    async fn start_at(bin: &Path, models_dir: &Path, card: bool) -> Result<Reader, String> {
+    async fn start_at(bin: &Path, models_dir: &Path, card: bool) -> Result<(KillOnDrop, u16), String> {
         let port = crate::ports::reader();
         let mut args: Vec<String> = [
             "--model", MODEL_FILE, "--mmproj", VISION_FILE,
@@ -84,6 +107,8 @@ impl Reader {
             "--ctx-size", "8192", "--parallel", "1",
         ].iter().map(|s| s.to_string()).collect();
         args.extend(["--port".to_string(), port.to_string()]);
+        // The engine answers only this app, as the chat engine does.
+        args.extend(["--api-key".to_string(), crate::llm::local_api_key().to_string()]);
         if card {
             args.extend(["-ngl".to_string(), "99".to_string()]);
         } else {
@@ -106,7 +131,7 @@ impl Reader {
             if let Ok(r) = client.get(format!("http://127.0.0.1:{port}/health")).send().await {
                 if r.status().is_success() {
                     log::info!("[reader] ready on the {}", if card { "card" } else { "processor" });
-                    return Ok(Reader { _engine: engine, port, card });
+                    return Ok((engine, port));
                 }
             }
             if Instant::now() >= deadline {
@@ -128,6 +153,7 @@ impl Reader {
         });
         let v: serde_json::Value = crate::llm::local_http()
             .post(format!("http://127.0.0.1:{}/v1/chat/completions", self.port))
+            .bearer_auth(crate::llm::local_api_key())
             .json(&body)
             .timeout(PAGE_TIMEOUT)
             .send()
@@ -246,6 +272,7 @@ mod tests {
         assert!(on_card(Some(4.0)));
         assert!(!on_card(Some(1.1)));
         assert!(!on_card(None));
+        assert!(is_document(62) && !is_document(18));
         assert!(is_reader_file("MiniCPM-OCR-1_0-Q4_K_M.gguf") && !is_reader_file("gemma-4-E2B-it-Q4_K_M.gguf"));
     }
 
