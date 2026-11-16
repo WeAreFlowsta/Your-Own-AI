@@ -1338,6 +1338,20 @@ pub struct OnlineRouting {
     pub tools: Option<u8>,
     /// everyday | flagship | search
     pub tier: Option<String>,
+    /// What the model did on our own checkable questions, when it was asked.
+    pub measured: Option<OnlineMeasured>,
+}
+
+/// A model's result on our own set of questions with one checkable answer
+/// (the catalog's `routing.measured`): how many it got right, and what the
+/// whole set cost and how long it took at this model's price and speed
+/// (thinking included, which the list price per token does not show).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct OnlineMeasured {
+    pub right: u16,
+    pub of: u16,
+    pub cost_usd: Option<f64>,
+    pub seconds: Option<u32>,
 }
 
 #[derive(Serialize, Clone)]
@@ -1492,6 +1506,15 @@ async fn fetch_online_models() -> Result<Catalog, String> {
                             caps,
                             tools: r.get("tools").and_then(|x| x.as_u64()).map(|x| x.min(9) as u8),
                             tier: r.get("tier").and_then(|x| x.as_str()).map(str::to_string),
+                            measured: r.get("measured").and_then(|x| x.as_object()).and_then(|x| {
+                                let (right, of) = (x.get("right")?.as_u64()?, x.get("of")?.as_u64()?);
+                                (of > 0 && right <= of && of <= u16::MAX as u64).then(|| OnlineMeasured {
+                                    right: right as u16,
+                                    of: of as u16,
+                                    cost_usd: x.get("cost_usd").and_then(|c| c.as_f64()).filter(|c| *c >= 0.0),
+                                    seconds: x.get("seconds").and_then(|c| c.as_u64()).map(|c| c.min(u32::MAX as u64) as u32),
+                                })
+                            }),
                         }
                     }),
                     pricing: m["pricing"].as_object().map(|p| OnlinePricing {

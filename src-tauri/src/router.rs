@@ -1389,10 +1389,28 @@ fn select_online(
     if let Some(hit) = by_id(slot_default) {
         return Some(hit);
     }
-    models
-        .iter()
-        .max_by_key(|m| crate::model_caps::online_caps_of(m).by_task(task))
-        .map(|m| m.id.clone())
+    models.iter().max_by_key(|m| online_rank(m, task)).map(|m| m.id.clone())
+}
+
+/// How many of our own questions a model may miss before its grade for a job
+/// counts one lower. The best models miss none to two of 36.
+const MEASURED_MISSES_ALLOWED: u16 = 2;
+
+/// The order of online models for a job when no slot names one (the slot's
+/// model is not among those the person lets automatic routing use): the
+/// grade for the job, one lower when the model clearly missed on our own
+/// questions; then the share it got right (a model never asked comes after
+/// one that was); then the cheaper to have answered them.
+fn online_rank(m: &crate::flowsta::OnlineModel, task: &str) -> (u8, u32, i64) {
+    let grade = crate::model_caps::online_caps_of(m).by_task(task);
+    match m.routing.as_ref().and_then(|r| r.measured.as_ref()) {
+        Some(d) => (
+            if d.right + MEASURED_MISSES_ALLOWED < d.of { grade.saturating_sub(1) } else { grade },
+            1 + d.right as u32 * 1000 / d.of as u32,
+            d.cost_usd.map_or(i64::MIN, |c| -((c * 1_000_000.0) as i64)),
+        ),
+        None => (grade, 0, i64::MIN),
+    }
 }
 
 /// Online model for an agent session: the user's slot pick -> the default
@@ -1790,12 +1808,19 @@ fn select_online_everyday(
     let cost = |m: &crate::flowsta::OnlineModel| {
         m.pricing.as_ref().map(|p| p.input_per_mtok + p.output_per_mtok)
     };
+    // What our own questions cost on the model, thinking included: a model
+    // with a low price per token can write eight times as many.
+    let measured_cost = |m: &crate::flowsta::OnlineModel| m.routing.as_ref().and_then(|r| r.measured.as_ref()).and_then(|d| d.cost_usd);
     let cheapest = |pool: Vec<&crate::flowsta::OnlineModel>| {
+        // Measured cost when every candidate has one (the two figures are
+        // not comparable with each other), else the list price.
+        let by_measure = !pool.is_empty() && pool.iter().all(|m| measured_cost(m).is_some());
+        let of = |m: &crate::flowsta::OnlineModel| if by_measure { measured_cost(m) } else { cost(m) };
         pool.into_iter()
             .min_by(|a, b| {
-                cost(a)
+                of(a)
                     .unwrap_or(f64::MAX)
-                    .partial_cmp(&cost(b).unwrap_or(f64::MAX))
+                    .partial_cmp(&of(b).unwrap_or(f64::MAX))
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .cloned()
@@ -3266,6 +3291,54 @@ mod tests {
         assert_eq!(think_for("hard", true, true), None);
     }
 
+    /// A model with these grades and this result on our own questions.
+    fn measured_model(id: &str, overall: u8, right: u16, cost_usd: f64, list_in: f64, list_out: f64) -> crate::flowsta::OnlineModel {
+        let mut m = pm(id, id, "a chat model", list_in, list_out, None);
+        m.routing = Some(crate::flowsta::OnlineRouting {
+            caps: Some([overall, overall, overall, overall, 0, 3]),
+            measured: Some(crate::flowsta::OnlineMeasured { right, of: 36, cost_usd: Some(cost_usd), seconds: Some(100) }),
+            ..Default::default()
+        });
+        m
+    }
+
+    #[test]
+    fn with_no_slot_model_in_the_pool_our_own_questions_order_the_rest() {
+        // Equal grades: the one that got more right.
+        let a = measured_model("online:a", 8, 34, 0.05, 1.0, 4.0);
+        let b = measured_model("online:b", 8, 36, 0.09, 1.0, 4.0);
+        assert_eq!(select_online(&[a.clone(), b.clone()], "general", false, None), Some(b.id.clone()));
+        // Equal grades and score: the cheaper to have answered them.
+        let c = measured_model("online:c", 8, 36, 0.04, 3.0, 9.0);
+        assert_eq!(select_online(&[b.clone(), c.clone()], "general", false, None), Some(c.id.clone()));
+        // A higher grade that clearly missed counts one lower, and then loses to a clean lower one.
+        let claims_more = measured_model("online:claims", 9, 30, 0.02, 1.0, 4.0);
+        assert_eq!(select_online(&[claims_more.clone(), b.clone()], "general", false, None), Some(b.id.clone()));
+        // One or two misses change nothing: the grade decides.
+        let nine = measured_model("online:nine", 9, 34, 0.50, 1.0, 4.0);
+        assert_eq!(select_online(&[nine.clone(), b.clone()], "general", false, None), Some(nine.id.clone()));
+        // A model that was never asked keeps its grade, and comes after an equal one that was.
+        let mut unasked = pm("online:unasked", "unasked", "a chat model", 1.0, 4.0, None);
+        unasked.routing = Some(crate::flowsta::OnlineRouting { caps: Some([8, 8, 8, 8, 0, 3]), ..Default::default() });
+        assert_eq!(select_online(&[unasked.clone(), a.clone()], "general", false, None), Some(a.id.clone()));
+        let mut unasked_nine = unasked.clone();
+        unasked_nine.id = "online:unasked9".into();
+        unasked_nine.routing = Some(crate::flowsta::OnlineRouting { caps: Some([9, 9, 9, 9, 0, 3]), ..Default::default() });
+        assert_eq!(select_online(&[unasked_nine.clone(), b.clone()], "general", false, None), Some(unasked_nine.id.clone()));
+    }
+
+    #[test]
+    fn the_everyday_fallback_takes_the_model_that_cost_least_to_answer_our_questions() {
+        // The lower price per token wrote far more to get there.
+        let cheap_per_token = measured_model("online:flash", 7, 35, 0.117, 0.25, 1.5);
+        let dearer_per_token = measured_model("online:max", 8, 36, 0.044, 1.5, 4.5);
+        assert_eq!(select_online_everyday(&[cheap_per_token.clone(), dearer_per_token.clone()], None).map(|m| m.id), Some(dearer_per_token.id.clone()));
+        // One of them never measured: the list price decides, as before.
+        let mut unmeasured = pm("online:plain", "plain", "a chat model", 0.2, 0.8, None);
+        unmeasured.routing = Some(crate::flowsta::OnlineRouting { caps: Some([7, 7, 7, 7, 0, 3]), ..Default::default() });
+        assert_eq!(select_online_everyday(&[cheap_per_token.clone(), dearer_per_token.clone(), unmeasured.clone()], None).map(|m| m.id), Some(unmeasured.id.clone()));
+    }
+
     #[test]
     fn catalog_slot_defaults_beat_the_baked_ones() {
         let mut astra = pm("online:gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", 4.0, 20.0, None);
@@ -3274,6 +3347,7 @@ mod tests {
             caps: Some([10, 10, 10, 10, 9, 3]),
             tools: Some(9),
             tier: Some("flagship".into()),
+            measured: None,
         });
         let luna = pm("online:gpt-5.6-luna", "GPT-5.6 Luna", "fast, low-cost", 0.2, 1.2, None);
         let sol = pm("online:gpt-5.6-sol", "GPT-5.6 Sol", "flagship", 5.0, 30.0, None);

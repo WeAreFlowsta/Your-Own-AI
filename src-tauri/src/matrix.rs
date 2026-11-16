@@ -3345,6 +3345,181 @@ mod vision_leg_tests {
     }
 }
 
+// ── The harder set ─────────────────────────────────────────────────────
+// Questions with one answer that can be checked, which good models still get
+// wrong some of the time: sums in several steps, logic, counting letters,
+// reading code and a table, following an instruction to the letter. The
+// plain set above tops out (every online model scores 48 of 48 on it), so
+// this is the set that tells good models apart. One point each.
+
+/// A question with a checkable answer. `accept`: any one entry is right; an
+/// entry is one or more tokens joined by `+`, all of which must be in the
+/// answer line; an entry starting with `=` is compared with its case kept.
+/// `reject`: a token that makes the answer wrong (another choice named too).
+pub(crate) struct HardCase {
+    pub ask: &'static str,
+    pub accept: &'static [&'static str],
+    pub reject: &'static [&'static str],
+}
+
+/// Sent as the system text with each harder question.
+pub(crate) const HARD_SYSTEM: &str = "Work the problem out, then end with one line that starts with \"Answer:\" followed by the answer only.";
+
+pub(crate) const QUALITY_HARD: &[HardCase] = &[
+    HardCase { ask: "A shop sells pens at 3 for $4. I buy 21 pens and pay with a $50 note. How much change do I get, in dollars?", accept: &["22", "22.00"], reject: &[] },
+    HardCase { ask: "What is 17% of 2,350, minus 12.5% of 1,840?", accept: &["169.5", "169.50"], reject: &[] },
+    HardCase { ask: "Pipe A fills a tank in 6 hours and pipe B fills it in 9 hours. A drain empties the full tank in 18 hours. With both pipes and the drain open, how many hours does the empty tank take to fill?", accept: &["4.5", "4.50", "4 1/2", "9/2"], reject: &[] },
+    HardCase { ask: "The sum of three consecutive odd integers is 219. What is the largest of the three?", accept: &["75"], reject: &[] },
+    HardCase { ask: "How many days are there from 14 February 2027 to 3 September 2027, not counting the start date?", accept: &["201"], reject: &[] },
+    HardCase { ask: "A train 180 m long passes completely over a 420 m platform in 30 seconds. What is its speed in km/h?", accept: &["72"], reject: &[] },
+    HardCase { ask: "I invest $8,000 at 5% interest compounded once a year. What is it worth after 3 years, to the nearest dollar?", accept: &["9261"], reject: &[] },
+    HardCase { ask: "How many integers from 1 to 500 inclusive are divisible by 6 or by 15, but not by both?", accept: &["84"], reject: &[] },
+    HardCase { ask: "A recipe for 8 people uses 600 g of flour, and 1 egg for every 150 g of flour. How many eggs are needed for 20 people?", accept: &["10", "ten"], reject: &[] },
+    HardCase { ask: "The mean of five numbers is 18. Four of them are 12, 25, 9 and 21. What is the median of the five?", accept: &["21"], reject: &[] },
+    HardCase { ask: "Two fair six-sided dice are rolled. What is the probability that the sum is a prime number, as a fraction in lowest terms?", accept: &["5/12"], reject: &[] },
+    HardCase { ask: "A clock shows 3:40. What is the smaller angle between the hour hand and the minute hand, in degrees?", accept: &["130"], reject: &[] },
+    HardCase { ask: "Ana, Ben, Cy and Dee ran a race with no ties. Ben finished before Cy. Dee finished immediately after Ana. Cy was not last. Ana was not first. Who came first?", accept: &["ben"], reject: &[] },
+    HardCase { ask: "All glorps are trins. Some trins are vexes. No vex is a mub. Which one of these must be true? (A) Some glorps are vexes. (B) No glorp is a mub. (C) Some trins are not mubs. (D) All trins are glorps. Answer with the letter.", accept: &["c"], reject: &["a", "b", "d"] },
+    HardCase { ask: "Three people each make one statement. A says: \"B is lying.\" B says: \"C is lying.\" C says: \"A and B are both lying.\" Each statement is either true or false. Which of them is telling the truth? Answer with the letter or letters.", accept: &["b"], reject: &["a", "c"] },
+    HardCase { ask: "What is the next number in this sequence: 3, 4, 7, 11, 18, 29, ?", accept: &["47"], reject: &[] },
+    HardCase { ask: "A snail is at the bottom of a 10 m well. Each day it climbs 3 m, and each night it slips back 2 m. On which day does it first reach the top? Answer with the day number.", accept: &["8", "8th", "eight", "eighth"], reject: &[] },
+    HardCase { ask: "If today is Wednesday, what day of the week will it be 100 days from now?", accept: &["friday"], reject: &[] },
+    HardCase { ask: "How many times does the letter r appear in the phrase \"strawberry raspberry\"?", accept: &["6", "six"], reject: &[] },
+    HardCase { ask: "Reverse the word \"lollipop\". What is the third letter of the reversed word?", accept: &["p"], reject: &["o", "l", "i"] },
+    HardCase { ask: "Sort these numbers from largest to smallest and give the fourth one: 0.305, 0.35, 0.0359, 0.3, 0.3049, 0.35001", accept: &["0.3049", ".3049"], reject: &[] },
+    HardCase { ask: "Take the first letter of each word in \"Every Narrow Valley Echoes Loudly Over Pine Edges\". What word do they spell?", accept: &["envelope"], reject: &[] },
+    HardCase { ask: "Convert 2 hours 47 minutes 30 seconds to seconds.", accept: &["10050"], reject: &[] },
+    HardCase { ask: "In the sentence \"The quick brown fox jumps over the lazy dog near the old stone bridge\", what is the 9th word?", accept: &["dog"], reject: &[] },
+    HardCase { ask: "What does this Python program print?\n\ndef f(n):\n    total = 0\n    for i in range(1, n + 1):\n        if i % 3 == 0:\n            continue\n        if i % 7 == 0:\n            break\n        total += i\n    return total\n\nprint(f(20))", accept: &["12"], reject: &[] },
+    HardCase { ask: "What does this Python program print?\n\nx = [1, 2, 3, 4, 5, 6]\ny = x[1::2]\nz = x[::-2]\nprint(sum(y) * len(z) - z[1])", accept: &["32"], reject: &[] },
+    HardCase { ask: "What does this JavaScript program print?\n\nlet a = [3, 1, 10, 21, 5];\na.sort();\nconsole.log(a[1] + a[3]);", accept: &["13"], reject: &[] },
+    HardCase { ask: "What does this Python program print? Keep the exact upper and lower case.\n\ndef g(s):\n    out = \"\"\n    for i, ch in enumerate(s):\n        out += ch.upper() if i % 2 == 0 else ch\n    return out[::-1]\n\nprint(g(\"planet\"))", accept: &["=tEnAlP"], reject: &[] },
+    HardCase { ask: "What does this Python program print?\n\ndef add(item, bag=[]):\n    bag.append(item)\n    return len(bag)\n\nadd(\"a\")\nadd(\"b\", [])\nprint(add(\"c\"))", accept: &["2"], reject: &[] },
+    HardCase { ask: "What does this Python line print?\n\nprint(-7 // 2, -7 % 2)", accept: &["-4 1"], reject: &[] },
+    HardCase { ask: "Sales by region and quarter:\nRegion | Q1 | Q2 | Q3\nNorth | 120 | 95 | 140\nSouth | 80 | 130 | 110\nEast | 150 | 70 | 90\nWest | 60 | 160 | 100\n\nWhich region had the largest total over the three quarters, and what was that total?", accept: &["north+355"], reject: &[] },
+    HardCase { ask: "Sales by region and quarter:\nRegion | Q1 | Q2 | Q3\nNorth | 120 | 95 | 140\nSouth | 80 | 130 | 110\nEast | 150 | 70 | 90\nWest | 60 | 160 | 100\n\nIn which quarter was the combined total of all four regions highest?", accept: &["q2", "second", "quarter 2"], reject: &["q1", "q3"] },
+    HardCase { ask: "A car uses 6.4 litres of fuel per 100 km, and fuel costs $1.85 per litre. What does the fuel for a 375 km trip cost, to the nearest cent?", accept: &["44.40", "44.4"], reject: &[] },
+    HardCase { ask: "A flight leaves Sydney (UTC+11) at 21:30 on Monday and lands in Los Angeles (UTC-8) after 13 hours 45 minutes in the air. What are the local day and time in Los Angeles when it lands? Use the 24-hour clock.", accept: &["monday+16:15"], reject: &[] },
+    HardCase { ask: "What is the binary number 101101 plus the hexadecimal number 1F, written in decimal?", accept: &["76"], reject: &[] },
+    HardCase { ask: "A code is 4 characters long: first a vowel (a, e, i, o or u), then two different digits, then one of the two symbols ! or ?. How many different codes are there?", accept: &["900"], reject: &[] },
+];
+
+/// What the model gave as its answer: the text after the last "Answer:", to
+/// the end of that line, without the marks models wrap an answer in.
+pub(crate) fn hard_answer_line(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    let at = lower.rfind("answer:")?;
+    let rest = text.get(at + "answer:".len()..)?;
+    let line = rest.trim_start().lines().next().unwrap_or("");
+    let cleaned: String = line.chars().filter(|c| !matches!(c, '$' | ',' | '*' | '`' | '"' | '\\' | '(' | ')' | '[' | ']')).collect();
+    let cleaned = plain_math(&cleaned);
+    let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let cleaned = cleaned.trim_end_matches('.').trim().to_string();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// An answer written as typeset maths, as plain text: `frac{5}{12}` is 5/12,
+/// and `boxed{...}` or `text{...}` is what is inside (the backslashes are
+/// gone by now).
+fn plain_math(line: &str) -> String {
+    let mut out = line.to_string();
+    while let Some(at) = out.find("frac{") {
+        let rest = &out[at + 5..];
+        let Some(mid) = rest.find("}{") else { break };
+        let Some(end) = rest[mid + 2..].find('}') else { break };
+        let (top, bottom) = (rest[..mid].to_string(), rest[mid + 2..mid + 2 + end].to_string());
+        let tail = rest[mid + 2 + end + 1..].to_string();
+        // `dfrac` and `tfrac` are the same fraction in another size.
+        let before = &out[..at];
+        let before = before.strip_suffix('d').or_else(|| before.strip_suffix('t')).unwrap_or(before);
+        out = format!("{before}{top}/{bottom}{tail}");
+    }
+    for word in ["boxed{", "text{", "mathrm{", "textbf{"] {
+        out = out.replace(word, "{");
+    }
+    out.replace(['{', '}'], " ")
+}
+
+/// Whether `token` stands in `line` as a whole word or number (the 75 in 175
+/// and the 22 in 22.50 are not it).
+fn has_token(line: &str, token: &str) -> bool {
+    let (l, t): (Vec<char>, Vec<char>) = (line.chars().collect(), token.chars().collect());
+    if t.is_empty() || t.len() > l.len() {
+        return false;
+    }
+    (0..=l.len() - t.len()).any(|i| {
+        l[i..i + t.len()] == t[..]
+            && (i == 0 || !(l[i - 1].is_alphanumeric() || (l[i - 1] == '.' && t[0].is_ascii_digit() && i >= 2 && l[i - 2].is_ascii_digit())))
+            && match (l.get(i + t.len()), l.get(i + t.len() + 1)) {
+                (None, _) => true,
+                (Some(c), _) if c.is_alphanumeric() => false,
+                (Some('.'), Some(d)) if d.is_ascii_digit() => false,
+                (Some('/'), Some(d)) if d.is_ascii_digit() && t.iter().all(|c| c.is_ascii_digit()) => false,
+                _ => true,
+            }
+    })
+}
+
+/// One point when the answer line holds an accepted answer and no rejected one.
+pub(crate) fn score_hard(case: &HardCase, text: &str) -> bool {
+    let Some(kept) = hard_answer_line(text) else { return false };
+    let lower = kept.to_lowercase();
+    if case.reject.iter().any(|r| has_token(&lower, r)) {
+        return false;
+    }
+    case.accept.iter().any(|entry| match entry.strip_prefix('=') {
+        Some(exact) => has_token(&kept, exact),
+        None => entry.split('+').all(|tok| has_token(&lower, tok)),
+    })
+}
+
+#[cfg(test)]
+mod hard_set_tests {
+    use super::{hard_answer_line, score_hard, HardCase, QUALITY_HARD};
+
+    const CASE: HardCase = HardCase { ask: "", accept: &["22", "22.00"], reject: &[] };
+
+    #[test]
+    fn the_answer_is_read_from_the_last_answer_line() {
+        assert_eq!(hard_answer_line("Answer: 5\nNo wait.\n**Answer:** $22.").as_deref(), Some("22"));
+        assert_eq!(hard_answer_line("It is 22."), None);
+        assert!(score_hard(&CASE, "21 pens cost $28.\nAnswer: $22"));
+        assert!(score_hard(&CASE, "Answer: 22.00 dollars"));
+        assert!(!score_hard(&CASE, "Answer: 122"));
+        assert!(!score_hard(&CASE, "Answer: 22.50"));
+        assert!(!score_hard(&CASE, "The change is 22."));
+    }
+
+    #[test]
+    fn a_choice_named_beside_another_is_wrong_and_case_is_kept_where_asked() {
+        let letter = HardCase { ask: "", accept: &["b"], reject: &["a", "c"] };
+        assert!(score_hard(&letter, "Answer: B"));
+        assert!(score_hard(&letter, "Answer: Only B is telling the truth"));
+        assert!(!score_hard(&letter, "Answer: A and B"));
+        let both = HardCase { ask: "", accept: &["north+355"], reject: &[] };
+        assert!(score_hard(&both, "Answer: North, with 355"));
+        assert!(!score_hard(&both, "Answer: North"));
+        let cased = HardCase { ask: "", accept: &["=tEnAlP"], reject: &[] };
+        assert!(score_hard(&cased, "Answer: `tEnAlP`"));
+        assert!(!score_hard(&cased, "Answer: tenalp"));
+        let frac = HardCase { ask: "", accept: &["5/12"], reject: &[] };
+        assert!(score_hard(&frac, "Answer: 5/12"));
+        assert!(!score_hard(&frac, "Answer: 15/36"));
+        assert!(score_hard(&frac, "Answer: $\\frac{5}{12}$"));
+        assert!(score_hard(&frac, "Answer: \\boxed{\\dfrac{5}{12}}"));
+        assert!(score_hard(&CASE, "Answer: \\boxed{22}"));
+        assert!(score_hard(&cased, "Answer: \\text{tEnAlP}"));
+    }
+
+    #[test]
+    fn every_question_has_an_answer_and_reads_as_one_question() {
+        assert_eq!(QUALITY_HARD.len(), 36);
+        for c in QUALITY_HARD {
+            assert!(!c.accept.is_empty() && c.ask.len() > 20, "{}", c.ask);
+        }
+    }
+}
+
 /// The answer-quality set asked of a model served over an OpenAI-compatible
 /// endpoint (an online provider with a key of ours), scored by the same
 /// rubric as the offline leg, so an online model's grade can rest on our own
@@ -3355,7 +3530,7 @@ mod vision_leg_tests {
 /// 24 short answers a model.
 #[cfg(test)]
 mod quality_online {
-    use super::{score_quality, QUALITY_GOLD};
+    use super::{score_hard, score_quality, HARD_SYSTEM, QUALITY_GOLD, QUALITY_HARD};
 
     #[tokio::test]
     #[ignore = "calls an online provider with a key from the environment"]
@@ -3365,7 +3540,82 @@ mod quality_online {
         let models = std::env::var("YOAI_ONLINE_MODELS").expect("YOAI_ONLINE_MODELS");
         let extra: serde_json::Value = std::env::var("YOAI_ONLINE_EXTRA").ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::json!({}));
         let client = reqwest::Client::new();
+        // Which set: "plain" (the 24), "hard" (the 36) or "both" (the default).
+        let set = std::env::var("YOAI_ONLINE_SET").unwrap_or_else(|_| "both".into());
+        // Providers that take `max_completion_tokens` and no sampling settings.
+        let max_field = std::env::var("YOAI_ONLINE_MAX_FIELD").unwrap_or_else(|_| "max_tokens".into());
+        let no_sampling = std::env::var("YOAI_ONLINE_NO_SAMPLING").is_ok_and(|v| v == "1");
         for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+            if set != "plain" {
+                let started = std::time::Instant::now();
+                let (mut right, mut answered, mut tokens, mut read) = (0usize, 0usize, 0u64, 0u64);
+                let mut missed: Vec<String> = Vec::new();
+                for (i, case) in QUALITY_HARD.iter().enumerate() {
+                    let mut body = serde_json::json!({
+                        "model": model,
+                        "messages": [{"role": "system", "content": HARD_SYSTEM}, {"role": "user", "content": case.ask}],
+                        "stream": false,
+                    });
+                    body[max_field.as_str()] = serde_json::json!(8000);
+                    if !no_sampling {
+                        body["temperature"] = serde_json::json!(0.0);
+                    }
+                    if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+                        for (k, v) in e {
+                            b.insert(k.clone(), v.clone());
+                        }
+                    }
+                    let mut got: Option<serde_json::Value> = None;
+                    let mut why = String::new();
+                    // One more try for a call that failed to connect or was rate limited.
+                    for attempt in 0..2 {
+                        let r: Result<serde_json::Value, String> = async {
+                            client.post(&url).bearer_auth(&key).json(&body).timeout(std::time::Duration::from_secs(300)).send().await
+                                .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+                        }.await;
+                        match r {
+                            Ok(v) if v["choices"].is_array() => {
+                                got = Some(v);
+                                break;
+                            }
+                            Ok(v) => why = v["error"]["message"].as_str().or(v["error"]["code"].as_str()).unwrap_or("an answer without choices").chars().take(120).collect(),
+                            Err(e) => why = e,
+                        }
+                        if attempt == 0 {
+                            tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+                        }
+                    }
+                    let Some(v) = got else {
+                        missed.push(format!("q{} no answer ({why})", i + 1));
+                        continue;
+                    };
+                    answered += 1;
+                    // Some providers leave thinking out of `completion_tokens`
+                    // and bill it: what was written is then the total less
+                    // what was read.
+                    let prompt = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+                    let written = v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                    tokens += written.max(v["usage"]["total_tokens"].as_u64().unwrap_or(0).saturating_sub(prompt));
+                    read += prompt;
+                    let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+                    if score_hard(case, &text) {
+                        right += 1;
+                    } else {
+                        // An empty reply is a different fault from a wrong
+                        // answer: say which, and how the reply ended.
+                        let gave = match super::hard_answer_line(&text) {
+                            Some(line) => line.chars().take(40).collect::<String>(),
+                            None if text.trim().is_empty() => format!("an empty reply (ended: {}; thinking {} chars)", v["choices"][0]["finish_reason"].as_str().unwrap_or("?"), v["choices"][0]["message"]["reasoning_content"].as_str().map_or(0, str::len)),
+                            None => format!("no answer line (reply ends: {:?})", text.trim().chars().rev().take(50).collect::<String>().chars().rev().collect::<String>()),
+                        };
+                        missed.push(format!("q{} gave {gave:?}", i + 1));
+                    }
+                }
+                println!("quality hard: {model} | {right} of {} right | {answered} answered | {read} tokens read | {tokens} tokens written | {} s | missed: {}", QUALITY_HARD.len(), started.elapsed().as_secs(), if missed.is_empty() { "none".to_string() } else { missed.join("; ") });
+            }
+            if set == "hard" {
+                continue;
+            }
             let (mut points, mut answered, mut tokens) = (0u32, 0usize, 0u64);
             let started = std::time::Instant::now();
             let mut notes: Vec<String> = Vec::new();
