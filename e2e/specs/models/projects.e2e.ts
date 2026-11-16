@@ -18,7 +18,8 @@ import { shot, invoke, waitForChat, ask, lastReply, resetAiModels, seedConversat
 const RUN = Date.now().toString(36);
 const FOLDER = resolve(import.meta.dirname ?? ".", `../../profile/project-${RUN}`);
 const DEPLOY = `make ship-${RUN}`;
-const HELPER = resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
+// YOAI_E2E_HELPER: another copy of the helper to drive (a new release, before the app installs it).
+const HELPER = process.env.YOAI_E2E_HELPER || resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
 
 const timings: Record<string, { ms: number; budget: number }> = {};
 async function timed<T>(name: string, budget: number, step: () => Promise<T>): Promise<T> {

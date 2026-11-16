@@ -14,7 +14,17 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Pinned release: the app version and the agent it installs move together
 /// (same discipline as the engine downloads).
-const BUILD_RELEASE_TAG: &str = "v0.4.2";
+const BUILD_RELEASE_TAG: &str = "v0.4.3";
+/// The SHA-256 of each platform's archive at that release, by its label.
+/// The download is checked against it before anything is unpacked, so a
+/// file that is not the one this app was built for is never installed.
+/// They move with the tag.
+const BUILD_ARCHIVE_SHA256: &[(&str, &str)] = &[
+    ("linux-x86_64", "8b0ee10be2279b9aa665a78c931cdfde037c16b85aa08915f782c7b837f2a31c"),
+    ("macos-arm64", "7ce3db1a5a7f97e44a24ea56d400adb467c7aae44a0b39751eefca9fb9c37d66"),
+    ("macos-x86_64", "5059d5d7e1df57ea24560cebce9d0eb90e374d7eff70d2adee370e16c8037c42"),
+    ("windows-x86_64", "7834f2e9722cae66d4a0fd0ec060f8076f6debc2fecc8394b7884eabceeee7e8"),
+];
 const BUILD_REPO: &str = "WeAreFlowsta/Your-Own-AI-Build";
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
@@ -30,14 +40,38 @@ fn version() -> &'static str {
 
 /// This platform's release asset (archive filename), or None when the
 /// platform has no build.
-fn platform_asset() -> Option<String> {
-    let label = match (std::env::consts::OS, std::env::consts::ARCH) {
+fn platform_label() -> Option<&'static str> {
+    Some(match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => "linux-x86_64",
         ("macos", "aarch64") => "macos-arm64",
         ("macos", "x86_64") => "macos-x86_64",
         ("windows", "x86_64") => "windows-x86_64",
         _ => return None,
-    };
+    })
+}
+
+/// The pinned SHA-256 for a platform label.
+fn pinned_sha256(label: &str) -> Option<&'static str> {
+    BUILD_ARCHIVE_SHA256.iter().find(|(l, _)| *l == label).map(|(_, h)| *h)
+}
+
+/// Whether the downloaded archive is the pinned one.
+fn check_archive(path: &std::path::Path, expected: &str) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).map_err(|e| format!("archive missing: {}", e))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("cannot read the download: {}", e))?;
+    let got = hex::encode(hasher.finalize());
+    if got == expected {
+        Ok(())
+    } else {
+        log::warn!("[build] the downloaded archive's SHA-256 is {got}, the pinned one is {expected}");
+        Err("The download is not the file this version of Your Own AI installs, so nothing was installed. Try again.".to_string())
+    }
+}
+
+fn platform_asset() -> Option<String> {
+    let label = platform_label()?;
     let ext = if std::env::consts::OS == "windows" { "zip" } else { "tar.gz" };
     Some(format!("your-own-ai-build-{}-{}.{}", version(), label, ext))
 }
@@ -163,6 +197,12 @@ async fn download_and_install(app: &AppHandle) -> Result<String, String> {
     let _ = std::fs::remove_dir_all(&partial);
     std::fs::create_dir_all(&partial).map_err(|e| format!("cannot create install dir: {}", e))?;
 
+    let expected = platform_label().and_then(pinned_sha256).ok_or("No build is available for this platform yet")?;
+    if let Err(e) = check_archive(&archive_path, expected) {
+        let _ = std::fs::remove_file(&archive_path);
+        let _ = std::fs::remove_dir_all(&partial);
+        return Err(e);
+    }
     let extract_result = extract_archive(&archive_path, &partial);
     // The archive is an installer artifact - clean it up either way.
     let _ = std::fs::remove_file(&archive_path);
@@ -252,4 +292,29 @@ pub async fn uninstall_build_agent(
     let _ = app.emit("build-uninstalled", serde_json::json!({}));
     log::info!("[build] uninstalled Your Own AI Build");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_platform_with_a_build_has_a_pinned_fingerprint() {
+        for label in ["linux-x86_64", "macos-arm64", "macos-x86_64", "windows-x86_64"] {
+            let h = pinned_sha256(label).unwrap_or_else(|| panic!("no SHA-256 for {label}"));
+            assert!(h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
+        assert!(pinned_sha256("plan9-mips").is_none());
+    }
+
+    #[test]
+    fn an_archive_is_installed_only_when_it_is_the_pinned_one() {
+        let path = std::env::temp_dir().join(format!("yoai-build-archive-{}", std::process::id()));
+        std::fs::write(&path, b"abc").unwrap();
+        // SHA-256 of "abc".
+        assert!(check_archive(&path, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad").is_ok());
+        let e = check_archive(&path, pinned_sha256("linux-x86_64").unwrap()).unwrap_err();
+        assert!(e.contains("nothing was installed"));
+        let _ = std::fs::remove_file(&path);
+    }
 }
