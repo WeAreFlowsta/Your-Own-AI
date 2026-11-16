@@ -318,6 +318,12 @@ describe(`devices, phase ${PHASE}`, () => {
       console.log(`e2e: arrived messages ${JSON.stringify(texts)}`);
       expect(texts.some((t: string) => t.includes("Devices test"))).toBe(true);
       // The composer is open: no read-only reason, typing on, Send enabled.
+      // The copy may be the conversation the app reopened at its start, with
+      // the same messages on the page: the click on the arrived one takes a
+      // moment to replace it, so the reason is given that moment to go.
+      const clicked = Date.now();
+      await browser.waitUntil(async () => !(await $('[data-testid="chat-readonly-reason"]').isExisting()), { timeout: 60_000, interval: 1_000, timeoutMsg: "the arrived conversation was opened from the drawer and its composer still read as a copy a minute later" });
+      console.log(`e2e: the composer opened ${Math.round((Date.now() - clicked) / 1000)} s after the arrived messages showed`);
       expect(await $('[data-testid="chat-readonly-reason"]').isExisting()).toBe(false);
       expect(await (await $('[data-testid="chat-input"]')).getAttribute("contenteditable")).not.toBe("false");
       await shot("devices-c-composer-open");
