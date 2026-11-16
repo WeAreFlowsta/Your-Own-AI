@@ -14,7 +14,10 @@ import { shot, waitForChat, ask, waitForReplyDone, lastReply, invoke } from "./_
 const FIX = resolve(process.cwd(), "e2e", "fixtures", "reader");
 const files = () => browser.execute(() => [...document.querySelectorAll('[data-testid="attached-file"]')].map((e) => e.getAttribute("data-name") ?? ""));
 const pictures = () => browser.execute(() => document.querySelectorAll('[data-testid="attached-image"]').length);
-const attach = (paths: string[]) => browser.execute((p) => (window as any).__yoaiAttach(p), paths);
+// Started, not waited for: a script that returns the attach's promise is
+// held until the read ends, and a page read on the processor takes longer
+// than a script may (the call was then sent again, and the page read twice).
+const attach = (paths: string[]) => browser.execute((p) => { void (window as any).__yoaiAttach(p); }, paths);
 const clear = () => browser.execute(() => { for (const b of document.querySelectorAll('[data-testid="attached-file"] button, [data-testid="attached-image"] button')) (b as HTMLElement).click(); });
 
 /** A solid square as a PNG file: a picture with no words in it. */
@@ -50,7 +53,7 @@ describe("the document reader", () => {
     await shot("reader-pdf-attached");
     await ask("What is the estimated cost of the treatment in the attached letter? Answer with the amount only.");
     await waitForReplyDone(300_000);
-    const reply = await lastReply();
+    const reply = (await lastReply()).text;
     console.log(`e2e: about the letter: ${reply.slice(0, 200)}`);
     expect(reply).toContain("186.50");
   });
@@ -73,7 +76,7 @@ describe("the document reader", () => {
     await shot("reader-photo-attached");
     await ask("On what date is the annual meeting in the attached notice? Answer with the date only.");
     await waitForReplyDone(300_000);
-    const reply = await lastReply();
+    const reply = (await lastReply()).text;
     console.log(`e2e: about the notice: ${reply.slice(0, 200)}`);
     expect(reply).toMatch(/18(th)? (of )?June/i);
   });

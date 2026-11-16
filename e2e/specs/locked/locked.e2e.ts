@@ -4,6 +4,8 @@
 // installs nothing until the person says to go on without a backup.
 // The launch sets YOAI_TEST_UPDATE_BACKUP_ONLY (debug builds): the step
 // runs its backup and stops before the install.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { shot, waitForChat, invoke, invokeLong, ask, waitForReplyDone } from "../models/_helpers";
 
 const VAULT = `http://127.0.0.1:${process.env.YOAI_VAULT_PORT}`;
@@ -44,6 +46,18 @@ async function offerUpdate() {
   });
 }
 const said = () => browser.execute(() => ((window as any).__updateSaid ?? []) as string[]);
+/** The update step the button started has run to its end (in this test's
+ * mode: its backup, and nothing installed). The automatic backup after a
+ * chat can satisfy "a backup newer than the chat exists" while the step is
+ * still waiting its turn, and the next step then began inside this one
+ * (2026-11-16). Told by the app's own log: every way the backup step ends
+ * writes one line there (the page's calls cannot be counted from the page). */
+const APP_LOG = resolve(process.env.YOAI_E2E_HOME ?? resolve(import.meta.dirname ?? ".", "../../profile"), ".local/share/com.solar.yourowai/logs/Your Own AI.log");
+const STEP_END = /\[update\] (backed up to the Vault before the install|the Vault backup is (current|complete)|not installed yet|no Vault backup before the install|the Vault backup took over)/;
+const stepsEnded = () => { try { return readFileSync(APP_LOG, "utf8").split("\n").filter((l) => STEP_END.test(l)).length; } catch { return 0; } };
+const stepOver = async (ended: number) => {
+  await browser.waitUntil(async () => stepsEnded() > ended, { timeout: 400_000, interval: 1_000, timeoutMsg: "the update step never came to its end" });
+};
 const noticeText = () => browser.execute(() => ((document.querySelector('[data-testid="update-ready"]') as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim());
 const backupAt = async () => Number(((await invoke<Record<string, unknown> | null>("last_backup_outcome")) ?? {}).at_secs ?? 0);
 const nowSecs = () => Math.floor(Date.now() / 1000);
@@ -104,8 +118,10 @@ describe("Restart to update with the Vault locked", () => {
     const wrote1 = await chat("color");
     await offerUpdate();
     expect(await noticeText()).toContain("Your Own AI 9.9.9 is ready to install");
+    const before1 = stepsEnded();
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await backupAt()) >= wrote1 && (await said()).some((t) => t.includes("Installing Your Own AI 9.9.9")), { timeout: 400_000, interval: 2_000, timeoutMsg: "the update step never finished its backup" });
+    await stepOver(before1);
     console.log(`e2e: the notice said ${JSON.stringify(await said())}`);
     expect((await said()).some((t) => t.includes("Backing up to your Vault first."))).toBe(true);
     await shot("update-backing-up");
@@ -134,8 +150,10 @@ describe("Restart to update with the Vault locked", () => {
     expect(await kind("syncing")).toBe("syncing");
     const wrote3 = await chat("tree");
     await offerUpdate();
+    const before3 = stepsEnded();
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await backupAt()) >= wrote3, { timeout: 400_000, interval: 2_000, timeoutMsg: "no backup newer than the chat was made against the locked, still-syncing Vault" });
+    await stepOver(before3);
     expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
     const again = await backupNow();
     console.log(`e2e: locked backup ${JSON.stringify(again).slice(0, 300)}`);

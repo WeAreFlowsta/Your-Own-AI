@@ -9,6 +9,12 @@ const card = (id: string) => browser.execute((i) => {
   return c ? { installed: c.getAttribute("data-installed"), text: (c.innerText ?? "").replace(/\s+/g, " ").trim() } : null;
 }, id);
 const cards = () => browser.execute(() => document.querySelectorAll('[data-testid="component-card"]').length);
+// A card finds out whether its files are here when it comes into view
+// (the pages are long): bring every card that has not asked yet into view.
+const showCards = () => browser.execute(() => {
+  for (const c of document.querySelectorAll('[data-testid="component-card"][data-installed="checking"]')) (c as HTMLElement).scrollIntoView({ block: "center" });
+});
+const checking = () => browser.execute(() => document.querySelectorAll('[data-testid="component-card"][data-installed="checking"]').length);
 
 describe("the document reader's card", () => {
   after(async () => {
@@ -20,7 +26,7 @@ describe("the document reader's card", () => {
     await waitForChat();
     const installed = await invoke<boolean>("is_document_reader_ready");
     await browser.url("tauri://localhost/add-ons/components/");
-    await browser.waitUntil(async () => { const c = await card("document-reader"); return !!c && c.installed !== "checking"; }, { timeout: 60_000, interval: 1_000, timeoutMsg: "the document reader's card never showed in Add-ons" });
+    await browser.waitUntil(async () => { await showCards(); const c = await card("document-reader"); return !!c && c.installed !== "checking"; }, { timeout: 60_000, interval: 1_000, timeoutMsg: "the document reader's card never showed in Add-ons" });
     const c = (await card("document-reader"))!;
     console.log(`e2e: the card in Add-ons (${installed ? "installed" : "not installed"}): ${c.text.slice(0, 260)}`);
     await shot(`components-reader-${installed ? "installed" : "offered"}`);
@@ -41,7 +47,9 @@ describe("the document reader's card", () => {
     const installed = await invoke<boolean>("is_document_reader_ready");
     await browser.url("tauri://localhost/settings/");
     await browser.waitUntil(async () => (await cards()) > 0 || !installed, { timeout: 60_000, interval: 1_000, timeoutMsg: "Settings never listed an installed component" });
-    await browser.pause(3_000);
+    // A card that has not asked yet is on the page either way: the answer is
+    // read once every card has asked.
+    await browser.waitUntil(async () => { await showCards(); return (await checking()) === 0; }, { timeout: 60_000, interval: 1_000, timeoutMsg: "a component card in Settings never finished checking" });
     const c = await card("document-reader");
     expect(c !== null).toBe(installed);
   });
