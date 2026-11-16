@@ -185,7 +185,12 @@ export const ComponentCard = component$<CardProps>((props) => {
   if (props.manageOnly && !checking.value && !downloaded.value && !downloading.value) return null;
 
   return (
-    <div class="flex items-start gap-4 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]">
+    <div
+      class="flex items-start gap-4 p-4 rounded-xl bg-[var(--bg-main)] border border-[var(--border-subtle)]"
+      data-testid="component-card"
+      data-component={props.model.id}
+      data-installed={checking.value ? "checking" : downloaded.value ? "yes" : "no"}
+    >
       <div class="w-10 h-10 rounded-lg bg-[var(--bg-dropdown)] flex items-center justify-center flex-shrink-0">
         {props.icon === "eye" ? (
           <LuEye class="w-5 h-5 text-[var(--text-secondary)]" />
