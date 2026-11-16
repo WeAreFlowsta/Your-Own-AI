@@ -42,8 +42,38 @@ async function offerUpdate() {
     note();
     new MutationObserver(note).observe(card, { childList: true, subtree: true, characterData: true });
   });
+  // After every offer: a page opened again since the last one has lost the count.
+  await watchStep();
 }
 const said = () => browser.execute(() => ((window as any).__updateSaid ?? []) as string[]);
+/** The update step the button started has run to its end (in this test's
+ * mode: its backup, and nothing installed). The automatic backup after a
+ * chat can satisfy "a backup newer than the chat exists" while the step is
+ * still waiting its turn, and the next step then began inside this one
+ * (2026-11-16). Told by the page's own call: counted while it is out. */
+const watchStep = () => browser.execute(() => {
+  const w = window as any;
+  if (w.__updateStep) return;
+  w.__updateStep = { running: 0, started: 0 };
+  const internals = w.__TAURI_INTERNALS__;
+  const invoke = internals.invoke.bind(internals);
+  internals.invoke = (cmd: string, ...rest: unknown[]) => {
+    const call = invoke(cmd, ...rest);
+    if (cmd === "restart_to_update") {
+      w.__updateStep.running += 1;
+      w.__updateStep.started += 1;
+      Promise.resolve(call).catch(() => {}).finally(() => { w.__updateStep.running -= 1; });
+    }
+    return call;
+  };
+});
+const stepOver = async (started: number) => {
+  await browser.waitUntil(async () => {
+    const s = await browser.execute(() => (window as any).__updateStep as { running: number; started: number });
+    return s.started > started && s.running === 0;
+  }, { timeout: 400_000, interval: 1_000, timeoutMsg: "the update step never came to its end" });
+};
+const stepsStarted = () => browser.execute(() => ((window as any).__updateStep?.started ?? 0) as number);
 const noticeText = () => browser.execute(() => ((document.querySelector('[data-testid="update-ready"]') as HTMLElement | null)?.innerText ?? "").replace(/\s+/g, " ").trim());
 const backupAt = async () => Number(((await invoke<Record<string, unknown> | null>("last_backup_outcome")) ?? {}).at_secs ?? 0);
 const nowSecs = () => Math.floor(Date.now() / 1000);
@@ -104,8 +134,10 @@ describe("Restart to update with the Vault locked", () => {
     const wrote1 = await chat("color");
     await offerUpdate();
     expect(await noticeText()).toContain("Your Own AI 9.9.9 is ready to install");
+    const before1 = await stepsStarted();
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await backupAt()) >= wrote1 && (await said()).some((t) => t.includes("Installing Your Own AI 9.9.9")), { timeout: 400_000, interval: 2_000, timeoutMsg: "the update step never finished its backup" });
+    await stepOver(before1);
     console.log(`e2e: the notice said ${JSON.stringify(await said())}`);
     expect((await said()).some((t) => t.includes("Backing up to your Vault first."))).toBe(true);
     await shot("update-backing-up");
@@ -134,8 +166,10 @@ describe("Restart to update with the Vault locked", () => {
     expect(await kind("syncing")).toBe("syncing");
     const wrote3 = await chat("tree");
     await offerUpdate();
+    const before3 = await stepsStarted();
     await (await $('[data-testid="restart-to-update"]')).click();
     await browser.waitUntil(async () => (await backupAt()) >= wrote3, { timeout: 400_000, interval: 2_000, timeoutMsg: "no backup newer than the chat was made against the locked, still-syncing Vault" });
+    await stepOver(before3);
     expect(await $('[data-testid="update-no-backup"]').isExisting()).toBe(false);
     const again = await backupNow();
     console.log(`e2e: locked backup ${JSON.stringify(again).slice(0, 300)}`);
