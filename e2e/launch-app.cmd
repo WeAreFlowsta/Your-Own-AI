@@ -14,5 +14,5 @@ if not "%YOAI_E2E_ONLINE%"=="" (
   if "%YOAI_VAULT_PORT%"=="" set "YOAI_VAULT_PORT=27990"
 )
 rem The fresh spec presses "Download and continue": never a real download.
-set "YOAI_BLOCK_MODEL_DOWNLOADS=1"
+if not defined YOAI_BLOCK_MODEL_DOWNLOADS set "YOAI_BLOCK_MODEL_DOWNLOADS=1"
 "%HERE%..\src-tauri\target\debug\your-own-ai.exe" %*

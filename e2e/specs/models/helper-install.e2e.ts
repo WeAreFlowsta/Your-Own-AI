@@ -1,14 +1,15 @@
 // The Projects helper's real install: the app downloads the release it is
 // pinned to, checks the download against the pinned fingerprint, unpacks it
 // into this profile and says which version is installed. A real download
-// (about 70 MB), so it runs only when asked for (YOAI_E2E_LONG).
+// (about 70 MB), so it runs only when asked for: YOAI_E2E_LONG, and
+// YOAI_BLOCK_MODEL_DOWNLOADS=0 (test launches switch downloads off).
 import { waitForChat, invoke, invokeLong } from "./_helpers";
 
 type Status = { installed: boolean; path: string | null; installed_version: string | null; pinned_version: string; error: string | null };
 
 describe("the Projects helper's install", () => {
   it("downloads the pinned release, checks it and installs it in this profile", async function () {
-    if (!process.env.YOAI_E2E_LONG) this.skip();
+    if (!process.env.YOAI_E2E_LONG || process.env.YOAI_BLOCK_MODEL_DOWNLOADS !== "0") this.skip();
     this.timeout(900_000);
     await waitForChat();
     const before = await invoke<Status>("build_install_status");

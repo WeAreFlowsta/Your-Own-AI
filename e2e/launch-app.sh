@@ -14,7 +14,8 @@ export XDG_DATA_HOME="$HOME/.local/share"
 export XDG_CACHE_HOME="$HOME/.cache"
 mkdir -p "$HOME"
 # A test launch never downloads a model, whatever a spec or the app does.
-export YOAI_BLOCK_MODEL_DOWNLOADS=1
+# A spec that tests a real download sets it to 0 for its own run.
+export YOAI_BLOCK_MODEL_DOWNLOADS="${YOAI_BLOCK_MODEL_DOWNLOADS:-1}"
 # Two launch modes:
 #   fresh (default)        - empty profile: the welcome flow.
 #   YOAI_E2E_WITH_MODELS=1 - the scratch profile's settings point at the
