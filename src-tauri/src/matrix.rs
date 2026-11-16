@@ -3405,12 +3405,15 @@ pub(crate) const QUALITY_HARD: &[HardCase] = &[
 ];
 
 /// What the model gave as its answer: the text after the last "Answer:", to
-/// the end of that line, without the marks models wrap an answer in.
+/// the end of that line, without the marks models wrap an answer in. A reply
+/// with no such line is read from its last line: the set asks for right
+/// answers, and a right one given without the label is still right.
 pub(crate) fn hard_answer_line(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
-    let at = lower.rfind("answer:")?;
-    let rest = text.get(at + "answer:".len()..)?;
-    let line = rest.trim_start().lines().next().unwrap_or("");
+    let line = match lower.rfind("answer:") {
+        Some(at) => text.get(at + "answer:".len()..)?.trim_start().lines().next().unwrap_or(""),
+        None => text.lines().rev().find(|l| !l.trim().is_empty())?,
+    };
     let cleaned: String = line.chars().filter(|c| !matches!(c, '$' | ',' | '*' | '`' | '"' | '\\' | '(' | ')' | '[' | ']')).collect();
     let cleaned = plain_math(&cleaned);
     let cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -3482,12 +3485,14 @@ mod hard_set_tests {
     #[test]
     fn the_answer_is_read_from_the_last_answer_line() {
         assert_eq!(hard_answer_line("Answer: 5\nNo wait.\n**Answer:** $22.").as_deref(), Some("22"));
-        assert_eq!(hard_answer_line("It is 22."), None);
+        assert_eq!(hard_answer_line("Worked out.\nIt is 22.\n").as_deref(), Some("It is 22"));
+        assert_eq!(hard_answer_line("  \n"), None);
         assert!(score_hard(&CASE, "21 pens cost $28.\nAnswer: $22"));
         assert!(score_hard(&CASE, "Answer: 22.00 dollars"));
         assert!(!score_hard(&CASE, "Answer: 122"));
         assert!(!score_hard(&CASE, "Answer: 22.50"));
-        assert!(!score_hard(&CASE, "The change is 22."));
+        assert!(score_hard(&CASE, "21 pens cost $28.\nThe change is 22."));
+        assert!(!score_hard(&CASE, "The change is 22.\nI hope that helps."));
     }
 
     #[test]
