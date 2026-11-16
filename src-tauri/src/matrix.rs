@@ -3344,3 +3344,72 @@ mod vision_leg_tests {
         assert!(!names_colors_in_order("I cannot see images.", &["red"]));
     }
 }
+
+/// The answer-quality set asked of a model served over an OpenAI-compatible
+/// endpoint (an online provider with a key of ours), scored by the same
+/// rubric as the offline leg, so an online model's grade can rest on our own
+/// questions. `YOAI_ONLINE_URL` is the chat-completions address,
+/// `YOAI_ONLINE_KEY` its key, `YOAI_ONLINE_MODELS` a comma list of model ids;
+/// `YOAI_ONLINE_EXTRA` is a JSON object merged into each request (a
+/// provider's switch for thinking, say). Costs that provider's price for
+/// 24 short answers a model.
+#[cfg(test)]
+mod quality_online {
+    use super::{score_quality, QUALITY_GOLD};
+
+    #[tokio::test]
+    #[ignore = "calls an online provider with a key from the environment"]
+    async fn live_quality_online() {
+        let url = std::env::var("YOAI_ONLINE_URL").expect("YOAI_ONLINE_URL");
+        let key = std::env::var("YOAI_ONLINE_KEY").expect("YOAI_ONLINE_KEY");
+        let models = std::env::var("YOAI_ONLINE_MODELS").expect("YOAI_ONLINE_MODELS");
+        let extra: serde_json::Value = std::env::var("YOAI_ONLINE_EXTRA").ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(serde_json::json!({}));
+        let client = reqwest::Client::new();
+        for model in models.split(',').map(str::trim).filter(|m| !m.is_empty()) {
+            let (mut points, mut answered, mut tokens) = (0u32, 0usize, 0u64);
+            let started = std::time::Instant::now();
+            let mut notes: Vec<String> = Vec::new();
+            for (i, case) in QUALITY_GOLD.iter().enumerate() {
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": format!("You are a helpful, plain-spoken assistant. Answer the question directly.{}", case.system_extra.unwrap_or(""))},
+                        {"role": "user", "content": case.ask}
+                    ],
+                    "max_tokens": 1500, "temperature": 0.0, "stream": false,
+                });
+                if let (Some(b), Some(e)) = (body.as_object_mut(), extra.as_object()) {
+                    for (k, v) in e {
+                        b.insert(k.clone(), v.clone());
+                    }
+                }
+                let answer: Result<serde_json::Value, String> = async {
+                    client.post(&url).bearer_auth(&key).json(&body).timeout(std::time::Duration::from_secs(180)).send().await
+                        .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+                }.await;
+                let v = match answer {
+                    Ok(v) if v["choices"].is_array() => v,
+                    Ok(v) => {
+                        notes.push(format!("q{}: no answer ({})", i + 1, v["error"]["message"].as_str().or(v["error"]["code"].as_str()).unwrap_or("an answer without choices")));
+                        continue;
+                    }
+                    Err(e) => {
+                        notes.push(format!("q{}: {e}", i + 1));
+                        continue;
+                    }
+                };
+                answered += 1;
+                tokens += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                let (p, missing) = score_quality(case, &crate::llm::completion_text(&v));
+                points += p as u32;
+                if p < 2 {
+                    notes.push(format!("q{} ({}): {} of 2 - {}", i + 1, case.ask.chars().take(48).collect::<String>(), p, missing.join("; ")));
+                }
+            }
+            println!("quality online: {model} | {points} of {} points | {answered} of {} answered | {tokens} tokens written | {} s", QUALITY_GOLD.len() * 2, QUALITY_GOLD.len(), started.elapsed().as_secs());
+            for n in &notes {
+                println!("  {n}");
+            }
+        }
+    }
+}
