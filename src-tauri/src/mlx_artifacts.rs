@@ -118,6 +118,30 @@ fn artifact_inflight_set() -> &'static std::sync::Mutex<std::collections::HashSe
     S.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
 }
 
+/// Bytes done and in all for each MLX version being downloaded, by repo:
+/// what the status command answers with while there is no manifest yet (it
+/// is written last), so a page that asks sees the same figure the progress
+/// events carry.
+fn live_progress() -> &'static std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>> {
+    static P: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (u64, u64)>>> = std::sync::OnceLock::new();
+    P.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn set_live_progress(repo: &str, done: u64, total: u64) {
+    if let Ok(mut p) = live_progress().lock() {
+        p.insert(repo.to_string(), (done, total));
+    }
+}
+
+/// The whole download's percent with `in_file` bytes of the current file
+/// done on top of `before` bytes of finished files.
+fn percent_of(before: u64, in_file: u64, total: u64) -> u32 {
+    if total == 0 {
+        return 0;
+    }
+    ((before.saturating_add(in_file).min(total) as f64 / total as f64) * 100.0) as u32
+}
+
 /// Fetch the pinned revision's file list from the Hugging Face API.
 /// Flat dirs only (mlx-community's shape); nested paths are refused
 /// loudly rather than silently flattened into collisions.
@@ -266,6 +290,9 @@ pub async fn download_mlx_artifact(
             if let Ok(mut s) = artifact_inflight_set().lock() {
                 s.remove(&self.0);
             }
+            if let Ok(mut p) = live_progress().lock() {
+                p.remove(&self.0);
+            }
         }
     }
     let _inflight = Inflight(repo.clone());
@@ -280,6 +307,7 @@ pub async fn download_mlx_artifact(
     ordered.sort_by_key(|f| f.size);
 
     let mut bytes_done: u64 = 0;
+    set_live_progress(&repo, 0, bytes_total);
     for f in &ordered {
         let target = dir.join(&f.name);
         let already = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);
@@ -300,6 +328,7 @@ pub async fn download_mlx_artifact(
             let app = app.clone();
             let rel = rel.clone();
             let dir_name = dir_name.clone();
+            let repo = repo.clone();
             let base = bytes_done;
             tauri::async_runtime::spawn(async move {
                 loop {
@@ -308,11 +337,8 @@ pub async fn download_mlx_artifact(
                         continue;
                     };
                     let agg = base.saturating_add(done);
-                    let percent = if bytes_total > 0 {
-                        ((agg as f64 / bytes_total as f64) * 100.0) as u32
-                    } else {
-                        0
-                    };
+                    set_live_progress(&repo, agg, bytes_total);
+                    let percent = percent_of(base, done, bytes_total);
                     let _ = app.emit(
                         "model-download-progress",
                         serde_json::json!({
@@ -352,6 +378,7 @@ pub async fn download_mlx_artifact(
             }
         }
         bytes_done += f.size;
+        set_live_progress(&repo, bytes_done, bytes_total);
         let percent = if bytes_total > 0 {
             ((bytes_done as f64 / bytes_total as f64) * 100.0) as u32
         } else {
@@ -402,17 +429,17 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
     let dir = artifact_dir(&app, &repo)?;
     let present = dir.exists();
     let complete = present && artifact_complete(&dir);
-    if present && !complete {
-        // Say WHY in the log: a row offering "Get the MLX version" for a
-        // directory that looks downloaded needs a reason in the diagnostics.
-        log::info!("[MLX] {} present but not complete: {}", artifact_dir_name(&repo), incomplete_reason(&dir));
-    }
     let dir_name = artifact_dir_name(&repo);
     let downloading = artifact_inflight_set()
         .lock()
         .map(|s| s.contains(&repo))
         .unwrap_or(false)
         || crate::llm::any_download_in_flight_under(&format!("{}/", dir_name));
+    if present && !complete && !downloading {
+        // Say WHY in the log: a row offering "Get the MLX version" for a
+        // directory that looks downloaded needs a reason in the diagnostics.
+        log::info!("[MLX] {} present but not complete: {}", artifact_dir_name(&repo), incomplete_reason(&dir));
+    }
     let (mut done, mut total) = (0u64, 0u64);
     if let Some(m) = read_manifest(&dir) {
         for f in &m.files {
@@ -420,6 +447,12 @@ pub async fn mlx_artifact_status(app: AppHandle, repo: String) -> Result<MlxArti
             done += std::fs::metadata(dir.join(&f.name))
                 .map(|md| md.len().min(f.size))
                 .unwrap_or(0);
+        }
+    }
+    // While it downloads there is no manifest: answer with the live figure.
+    if downloading {
+        if let Some((live_done, live_total)) = live_progress().lock().ok().and_then(|p| p.get(&repo).copied()) {
+            (done, total) = (live_done, live_total);
         }
     }
     Ok(MlxArtifactStatus {
@@ -460,6 +493,22 @@ pub async fn delete_mlx_artifact(
 
 #[cfg(test)]
 mod tests {
+    /// One large file is nearly the whole download: its bytes move the
+    /// percent while it is in flight (field: a 2.6 GB file of 2.78 GB showed
+    /// 0% for 72 seconds).
+    #[test]
+    fn a_single_large_file_moves_the_percent_while_it_downloads() {
+        let total = 2_780_000_000u64;
+        let small_files = 180_000_000u64;
+        assert_eq!(super::percent_of(small_files, 0, total), 6);
+        assert_eq!(super::percent_of(small_files, 1_300_000_000, total), 53);
+        assert_eq!(super::percent_of(small_files, 2_600_000_000, total), 100);
+        assert_eq!(super::percent_of(0, 5, 0), 0);
+        super::set_live_progress("test/repo-live", 1_480_000_000, total);
+        assert_eq!(super::live_progress().lock().unwrap().get("test/repo-live").copied(), Some((1_480_000_000, total)));
+        super::live_progress().lock().unwrap().remove("test/repo-live");
+    }
+
     use super::*;
 
     #[test]
