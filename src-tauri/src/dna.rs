@@ -357,8 +357,8 @@ async fn connect_signed(
             Err(e) if attempt < 6 => {
                 let err = format!("{}", e);
                 if err.contains("CellDisabled") {
-                    log::warn!(
-                        "Cell disabled for {} (attempt {}), re-enabling and retrying",
+                    log::info!(
+                        "Cell not enabled yet for {} (attempt {}), enabling and trying again",
                         app_id, attempt
                     );
                     let _ = admin_ws.enable_app(app_id.to_string()).await;
@@ -425,7 +425,7 @@ async fn connect_signed(
             match kind {
                 flowsta_hc_lines::ZomeErrorKind::MissingFunction => break,
                 flowsta_hc_lines::ZomeErrorKind::CellNotRunning if attempt < 6 => {
-                    log::warn!("Cell disabled for {} (attempt {}), re-enabling and retrying", app_id, attempt);
+                    log::info!("Cell not enabled yet for {} (attempt {}), enabling and trying again", app_id, attempt);
                     let _ = admin_ws.enable_app(app_id.to_string()).await;
                     tokio::time::sleep(std::time::Duration::from_secs(3)).await;
                 }
