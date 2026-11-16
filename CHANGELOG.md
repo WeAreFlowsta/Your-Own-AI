@@ -50,6 +50,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The update is checked twice before it installs: the release is listed
   in a manifest signed by Flowsta, and the download must match both its
   signature and the size and fingerprint the manifest names.
+- The Projects helper is v0.4.3 (security updates to the libraries it is
+  built with). Its download is checked against the fingerprint this
+  version of Your Own AI was built for before anything is installed.
 - On a metered connection (a phone's hotspot, a capped plan, macOS's Low
   Data Mode) the download waits until you have stepped away and the
   computer is calm. On battery it waits for mains power, and it never

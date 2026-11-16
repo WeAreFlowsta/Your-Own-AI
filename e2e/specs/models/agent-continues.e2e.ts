@@ -8,7 +8,8 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { shot, waitForChat, invoke, ask, resetAiModels } from "./_helpers";
 
-const HELPER = resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
+// YOAI_E2E_HELPER: another copy of the helper to drive (a new release, before the app installs it).
+const HELPER = process.env.YOAI_E2E_HELPER || resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
 const QUESTION = "Without using any tools, write about 150 words on why tea became popular in Britain, in plain paragraphs.";
 
 const turns = () => browser.execute(() => (window as any).__yoaiTurns?.() ?? []) as Promise<{ kind: string; state: string; chars: number; conv: string | null }[]>;
