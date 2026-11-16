@@ -443,10 +443,12 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
           const prev = store.mlxArtifacts[a.hfRepo];
           // Reattach: an in-flight artifact download survives navigating
           // away - the row shows its live percent again, never the button.
+          // Before the first figure is in, a download keeps what the row
+          // already shows; it never drops back to 0.
           const percent = st.downloading
             ? st.bytes_total > 0
               ? Math.floor((st.bytes_done / st.bytes_total) * 100)
-              : 0
+              : prev?.percent ?? 0
             : prev?.percent ?? null;
           store.mlxArtifacts = {
             ...store.mlxArtifacts,
@@ -913,10 +915,15 @@ export const ModelDownloader = component$<ModelDownloaderProps>(({ systemInfo })
   const handleGetMlx$ = $(async (repo: string, revision: string, forModel: string) => {
     const { invoke } = await import('@tauri-apps/api/core');
     store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: false, percent: 0 } };
+    // The row also asks for the live figure every two seconds, so it moves
+    // even when a progress event does not reach this page.
+    const asking = setInterval(() => { void refreshMlxArtifacts$(); }, 2000);
     try {
       await invoke('download_mlx_artifact', { repo, revision, forModel });
+      clearInterval(asking);
       store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: true, percent: null } };
     } catch (error) {
+      clearInterval(asking);
       store.error = getUserFriendlyErrorMessage(error);
       store.mlxArtifacts = { ...store.mlxArtifacts, [repo]: { complete: false, percent: null } };
     }
