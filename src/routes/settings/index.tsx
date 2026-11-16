@@ -31,7 +31,7 @@ import {
   type RememberSurface,
 } from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
-import { setAutoUpdates, updateStatus } from "../../utils/updates";
+import { downloadUpdateNow, setAutoUpdates, updateStatus, type WaitingUpdate } from "../../utils/updates";
 import {
   ensureMedicalModel,
   isMedicalSpecialist,
@@ -308,6 +308,9 @@ export default component$(() => {
   // Agent: the permission default for new projects - ask unless set.
   const agentPermMode = useSignal<AgentPermissionMode>("ask");
   const checkUpdates = useSignal(true);
+  // A newer release the app has seen whose download waits for the computer.
+  const updateWaiting = useSignal<WaitingUpdate | null>(null);
+  const updateAsked = useSignal(false);
   // Background work only when the computer is idle (src-tauri/src/machine.rs);
   // on unless the person turned it off.
   const backgroundOnlyIdle = useSignal(true);
@@ -433,7 +436,20 @@ export default component$(() => {
     allowAttachmentsOnline.value =
       localStorage.getItem("allowAttachmentsOnline") === "true";
     agentPermMode.value = defaultPermissionMode();
-    updateStatus().then((st) => (checkUpdates.value = st.auto)).catch(() => {});
+    updateStatus()
+      .then((st) => {
+        checkUpdates.value = st.auto;
+        updateWaiting.value = st.waiting ?? null;
+      })
+      .catch(() => {});
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<WaitingUpdate | null>("update-waiting", (e) => {
+          updateWaiting.value = e.payload ?? null;
+          if (!e.payload) updateAsked.value = false;
+        }),
+      )
+      .catch(() => {});
     import("@tauri-apps/plugin-store")
       .then(({ load }) => load("settings.json"))
       .then((store) => store.get<boolean>("backgroundOnlyWhenIdle"))
@@ -1824,6 +1840,26 @@ export default component$(() => {
                     It installs when you choose Restart to update, or when you
                     quit on Windows and macOS. The check reads two public files
                     and carries nothing about you or this device.
+                    {updateWaiting.value && (
+                      <span class="mt-2 block text-[var(--text-primary)]" data-testid="update-waiting">
+                        Your Own AI {updateWaiting.value.version} is out. It has
+                        not been downloaded yet: {updateWaiting.value.why}.{" "}
+                        {updateAsked.value ? (
+                          <span class="text-[var(--text-secondary)]">Downloading now.</span>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid="update-download-now"
+                            class="text-[var(--text-link)] hover:underline"
+                            onClick$={async () => {
+                              updateAsked.value = await downloadUpdateNow().catch(() => false);
+                            }}
+                          >
+                            Download now
+                          </button>
+                        )}
+                      </span>
+                    )}
                   </SettingToggle>
                   <SettingToggle
                     title="Do background work only when my computer is idle"

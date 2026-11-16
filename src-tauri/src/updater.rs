@@ -160,6 +160,19 @@ static READY: Mutex<Option<Ready>> = Mutex::new(None);
 /// (install another version first, an MSI install).
 static NOTICE: Mutex<Option<String>> = Mutex::new(None);
 
+/// A newer release this copy has seen and not downloaded yet: the download
+/// waits for the computer (on battery, a metered connection).
+static WAITING: Mutex<Option<WaitingInfo>> = Mutex::new(None);
+/// Set by "Download now": somebody is waiting on the download, so it starts.
+static DOWNLOAD_NOW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct WaitingInfo {
+    pub version: String,
+    /// What the download waits for, in the machine check's words.
+    pub why: String,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct UpdateStatus {
     pub auto: bool,
@@ -168,6 +181,8 @@ pub struct UpdateStatus {
     pub version: String,
     /// A downloaded, checked update waiting for a restart.
     pub ready: Option<ReadyInfo>,
+    /// A newer release whose download waits for the computer.
+    pub waiting: Option<WaitingInfo>,
     pub notice: Option<String>,
     /// Set once after an update: what this copy was updated from.
     pub updated: Option<UpdatedFrom>,
@@ -313,12 +328,34 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
     // and an unmetered connection (it waits only while memory is short); heavy
     // work on battery or a metered one (it waits for mains power, the person
     // away and a calm computer).
-    loop {
+    DOWNLOAD_NOW.store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut said_waiting: Option<String> = None;
+    'wait: loop {
         let work = download_class(crate::machine::reading().as_ref());
-        if crate::machine::may_run(work, "update download") {
+        if crate::machine::may_run(work, UPDATE_DOWNLOAD_JOB) {
             break;
         }
-        tokio::time::sleep(Duration::from_secs(60)).await;
+        // Say which version is out and what its download waits for, in the
+        // log and where updates are shown, each time the reason changes.
+        let why = crate::machine::held_reason(UPDATE_DOWNLOAD_JOB).unwrap_or("the computer").to_string();
+        if said_waiting.as_deref() != Some(why.as_str()) {
+            log::info!("[update] {} {} is out; its download waits: {}", APP_ID, release.version, why);
+            let info = WaitingInfo { version: release.version.clone(), why: why.clone() };
+            *WAITING.lock().unwrap() = Some(info.clone());
+            let _ = app.emit("update-waiting", Some(info));
+            said_waiting = Some(why);
+        }
+        for _ in 0..60 {
+            if DOWNLOAD_NOW.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                log::info!("[update] downloading now, as asked");
+                crate::machine::done(UPDATE_DOWNLOAD_JOB);
+                break 'wait;
+            }
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    }
+    if WAITING.lock().unwrap().take().is_some() {
+        let _ = app.emit("update-waiting", Option::<WaitingInfo>::None);
     }
     log::info!("[update] downloading {} {} ({} bytes)", APP_ID, release.version, file.size);
     let bytes = update
@@ -340,6 +377,20 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
     *READY.lock().unwrap() = Some(ready);
     let _ = app.emit("update-ready", info);
     Ok(said)
+}
+
+/// The machine check's name for the download.
+const UPDATE_DOWNLOAD_JOB: &str = "update download";
+
+/// "Download now": the waiting download starts at once. False when no
+/// download is waiting.
+#[tauri::command]
+pub fn download_update_now() -> bool {
+    let waiting = WAITING.lock().unwrap().is_some();
+    if waiting {
+        DOWNLOAD_NOW.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    waiting
 }
 
 /// How the machine check weighs the update download: light work on mains
@@ -427,6 +478,7 @@ fn status_of(data_dir: &Path) -> UpdateStatus {
         channel: channels_for(env!("CARGO_PKG_VERSION"))[0].into(),
         version: env!("CARGO_PKG_VERSION").into(),
         ready: READY.lock().unwrap().as_ref().map(ReadyInfo::of),
+        waiting: WAITING.lock().unwrap().clone(),
         notice: NOTICE.lock().unwrap().clone(),
         updated,
         can_update: platform().is_some() && matches!(kind(), Some(k) if k != "msi"),
