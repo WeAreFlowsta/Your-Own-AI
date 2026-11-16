@@ -115,6 +115,13 @@ pub async fn is_ocr_ready(app_handle: AppHandle) -> Result<bool, String> {
     Ok(crate::doc_reader::present(&models_dir) || ocr_models_present(&models_dir))
 }
 
+/// Whether the document reader (the optional component) is installed.
+#[tauri::command]
+pub async fn is_document_reader_ready(app_handle: AppHandle) -> Result<bool, String> {
+    let models_dir = crate::llm::get_models_dir(&app_handle)?;
+    Ok(crate::doc_reader::present(&models_dir))
+}
+
 /// Read a scanned PDF and return its text: with the document reader when
 /// it is installed (page by page, `document-reader-progress` events saying
 /// which page), else with the built-in reader. If the document reader

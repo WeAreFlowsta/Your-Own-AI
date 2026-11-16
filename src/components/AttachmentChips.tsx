@@ -101,6 +101,8 @@ export const AttachmentChips = component$<AttachmentChipsProps>((props) => {
           return (
             <span
               key={file.path}
+              data-testid="attached-file"
+              data-name={file.filename}
               class="flex items-center gap-1.5 max-w-[14rem] rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-dropdown)] pl-2 pr-1 py-1"
               title={`${file.path} · ~${file.estimatedTokens.toLocaleString()} tokens${
                 file.truncated ? ' · large file, read partially' : ''

@@ -107,6 +107,8 @@ impl Reader {
             "--ctx-size", "8192", "--parallel", "1",
         ].iter().map(|s| s.to_string()).collect();
         args.extend(["--port".to_string(), port.to_string()]);
+        // The engine answers only this app, as the chat engine does.
+        args.extend(["--api-key".to_string(), crate::llm::local_api_key().to_string()]);
         if card {
             args.extend(["-ngl".to_string(), "99".to_string()]);
         } else {
@@ -151,6 +153,7 @@ impl Reader {
         });
         let v: serde_json::Value = crate::llm::local_http()
             .post(format!("http://127.0.0.1:{}/v1/chat/completions", self.port))
+            .bearer_auth(crate::llm::local_api_key())
             .json(&body)
             .timeout(PAGE_TIMEOUT)
             .send()
