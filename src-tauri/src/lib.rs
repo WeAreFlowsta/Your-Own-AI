@@ -565,6 +565,9 @@ async fn get_context_window_size() -> Result<u64, String> {
 /// What the webview's platform fix did at startup; logged once the logger is up.
 static WEBVIEW_FIX: std::sync::OnceLock<flowsta_hc_lines::webview::Outcome> = std::sync::OnceLock::new();
 
+/// Set as the quit sequence begins; the log filter reads it.
+static CLOSING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Started as the library's stop helper (`--hc-lines-interrupt <pid>`,
@@ -637,6 +640,10 @@ pub fn run() {
             // The machine check asks the session bus once a minute, and zbus
             // logs every connection it opens at info: eight lines a minute.
             .level_for("zbus", log::LevelFilter::Warn)
+            // Once the app is closing, the key store's clients warn that
+            // each of their connections ended (about forty lines): that is
+            // the stop the app asked for, said once by the quit sequence.
+            .filter(|meta| !(CLOSING.load(std::sync::atomic::Ordering::Relaxed) && meta.target().starts_with("lair_keystore_api") && meta.level() == log::Level::Warn))
             // Keep rotated logs instead of discarding them - a support
             // case's history must survive an app restart (a beta failure's
             // log was lost to single-file rotation on 2026-08-06).
@@ -650,6 +657,7 @@ pub fn run() {
             updater::set_update_prefs,
             updater::dismiss_updated,
             updater::restart_to_update,
+            updater::download_update_now,
             profile::profile_store_path,
             identity_watch::identity_switched,
             identity_watch::restart_after_identity_switch,
@@ -1223,7 +1231,8 @@ pub fn run() {
 /// the conductor and key store (asked and given their graces). At quit, and
 /// before an update installs (Windows cannot replace a file in use).
 pub(crate) fn stop_everything(app_handle: &AppHandle) {
-    log::info!("[exit] Your Own AI is closing: stopping what it runs");
+    log::info!("[exit] Your Own AI is closing: stopping what it runs (the key store's connections end with it)");
+    CLOSING.store(true, std::sync::atomic::Ordering::Relaxed);
     println!("[Exit] Stopping llama-server...");
     agent_bridge::kill_on_exit(app_handle);
     let llm_state = app_handle.state::<LLMState>();

@@ -160,6 +160,11 @@ pub fn would_run(work: Work) -> bool {
     }
 }
 
+/// Why `job` is waiting, when it is.
+pub fn held_reason(job: &str) -> Option<&'static str> {
+    HELD.lock().unwrap_or_else(|e| e.into_inner()).get(job).copied()
+}
+
 /// A job that finished or gave up is no longer held.
 pub fn done(job: &str) {
     HELD.lock().unwrap_or_else(|e| e.into_inner()).remove(job);

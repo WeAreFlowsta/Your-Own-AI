@@ -665,25 +665,70 @@ pub(crate) async fn claim_engine_port(app: &AppHandle, engine: crate::ports::Eng
     if crate::ports::bindable(port) {
         return port;
     }
-    if end_our_engines_on(app, port) > 0 {
-        for _ in 0..20 {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            if crate::ports::bindable(port) {
-                return port;
-            }
-        }
+    // One of ours may be on its way out already (a helper being replaced
+    // ended a moment ago and its socket is not released yet), so the port is
+    // given a few seconds whether or not something was ended just now.
+    end_our_engines_on(app, port);
+    if port_comes_free(port, PORT_RELEASE_WAIT).await {
+        return port;
     }
-    let holder = port_holder(port).unwrap_or_else(|| "another program".to_string());
+    // "Another program" is said only when one was found holding the port.
+    let why = match port_holder(port) {
+        Some(holder) => format!("is held by {holder}"),
+        None => format!("did not come free in {} s", PORT_RELEASE_WAIT.as_secs()),
+    };
     match crate::ports::free_port() {
         Some(free) => {
             crate::ports::move_engine(engine, free);
-            log::warn!("[engine] port {} is held by {}: the {:?} server uses port {} this session", port, holder, engine, free);
+            log::warn!("[engine] port {} {}: the {:?} server uses port {} this session", port, why, engine, free);
             free
         }
         None => {
-            log::warn!("[engine] port {} is held by {} and the OS offered no free port", port, holder);
+            log::warn!("[engine] port {} {} and the OS offered no free port", port, why);
             port
         }
+    }
+}
+
+/// How long a port is given to come free before a server moves off it.
+const PORT_RELEASE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether `port` can be bound within `wait`, asked every quarter second.
+async fn port_comes_free(port: u16, wait: std::time::Duration) -> bool {
+    let until = std::time::Instant::now() + wait;
+    loop {
+        if crate::ports::bindable(port) {
+            return true;
+        }
+        if std::time::Instant::now() >= until {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
+
+#[cfg(test)]
+mod port_release_tests {
+    /// A helper that is replaced releases its port a moment after it is
+    /// ended: the next server waits for the same port and does not move.
+    #[tokio::test]
+    async fn a_port_released_a_moment_later_is_used_again() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(!crate::ports::bindable(port));
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            drop(held);
+        });
+        assert!(super::port_comes_free(port, std::time::Duration::from_secs(5)).await);
+    }
+
+    #[tokio::test]
+    async fn a_port_that_stays_held_is_given_up() {
+        let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(!super::port_comes_free(port, std::time::Duration::from_millis(600)).await);
+        drop(held);
     }
 }
 

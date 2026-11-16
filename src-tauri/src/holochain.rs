@@ -1075,7 +1075,7 @@ impl HolochainManager {
                         log::info!("Reconnected agent (key: {})", key_hex);
                     }
                     Err(e) => {
-                        log::warn!("Failed to reconnect agent {}: {}", key_hex, e);
+                        log::info!("Agent {} not connected on the first try, it is tried again: {}", key_hex, e);
                         failed.push((
                             app.installed_app_id.clone(),
                             key_hex.clone(),
@@ -1093,10 +1093,9 @@ impl HolochainManager {
         // from generation-forking by the adopt-don't-mint guard in
         // provision_agent.
         if !failed.is_empty() {
-            log::info!(
-                "Retrying {} agent reconnects that lost the enable race",
-                failed.len()
-            );
+            let tried_again = failed.len();
+            let before_retry = reconnected;
+            log::info!("Trying {} agents again whose cells were still being enabled", tried_again);
             for app_id in failed {
                 match dna::connect_app_websocket(
                     self.admin_port(),
@@ -1127,6 +1126,7 @@ impl HolochainManager {
                     }
                 }
             }
+            log::info!("{} of {} connected on the second try", reconnected - before_retry, tried_again);
         }
 
         if reconnected > 0 {
