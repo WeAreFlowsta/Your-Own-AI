@@ -29,6 +29,18 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   restore here" and it restores what that computer backed up to your
   Vault. (Devices)
 
+### Reading documents and pictures
+- **A document reader you can add.** An optional 1.4 GB download
+  (Add-ons, Components) that reads photos of documents, tables and forms,
+  and scanned PDFs, far more accurately than the built-in reader, which
+  can misread figures and pull table columns apart. It is slower: a page
+  takes from 20 seconds to over a minute. It runs on your device.
+- With it installed, a picture you attach that is mostly text is read as
+  a document, so a model that cannot see pictures can still answer about
+  it. A photo of anything else stays a picture.
+- **Up to four images on one message.** Two or more images on one
+  message no longer stop the engine.
+
 ### Online models
 - Each online model says who serves it and where that company is based,
   and who made it when that is someone else, on its card and in the model
@@ -137,6 +149,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   background service is still starting.
 
 ### Models
+- **Recommendations follow one order everywhere.** The first model the
+  welcome screen offers, the Best for you badge and the Best for this
+  computer panel now agree: where the model runs on this computer, then
+  how well it does the job at that size, then our own measurements of
+  answer quality and of how soon the first reply arrives. Each pick in
+  the panel says why it was picked.
+- New in the catalog: Nemotron 3.5 Bolt E4B, LFM2.5-24B-A2B, LFM3 and
+  LFM3 Vision.
+- The engine is llama.cpp v1.0.0.
 - Fine-tune: a model's row on the Offline Models page shows a saved change
   at once. A change saved within a few seconds of opening the page showed
   only after the page was opened again.
@@ -149,11 +170,21 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   so models with strict chat templates answer where they stopped before.
 
 ### For developers
+- `POST /v1/documents/read` returns the text of a scanned PDF or of a
+  picture of a document, read on this device. Send the document itself
+  as base64; up to 40 pages a request.
+- Chat requests that carry pictures can be up to 48 MB, and pictures that
+  are mostly text are read by the document reader when it is installed.
 - A tool named in `tool_choice` is the only tool the engine is given, so
   the model cannot call a different one.
 - `X-Your-Own-AI-Memory: off` works in persona mode too: the AI keeps its
   personality and answers with nothing of what it remembers about you.
   Before, only agent mode honored it.
+
+### Diagnostics
+- The truth matrix asks twenty-four quality questions (was ten), measures
+  each model's first reply, and ends its report with the figures and the
+  kind of computer it ran on. The text beside it in Settings is shorter.
 
 ### Linux
 - The app's program is `your-own-ai` (was `app`), and the bundled engine
@@ -170,6 +201,18 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Fedora 45 and others that ship OpenSSL 4.
 
 ### Security
+- **The local endpoint answers only requests addressed to this
+  computer.** A request without a key is answered when it names
+  `127.0.0.1` or `localhost`, and, if a browser sent it, when the page is
+  one served from this computer. Programs on your computer are
+  unaffected.
+- Your Own AI tells Flowsta Vault which app it is on every call, with a
+  private token the Vault hands it when you connect (Flowsta Vault 1.8.0
+  and later).
+- **The truth matrix report is checked line by line** before it is
+  written: anything that looks like a name, a path, an address or a key
+  is replaced. The report is a file on your computer and is only ever
+  sent by you.
 - **Memory work stays on your computer whatever model an AI uses.** When
   an AI was set to one specific online model (not Automatic), the summary
   a project session writes into its memory was sent to that online model.
