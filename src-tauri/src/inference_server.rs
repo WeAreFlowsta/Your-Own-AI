@@ -219,11 +219,13 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             // check - a foreign server on this port must not read as us.
             .route("/health", get(|| async { Json(json!({ "status": "ok", "app": "your-own-ai" })) }))
             .route("/v1/models", get(list_models))
-            .route("/v1/chat/completions", post(chat_completions))
+            // A picture in a chat request can be several megabytes as base64
+            // (the server library's default of 2 MB refused a phone photo
+            // before anything read it).
+            .route("/v1/chat/completions", post(chat_completions).layer(axum::extract::DefaultBodyLimit::max(REQUEST_WITH_PICTURES_MAX)))
             .route("/v1/responses", post(responses_web_search))
-            // A scan or a picture can be several megabytes as base64: this
-            // one route takes up to 48 MB (the default is 2 MB).
-            .route("/v1/documents/read", post(read_document).layer(axum::extract::DefaultBodyLimit::max(48 * 1024 * 1024)))
+            // A scan can be several megabytes as base64 too.
+            .route("/v1/documents/read", post(read_document).layer(axum::extract::DefaultBodyLimit::max(REQUEST_WITH_PICTURES_MAX)))
             .route("/mcp", post(mcp_post).get(mcp_get))
             .route("/mcp/page-reader", post(mcp_web_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
@@ -2151,6 +2153,9 @@ async fn caption_image_parts(app: &AppHandle, messages: &mut [Value], session_mo
     }
     captioned
 }
+
+/// The largest request the routes that carry pictures or documents take.
+const REQUEST_WITH_PICTURES_MAX: usize = 48 * 1024 * 1024;
 
 /// The most pages of a PDF one request reads (a page takes from 20 seconds
 /// to over a minute).
