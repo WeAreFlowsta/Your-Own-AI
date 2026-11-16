@@ -203,6 +203,15 @@ pub fn bgra_to_bmp_data_url(bgra: &[u8], width: u32, height: u32) -> Result<Stri
     Ok(format!("data:image/bmp;base64,{}", base64::engine::general_purpose::STANDARD.encode(out)))
 }
 
+/// How many pages a PDF has (0 for one that cannot be opened is an error).
+pub fn pdf_page_count(pdf_path: &Path, pdfium_lib_dir: &Path) -> Result<usize, String> {
+    use pdfium_render::prelude::*;
+    let lib = Pdfium::pdfium_platform_library_name_at_path(pdfium_lib_dir);
+    let pdfium = Pdfium::new(Pdfium::bind_to_library(&lib).map_err(|e| format!("Failed to load bundled pdfium: {e}"))?);
+    let document = pdfium.load_pdf_from_file(pdf_path, None).map_err(|e| format!("Failed to open PDF: {e}"))?;
+    Ok(document.pages().len() as usize)
+}
+
 /// Every page of a PDF drawn for the reader, as `data:` addresses.
 pub fn pdf_pages(pdf_path: &Path, pdfium_lib_dir: &Path) -> Result<Vec<String>, String> {
     use pdfium_render::prelude::*;

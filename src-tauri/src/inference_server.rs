@@ -298,8 +298,13 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
             // check - a foreign server on this port must not read as us.
             .route("/health", get(|| async { Json(json!({ "status": "ok", "app": "your-own-ai" })) }))
             .route("/v1/models", get(list_models))
-            .route("/v1/chat/completions", post(chat_completions))
+            // A picture in a chat request can be several megabytes as base64
+            // (the server library's default of 2 MB refused a phone photo
+            // before anything read it).
+            .route("/v1/chat/completions", post(chat_completions).layer(axum::extract::DefaultBodyLimit::max(REQUEST_WITH_PICTURES_MAX)))
             .route("/v1/responses", post(responses_web_search))
+            // A scan can be several megabytes as base64 too.
+            .route("/v1/documents/read", post(read_document).layer(axum::extract::DefaultBodyLimit::max(REQUEST_WITH_PICTURES_MAX)))
             .route("/mcp", post(mcp_post).get(mcp_get))
             .route("/mcp/page-reader", post(mcp_web_post).get(mcp_get))
             .route("/internal/route-preview", get(route_preview))
@@ -2228,6 +2233,91 @@ async fn caption_image_parts(app: &AppHandle, messages: &mut [Value], session_mo
     captioned
 }
 
+/// The largest request the routes that carry pictures or documents take.
+const REQUEST_WITH_PICTURES_MAX: usize = 48 * 1024 * 1024;
+
+/// The most pages of a PDF one request reads (a page takes from 20 seconds
+/// to over a minute).
+const READ_DOCUMENT_MAX_PAGES: usize = 40;
+
+/// `POST /v1/documents/read`: the text of a scanned PDF or of a picture of
+/// a document, read on this device by the document reader. The body is
+/// `{"data": "<base64, or a data: address>"}`: the caller sends the
+/// document itself, never a path, so the route opens no file of the
+/// person's. Answers `{"text", "pages", "reader"}`. A PDF is read page by
+/// page (the built-in reader reads it when the document reader is not
+/// installed); a picture needs the document reader.
+async fn read_document(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
+    use base64::Engine as _;
+    let Some(data) = body.get("data").and_then(Value::as_str) else {
+        return err(StatusCode::BAD_REQUEST, "Send the document as base64 in \"data\".", "missing_data");
+    };
+    let bytes = match data_url_bytes(data).or_else(|| base64::engine::general_purpose::STANDARD.decode(data.trim()).ok()) {
+        Some(b) if !b.is_empty() => b,
+        _ => return err(StatusCode::BAD_REQUEST, "\"data\" is not base64.", "bad_data"),
+    };
+    let Ok(models_dir) = crate::llm::get_models_dir(&app) else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "The models folder could not be found.", "no_models_folder");
+    };
+    let reader = crate::doc_reader::present(&models_dir);
+    let is_pdf = bytes.starts_with(b"%PDF");
+    if !reader && !(is_pdf && crate::ocr::ocr_models_present(&models_dir)) {
+        return err(StatusCode::SERVICE_UNAVAILABLE, "The document reader is not installed (Add-ons, Components).", "reader_not_installed");
+    }
+    let Ok((bin, _)) = crate::matrix::engine_binary(&app) else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "The engine could not be found.", "no_engine");
+    };
+    let card = crate::doc_reader::on_card(crate::matrix::free_vram_gb(&bin));
+    if !is_pdf {
+        let (_, text) = crate::ocr::picture_bytes_as_document(&bin, &models_dir, bytes, card, true, || {}).await;
+        return match text {
+            Some(text) => Json(json!({ "text": text, "pages": 1, "reader": "document-reader" })).into_response(),
+            None => err(StatusCode::UNPROCESSABLE_ENTITY, "No text could be read from this picture (PNG and JPEG are opened).", "nothing_read"),
+        };
+    }
+    // A PDF: to a file of the app's own, read, and removed again.
+    let Ok(lib_dir) = crate::ocr::pdfium_lib_dir(&app) else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "The PDF library could not be found.", "no_pdf_library");
+    };
+    let tmp = std::env::temp_dir().join(format!("yoai-read-{}-{}.pdf", std::process::id(), caption_key(data)));
+    if std::fs::write(&tmp, &bytes).is_err() {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "The document could not be staged for reading.", "no_temp_file");
+    }
+    struct Remove(std::path::PathBuf);
+    impl Drop for Remove {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _remove = Remove(tmp.clone());
+    let pages = {
+        let (lib, path) = (lib_dir.clone(), tmp.clone());
+        tauri::async_runtime::spawn_blocking(move || crate::doc_reader::pdf_page_count(&path, &lib)).await.ok().and_then(|r| r.ok()).unwrap_or(0)
+    };
+    if pages == 0 {
+        return err(StatusCode::UNPROCESSABLE_ENTITY, "This PDF could not be opened.", "bad_pdf");
+    }
+    if pages > READ_DOCUMENT_MAX_PAGES {
+        return err(StatusCode::PAYLOAD_TOO_LARGE, &format!("This PDF has {pages} pages; one request reads up to {READ_DOCUMENT_MAX_PAGES}."), "too_many_pages");
+    }
+    let read = if reader {
+        crate::doc_reader::read_pdf(&bin, &models_dir, lib_dir, tmp.clone(), card, |_, _| {}).await.map(|t| (t, "document-reader"))
+    } else {
+        let (lib, path, dir) = (lib_dir, tmp.clone(), models_dir.clone());
+        match tauri::async_runtime::spawn_blocking(move || crate::ocr::ocr_pdf(&path, &lib, &dir)).await {
+            Ok(r) => r.map(|t| (t, "built-in")),
+            Err(_) => Err("The reading was interrupted".to_string()),
+        }
+    };
+    match read {
+        Ok((text, which)) => Json(json!({ "text": text, "pages": pages, "reader": which })).into_response(),
+        Err(e) => {
+            log::warn!("[inference] a document was not read: {e}");
+            err(StatusCode::INTERNAL_SERVER_ERROR, "The document could not be read.", "read_failed")
+        }
+    }
+}
+
 /// What the document reader made of a picture, by the picture's hash:
 /// its text, or `None` for a picture that is not a document. A harness
 /// re-sends the whole conversation every call, so each picture is checked
@@ -2304,7 +2394,7 @@ async fn read_document_parts(app: &AppHandle, messages: &mut [Value], replace: b
                 let Some(bytes) = data_url_bytes(&url) else { continue };
                 let Ok((bin, _)) = crate::matrix::engine_binary(app) else { return given };
                 let card = crate::doc_reader::on_card(crate::matrix::free_vram_gb(&bin));
-                let (words, text) = crate::ocr::picture_bytes_as_document(&bin, &models_dir, bytes, card, || {}).await;
+                let (words, text) = crate::ocr::picture_bytes_as_document(&bin, &models_dir, bytes, card, false, || {}).await;
                 log::info!("[inference] a picture checked by the document reader: {words} word(s) found, {}", if text.is_some() { "read as a document" } else { "left as a picture" });
                 if let Ok(mut c) = DOCUMENT_TEXT_CACHE.get_or_init(|| Mutex::new(HashMap::new())).lock() {
                     if c.len() >= CAPTION_CACHE_MAX {

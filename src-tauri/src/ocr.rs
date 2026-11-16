@@ -19,7 +19,7 @@ pub const RECOGNITION_MODEL: &str = "text-recognition.rten";
 /// Directory holding the bundled pdfium library. Tauri bundles `resources/*`
 /// under `<resource_dir>/resources/` (the conductor resolves the .happ the same
 /// way — see lib.rs), so the path is `<resource_dir>/resources/pdfium/`.
-fn pdfium_lib_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
+pub(crate) fn pdfium_lib_dir(app_handle: &AppHandle) -> Result<PathBuf, String> {
     let data_dir = app_handle
         .path()
         .app_data_dir()
@@ -219,11 +219,13 @@ pub async fn read_picture_as_document(app_handle: AppHandle, file_path: String) 
 /// reader that fails all answer `None`: the picture stays a picture.
 pub async fn picture_as_document(bin: &Path, models_dir: &Path, path: PathBuf, card: bool, reading: impl Fn()) -> (usize, Option<String>) {
     let Ok(bytes) = std::fs::read(&path) else { return (0, None) };
-    picture_bytes_as_document(bin, models_dir, bytes, card, reading).await
+    picture_bytes_as_document(bin, models_dir, bytes, card, false, reading).await
 }
 
 /// The same for a picture already in memory (one that arrived in a request).
-pub async fn picture_bytes_as_document(bin: &Path, models_dir: &Path, bytes: Vec<u8>, card: bool, reading: impl Fn()) -> (usize, Option<String>) {
+/// `always`: read it whatever the check says (the caller asked for this
+/// picture to be read as a document).
+pub async fn picture_bytes_as_document(bin: &Path, models_dir: &Path, bytes: Vec<u8>, card: bool, always: bool, reading: impl Fn()) -> (usize, Option<String>) {
     let check = models_dir.join(crate::doc_reader::CHECK_FILE);
     let seen = tauri::async_runtime::spawn_blocking(move || -> Result<(usize, String), String> {
         let img = image::load_from_memory(&bytes).map_err(|_| "not a picture this can open".to_string())?;
@@ -231,13 +233,14 @@ pub async fn picture_bytes_as_document(bin: &Path, models_dir: &Path, bytes: Vec
         let max = crate::doc_reader::PICTURE_MAX_SIDE;
         let img = if img.width() > max || img.height() > max { img.resize(max, max, image::imageops::FilterType::Triangle) } else { img };
         let rgb = img.to_rgb8();
-        let share = text_share(rgb.as_raw(), rgb.width(), rgb.height(), &check)?;
+        // Asked for outright, the count is not needed (nor the check's file).
+        let words = if always { 0 } else { text_share(rgb.as_raw(), rgb.width(), rgb.height(), &check)?.words };
         let bgra: Vec<u8> = rgb.pixels().flat_map(|p| [p[2], p[1], p[0], 255]).collect();
-        Ok((share.words, crate::doc_reader::bgra_to_bmp_data_url(&bgra, rgb.width(), rgb.height())?))
+        Ok((words, crate::doc_reader::bgra_to_bmp_data_url(&bgra, rgb.width(), rgb.height())?))
     })
     .await;
     let Ok(Ok((words, picture))) = seen else { return (0, None) };
-    if !crate::doc_reader::is_document(words) {
+    if !always && !crate::doc_reader::is_document(words) {
         return (words, None);
     }
     reading();
