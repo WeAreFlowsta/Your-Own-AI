@@ -2027,10 +2027,68 @@ async fn complete_once(client: &reqwest::Client, body: &Value) -> Result<Value, 
     resp.json::<Value>().await.map_err(|e| e.to_string())
 }
 
-/// A completion for a caller that requires a tool call: the engine's own
-/// call when it makes one; else the call read out of the answer's text;
-/// else one more try with a firmer instruction, read the same two ways;
-/// else the first answer as it came (the caller sees there was no call).
+/// The shape a required call must have, as a JSON schema the engine can
+/// hold an answer to: `{"name": <the tool>, "arguments": <its parameters>}`,
+/// one alternative per offered tool. None when no tool is offered.
+pub(crate) fn required_call_schema(tools: &[Value]) -> Option<Value> {
+    let shapes: Vec<Value> = tools
+        .iter()
+        .filter_map(|t| {
+            let f = t.get("function")?;
+            let name = f.get("name")?.as_str()?;
+            let params = f.get("parameters").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({ "type": "object" }));
+            Some(json!({
+                "type": "object",
+                "properties": { "name": { "const": name }, "arguments": params },
+                "required": ["name", "arguments"],
+                "additionalProperties": false,
+            }))
+        })
+        .collect();
+    match shapes.len() {
+        0 => None,
+        1 => shapes.into_iter().next(),
+        _ => Some(json!({ "anyOf": shapes })),
+    }
+}
+
+/// The call in an answer that was held to the call's shape. The shape is
+/// held on what the model writes as its answer: a model whose template
+/// always thinks puts that in its reasoning with the answer empty, so the
+/// reasoning is read then, but only when the answer was finished. One cut
+/// off by the token limit is a thought that never reached the call, and a
+/// JSON object inside a thought is not a call.
+pub(crate) fn call_from_held_answer(answer: &Value, tools: &[Value]) -> Option<(String, Value)> {
+    let message = &answer["choices"][0]["message"];
+    let content = message["content"].as_str().unwrap_or("").trim();
+    if !content.is_empty() {
+        return tool_call_from_text(content, tools);
+    }
+    if answer["choices"][0]["finish_reason"].as_str() == Some("length") {
+        return None;
+    }
+    tool_call_from_text(&crate::llm::completion_text(answer), tools)
+}
+
+/// What the constrained try says: the call, as JSON, and nothing else.
+pub(crate) fn constrained_instruction(names: &[String]) -> String {
+    let which = match names {
+        [one] => format!("the function {one}"),
+        many => format!("one of these functions: {}", many.join(", ")),
+    };
+    format!("Answer now by calling {which}. Write only the call, as JSON: {{\"name\": the function's name, \"arguments\": its arguments}}.")
+}
+
+/// A completion for a caller that requires a tool call:
+///   1. the engine's own call, when it makes one;
+///   2. else the call read out of the answer's text;
+///   3. else one more try with the answer held to the call's shape (a JSON
+///      schema the engine samples inside: it works whatever the model's
+///      chat format, where the engine's own forcing does not; measured
+///      2026-11-17: without it LFM2.5-8B made 8 of 10 required calls and
+///      Qwen3.8-2B 1 of 10);
+///   4. else, when the engine refuses that schema, one firmer try in words;
+///   5. else the first answer as it came (the caller sees there was no call).
 async fn forced_tool_call(client: &reqwest::Client, body: &Value) -> Result<Value, String> {
     let names = required_tool_names(body).unwrap_or_default();
     let tools = body.get("tools").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -2048,6 +2106,37 @@ async fn forced_tool_call(client: &reqwest::Client, body: &Value) -> Result<Valu
         log::info!("[inference] a required tool call came back as text: read as a call to {}", call.0);
         return Ok(with_tool_call(first, call));
     }
+    // Held to the call's shape. The tools leave the request: the schema says
+    // what they are, and the template's own tool handling is what did not
+    // produce a call.
+    if let Some(schema) = required_call_schema(&tools) {
+        let mut held = once.clone();
+        if let Some(obj) = held.as_object_mut() {
+            obj.remove("tools");
+            obj.remove("tool_choice");
+            obj.remove("parallel_tool_calls");
+        }
+        if let Some(msgs) = held.get_mut("messages").and_then(Value::as_array_mut) {
+            msgs.push(json!({ "role": "user", "content": constrained_instruction(&names) }));
+        }
+        held["response_format"] = json!({ "type": "json_schema", "json_schema": { "name": "tool_call", "strict": true, "schema": schema } });
+        // The call, not a think-aloud: the same no-thinking controls a chat
+        // turn sends (measured 2026-11-17: LFM2.5-8B spent this try's tokens
+        // thinking 2 times in 10 and never reached the call).
+        if let Some(model) = body.get("model").and_then(Value::as_str) {
+            crate::llm::apply_no_think_here(&mut held, model);
+        }
+        match complete_once(client, &held).await {
+            Ok(second) => match call_from_held_answer(&second, &tools) {
+                Some(call) => {
+                    log::info!("[inference] a required tool call was made on the try held to its shape: a call to {}", call.0);
+                    return Ok(with_tool_call(second, call));
+                }
+                None => log::warn!("[inference] the try held to the call's shape did not read as a call"),
+            },
+            Err(e) => log::warn!("[inference] the engine did not take the call's shape ({e}): one firmer try in words"),
+        }
+    }
     let mut again = once.clone();
     if let Some(msgs) = again.get_mut("messages").and_then(Value::as_array_mut) {
         if !first_text.trim().is_empty() {
@@ -2057,21 +2146,21 @@ async fn forced_tool_call(client: &reqwest::Client, body: &Value) -> Result<Valu
     }
     match complete_once(client, &again).await {
         Ok(second) if has_tool_call(&second) => {
-            log::info!("[inference] a required tool call was made on the second, firmer try");
+            log::info!("[inference] a required tool call was made on the firmer try");
             Ok(second)
         }
         Ok(second) => match tool_call_from_text(second["choices"][0]["message"]["content"].as_str().unwrap_or_default(), &tools) {
             Some(call) => {
-                log::info!("[inference] a required tool call came back as text on the second try: read as a call to {}", call.0);
+                log::info!("[inference] a required tool call came back as text on the firmer try: read as a call to {}", call.0);
                 Ok(with_tool_call(second, call))
             }
             None => {
-                log::warn!("[inference] a required tool call was not made in two tries: the first answer goes back as it came");
+                log::warn!("[inference] a required tool call was not made: the first answer goes back as it came");
                 Ok(first)
             }
         },
         Err(e) => {
-            log::warn!("[inference] the second try for a required tool call failed ({e}): the first answer goes back");
+            log::warn!("[inference] the firmer try for a required tool call failed ({e}): the first answer goes back");
             Ok(first)
         }
     }
@@ -3660,6 +3749,36 @@ mod required_tool_call_tests {
         assert_eq!(required_tool_names(&json!({ "tool_choice": "auto", "tools": [tool("emit", &[])] })), None);
         assert_eq!(required_tool_names(&json!({ "tool_choice": "required" })), None);
         assert_eq!(required_tool_names(&json!({ "tool_choice": "required", "tools": [] })), None);
+    }
+
+    #[test]
+    fn a_required_call_has_a_shape_the_engine_can_hold_an_answer_to() {
+        let tool = |name: &str, req: &[&str]| json!({ "type": "function", "function": { "name": name, "parameters": { "type": "object", "properties": { "status": { "type": "string" } }, "required": req } } });
+        assert_eq!(required_call_schema(&[]), None);
+        let one = required_call_schema(&[tool("emit", &["status"])]).unwrap();
+        assert_eq!(one["properties"]["name"]["const"], "emit");
+        assert_eq!(one["properties"]["arguments"]["required"], json!(["status"]));
+        assert_eq!(one["required"], json!(["name", "arguments"]));
+        let two = required_call_schema(&[tool("emit", &["status"]), tool("read_file", &[])]).unwrap();
+        assert_eq!(two["anyOf"].as_array().unwrap().len(), 2);
+        assert_eq!(two["anyOf"][1]["properties"]["name"]["const"], "read_file");
+        // A tool with no parameters still gets an object for its arguments.
+        let bare = required_call_schema(&[json!({ "type": "function", "function": { "name": "ping" } })]).unwrap();
+        assert_eq!(bare["properties"]["arguments"], json!({ "type": "object" }));
+        // An answer in that shape is what the text reader takes as a call.
+        let (name, args) = tool_call_from_text(r#"{"name":"emit","arguments":{"status":"build 7 passed"}}"#, &[tool("emit", &["status"])]).unwrap();
+        assert_eq!((name.as_str(), args["status"].as_str()), ("emit", Some("build 7 passed")));
+        // The held answer: its content when there is one; the reasoning only
+        // when the answer was finished, never a thought cut off by the limit.
+        let tools = [tool("emit", &["status"])];
+        let call = r#"{"name":"emit","arguments":{"status":"ok"}}"#;
+        let answer = |content: Value, reasoning: &str, finish: &str| json!({ "choices": [{ "finish_reason": finish, "message": { "content": content, "reasoning_content": reasoning } }] });
+        assert!(call_from_held_answer(&answer(json!(call), "", "stop"), &tools).is_some());
+        assert!(call_from_held_answer(&answer(Value::Null, call, "stop"), &tools).is_some());
+        assert!(call_from_held_answer(&answer(Value::Null, &format!("The user wants {call} maybe"), "length"), &tools).is_none());
+        assert!(call_from_held_answer(&answer(json!("no call here"), call, "stop"), &tools).is_none());
+        assert!(constrained_instruction(&["emit".into()]).contains("the function emit"));
+        assert!(constrained_instruction(&["a".into(), "b".into()]).contains("one of these functions: a, b"));
     }
 
     /// The shapes LFM2.5-8B answered with on 2026-11-13.
