@@ -1,4 +1,4 @@
-// "Running on CPU for stability" (e2e/gpu-notice-live.sh seeds the record of
+// "Running on the processor for now" (e2e/gpu-notice-live.sh seeds the record of
 // earlier exits before each launch and sets GPU_NOTICE_PHASE):
 //   outside  the app closed twice without a clean exit while no model was
 //            loading onto the graphics card (the window's own crash, a
@@ -27,11 +27,11 @@ const notice = () => browser.execute(() => (document.querySelector('[data-testid
     if (PHASE === "outside") {
       expect(st.active).toBe(false);
       expect(await notice()).toBeNull();
-      expect(await browser.execute(() => document.body.innerText)).not.toContain("Running on CPU for stability");
+      expect(await browser.execute(() => document.body.innerText)).not.toContain("Running on the processor for now");
     } else if (PHASE === "during") {
       expect(st.active).toBe(true);
-      await browser.waitUntil(async () => ((await notice()) ?? "").includes("Running on CPU for stability"), { timeout: 30_000, timeoutMsg: `the notice never showed: ${await notice()}` });
-      expect(await notice()).toContain("switched to CPU to keep your system stable");
+      await browser.waitUntil(async () => ((await notice()) ?? "").includes("Running on the processor for now"), { timeout: 30_000, timeoutMsg: `the notice never showed: ${await notice()}` });
+      expect(await notice()).toContain("so models now load on the processor");
       await shot("gpu-notice");
       await (await $('[data-testid="gpu-retry"]')).click();
       await browser.waitUntil(async () => ((await notice()) ?? "").includes("Re-enabled - your next reply uses the graphics card."), { timeout: 60_000, timeoutMsg: `Try GPU again did not answer: ${await notice()}` });

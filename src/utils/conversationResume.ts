@@ -292,6 +292,53 @@ function scoped(base: string): string | null {
   return scope ? `${base}:${scope}` : null;
 }
 
+/* A project session's notes that wait to be written into memory (the
+ * session ended by a cancel, a quit or a crash before its write-up). They
+ * belong to the identity and the AI that made them: kept under the profile,
+ * the AI's key and the folder, so opening the same folder as another
+ * identity, or with another AI, never writes them into that one's memory.
+ * An older build kept them under the folder alone; those cannot be given
+ * back to their owner and are discarded when the profile is learned. */
+const WAITING_NOTES_KEY = "project-notes-waiting";
+const WAITING_NOTES_OLD_PREFIX = "project-pending-digest:";
+
+function waitingNotesKey(folder: string, agentKey: string | undefined | null): string | null {
+  return scope && agentKey ? `${WAITING_NOTES_KEY}:${scope}:${agentKey}:${folder}` : null;
+}
+
+/** Keep a session's notes until they are written into memory. */
+export function keepWaitingNotes(folder: string, agentKey: string | undefined | null, digest: string): void {
+  const key = waitingNotesKey(folder, agentKey);
+  if (!key) return;
+  try { localStorage.setItem(key, digest); } catch { /* a safety copy only */ }
+}
+
+/** The notes this identity's AI left waiting for a folder, if any. */
+export async function waitingNotes(folder: string, agentKey: string | undefined | null): Promise<string | null> {
+  await initConversationNotes();
+  const key = waitingNotesKey(folder, agentKey);
+  if (!key) return null;
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+/** The notes were written into memory (or there was nothing to write). */
+export function clearWaitingNotes(folder: string, agentKey: string | undefined | null): void {
+  const key = waitingNotesKey(folder, agentKey);
+  if (!key) return;
+  try { localStorage.removeItem(key); } catch { /* a safety copy only */ }
+}
+
+function discardUnownedWaitingNotes(): void {
+  try {
+    const old: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(WAITING_NOTES_OLD_PREFIX)) old.push(k);
+    }
+    for (const k of old) localStorage.removeItem(k);
+  } catch { /* nothing to discard */ }
+}
+
 /** Learn the open profile (once per run); every note helper waits for it. */
 export function initConversationNotes(): Promise<void> {
   if (!scoping) {
@@ -304,6 +351,7 @@ export function initConversationNotes(): Promise<void> {
       } catch {
         scope = "default";
       }
+      discardUnownedWaitingNotes();
       try {
         const raw = localStorage.getItem(LAST_CONVERSATION_KEY);
         const p = raw ? JSON.parse(raw) : null;

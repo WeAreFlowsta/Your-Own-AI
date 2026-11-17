@@ -60,10 +60,11 @@ export default component$(() => {
           </p>
         ) : active.value ? (
           <>
-            <p class="font-medium">Running on CPU for stability</p>
+            <p class="font-medium">Running on the processor for now</p>
             <p class="text-amber-300/80 text-xs mt-0.5">
-              The app detected a possible graphics-driver issue and switched to
-              CPU to keep your system stable. AI responses may be slower.
+              Your Own AI closed unexpectedly more than once while loading a
+              model onto the graphics card, so models now load on the
+              processor. Replies are slower. "Try GPU again" switches back.
             </p>
           </>
         ) : (

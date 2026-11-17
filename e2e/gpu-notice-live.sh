@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# "Running on CPU for stability", live (specs/models/gpu-notice.e2e.ts): the
+# "Running on the processor for now", live (specs/models/gpu-notice.e2e.ts): the
 # record of earlier exits is seeded before each launch in a scratch home, and
 # the debug build's safety ladder is switched on (FLOWSTA_GPU_SAFEMODE=1).
 #   1. Two exits while NO model was loading onto the graphics card: no notice.

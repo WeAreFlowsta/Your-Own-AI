@@ -57,4 +57,32 @@ describe("conversation notes per identity", () => {
     expect(offered ?? "").toContain("This identity's own plan");
     console.log("e2e: this profile's own pointer is taken over");
   });
+
+  it("keeps a project session's waiting notes for the identity and AI that made them", async function () {
+    this.timeout(120_000);
+    await waitForChat();
+    const path = await invoke<string>("profile_store_path", { name: "ai-data.json" });
+    const scope = path.split(/[\\/]/).slice(-2, -1)[0];
+    const folder = "/tmp/yoai-e2e-notes-project";
+    const other = "842024" + "cd".repeat(36);
+    // Notes an older build left under the folder alone (whose they were
+    // cannot be told), and notes another identity's AI left for the folder.
+    await browser.execute((f: string, s: string, o: string) => {
+      localStorage.setItem(`project-pending-digest:${f}`, "An older build's unfinished session");
+      localStorage.setItem(`project-notes-waiting:another-profile:${o}:${f}`, "Another identity's unfinished session");
+      localStorage.removeItem(`project-notes-waiting:${s}:${o}:${f}`);
+    }, folder, scope, other);
+    await reloadToChat();
+    const after = await browser.execute((f: string, o: string) => ({
+      old: localStorage.getItem(`project-pending-digest:${f}`),
+      theirs: localStorage.getItem(`project-notes-waiting:another-profile:${o}:${f}`),
+      keys: Object.keys(localStorage).filter((k) => k.startsWith("project-pending-digest:")).length,
+    }), folder, other);
+    console.log(`e2e: waiting notes after a start ${JSON.stringify(after)}`);
+    // The unowned notes are discarded; another identity's stay for it.
+    expect(after.old).toBeNull();
+    expect(after.keys).toBe(0);
+    expect(after.theirs).toBe("Another identity's unfinished session");
+    await browser.execute((f: string, o: string) => localStorage.removeItem(`project-notes-waiting:another-profile:${o}:${f}`), folder, other);
+  });
 });
