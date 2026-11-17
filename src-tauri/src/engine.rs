@@ -468,6 +468,9 @@ pub(crate) async fn fetch_ahead(app: &AppHandle, version: &str, sha256: &str) ->
     // The address is built here from the version alone (plain words only,
     // checked by the manifest's reader): the manifest cannot name another.
     let url = format!("https://github.com/{ENGINE_RELEASE_REPO}/releases/download/llama-{version}/llama-server-cuda-{version}-{triple}.zip");
+    // Test builds: the zip from the test's own address (the hash is still
+    // the one the caller names).
+    let url = test_source().map(|(u, _)| u).unwrap_or(url);
     let zip_name = format!("llama-server-cuda-{version}.zip");
     crate::llm::download_model(app.clone(), url, zip_name.clone(), Some(true)).await?;
     let zip_path = crate::llm::get_models_dir(app)?.join(&zip_name);
@@ -666,6 +669,12 @@ fn remove_other_cuda_versions(app: &AppHandle, keep_ahead: bool) {
         let name = e.file_name();
         let Some(n) = name.to_str() else { continue };
         if keep_ahead && e.path().join(AHEAD_MARK).exists() {
+            continue;
+        }
+        // A folder being unpacked belongs to the install that is writing it
+        // (which clears its own leftover before it starts): never taken from
+        // under it. Found live: this removed an engine being fetched ahead.
+        if n.ends_with(".partial") {
             continue;
         }
         if n.starts_with("cuda-") && n != current {

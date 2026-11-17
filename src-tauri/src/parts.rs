@@ -16,6 +16,10 @@ use tauri::AppHandle;
 /// failure is logged and left to the new version's first start. Returns
 /// how many were fetched.
 pub(crate) async fn fetch_ahead(app: &AppHandle, parts: &[Part]) -> usize {
+    // An install with downloads switched off fetches nothing by itself.
+    if crate::llm::downloads_blocked() {
+        return 0;
+    }
     let mut fetched = 0;
     for part in parts {
         let outcome = if part.name == crate::engine::PART_NAME && crate::engine::wants_ahead(app, &part.target, &part.version) {
@@ -33,6 +37,34 @@ pub(crate) async fn fetch_ahead(app: &AppHandle, parts: &[Part]) -> usize {
     }
     fetched
 }
+
+/// Test builds only: fetch the parts named in `YOAI_TEST_PARTS_AHEAD` (a
+/// JSON list, as a manifest's `parts`) a moment after start, as the updater
+/// does once an update is downloaded (`e2e/parts-ahead-live.sh`). A release
+/// build has no such door: its parts come from a signed manifest alone.
+#[cfg(debug_assertions)]
+pub(crate) fn fetch_named_by_the_test(app: &AppHandle) {
+    let Ok(text) = std::env::var("YOAI_TEST_PARTS_AHEAD") else { return };
+    let Ok(list) = serde_json::from_str::<Vec<serde_json::Value>>(&text) else {
+        log::warn!("[update] TEST: YOAI_TEST_PARTS_AHEAD is not a list");
+        return;
+    };
+    let word = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    let parts: Vec<Part> = list
+        .iter()
+        .map(|v| Part { name: word(v, "name"), target: word(v, "target"), version: word(v, "version"), size: v.get("size").and_then(|x| x.as_u64()).unwrap_or(0), sha256: word(v, "sha256") })
+        .collect();
+    log::warn!("[update] TEST: fetching {} named part(s) ahead", parts.len());
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+        let n = fetch_ahead(&app, &parts).await;
+        log::info!("[update] TEST: {} part(s) fetched ahead", n);
+    });
+}
+
+#[cfg(not(debug_assertions))]
+pub(crate) fn fetch_named_by_the_test(_app: &AppHandle) {}
 
 #[cfg(test)]
 mod tests {

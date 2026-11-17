@@ -1053,6 +1053,7 @@ pub fn run() {
             // A helper the version before this one fetched ahead of the
             // update goes into place now, before any project can open.
             build_install::adopt_fetched_ahead(app.handle());
+            parts::fetch_named_by_the_test(app.handle());
             {
                 engine::expect_due_update(app.handle());
                 let app_for_engine = app.handle().clone();
