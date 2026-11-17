@@ -302,6 +302,21 @@ fn merge_ai_lists_island(
         if merged.iter().any(|l| l["id"] == b_id || l["restoredFromId"] == b_id) {
             continue;
         }
+        // The very same AI: the identity's entry carries this one's key as
+        // its founding key or its agent (a device that was used, then joined
+        // the identity it already held the keys of). Nothing to ask and
+        // nothing to add: its conversations go under that entry. Found live
+        // 2026-11-18: left to the look-alike rule below, it was added a
+        // second time under the same key.
+        if let Some(agent) = merged
+            .iter()
+            .find(|l| l["foundingKey"] == b_id || l["agentPubKey"] == b_id)
+            .and_then(|l| l["agentPubKey"].as_str().or(l["id"].as_str()).map(String::from))
+        {
+            folded.insert(b_id.to_string(), agent);
+            folded_n += 1;
+            continue;
+        }
         // An island starter that has been talked to is never joined to the
         // identity's on a guess, however alike they look: it arrives as its
         // own AI, and the person is asked whether the two are one
@@ -1358,6 +1373,26 @@ mod tests {
         assert_eq!(to_provision, vec!["id-b2"]);
         assert_eq!(merged[1]["name"], "Teresa");
         assert_eq!(merged[1]["foundingKey"], "id-b2", "under her own founding key");
+    }
+
+    #[test]
+    fn an_island_ai_that_is_the_identitys_own_is_not_added_twice() {
+        // The identity's Reeves on this device: founded under the key the
+        // island's Reeves has as its id, with this device's agent. They are
+        // one AI, talked to or not: its conversations go under the entry
+        // that is there, and no second Reeves appears.
+        let mut mine = serde_json::json!({ "id": "agent-here", "agentPubKey": "agent-here", "foundingKey": "key-1", "name": "Reeves", "baseArchetypeId": "reeves", "seedSlot": 3 });
+        let island = vec![serde_json::json!({ "id": "key-1", "agentPubKey": "key-1", "name": "Reeves", "baseArchetypeId": "reeves", "seedSlot": 3 })];
+        let (merged, to_provision, _, added, folded_n, folded) = super::merge_ai_lists_island(vec![mine.clone()], &island, &|_| true);
+        assert_eq!((added, folded_n, merged.len()), (0, 1, 1));
+        assert!(to_provision.is_empty());
+        assert_eq!(folded.get("key-1").map(String::as_str), Some("agent-here"));
+        // The same when the key is the entry's agent, and whatever it was renamed to.
+        mine["foundingKey"] = serde_json::json!("other");
+        mine["agentPubKey"] = serde_json::json!("key-1");
+        mine["name"] = serde_json::json!("Renamed");
+        let (merged, _, _, added, _, folded) = super::merge_ai_lists_island(vec![mine], &island, &|_| true);
+        assert_eq!((added, merged.len(), folded.get("key-1").map(String::as_str)), (0, 1, Some("key-1")));
     }
 
     #[test]
