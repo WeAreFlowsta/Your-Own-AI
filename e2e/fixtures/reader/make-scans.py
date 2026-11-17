@@ -82,6 +82,21 @@ for _ in range(60000):
 im = ImageEnhance.Contrast(im).enhance(0.8); im.save(f"{out}/4-photo.jpg", quality=38); im = Image.open(f"{out}/4-photo.jpg"); im.save(f"{out}/4-photo.png")
 truth["4-photo"] = " ".join(note)
 
+# 5. a statement over two pages: the figure asked about is on the second
+first = ["Fenwick Street Allotment Society", "Plot holder statement for 2026", "", "Plot 31, Mr Dariusz Halloran", "",
+ "This statement covers the year from 1 January to 31 December 2026.",
+ "Rent and water charges are listed on this page. Deposits, refunds and",
+ "the balance carried forward are on the second page.", "",
+ "Annual rent for a full plot: 58.00", "Water charge: 14.50", "Shed licence: 9.00", "",
+ "Charges for the year: 81.50", "", "Continued on page 2."]
+second = ["Fenwick Street Allotment Society", "Plot 31 statement, page 2", "",
+ "Key deposit held: 20.00", "Refund for the 2025 overpayment: 6.25", "Paid on 4 February 2026: 50.00", "",
+ "Balance carried forward: 312.75", "", "Please pay by 30 April 2026. Account 51904463, sort code 30-11-62.",
+ "Queries to the treasurer, Odalys Whitcombe."]
+im1, d = page(); lines(d, 130, 150, first, R); im2, d = page(); lines(d, 130, 150, second, R)
+im1.save(f"{out}/5-two-pages.pdf", save_all=True, append_images=[im2], resolution=150)
+truth["5-two-pages"] = " ".join(first + second)
+
 for n in ["1-letter", "2-invoice", "3-form", "4-photo"]:
     Image.open(f"{out}/{n}.png").convert("RGB").save(f"{out}/{n}.pdf", resolution=150)
 json.dump(truth, open(f"{out}/truth.json", "w"), indent=1)

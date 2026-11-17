@@ -9,3 +9,5 @@ draws them (Pillow, DejaVu fonts) and writes the text each page holds to
 - `3-form.png`: a filled-in form. Holds the postcode GL5 2HT.
 - `4-photo.jpg`: a poor phone photo of a notice: tilted, blurred, shadowed,
   grainy. Holds the date 18 June 2026.
+- `5-two-pages.pdf`: a statement over two pages, image only. The figure
+  312.75 is on the second page and nowhere on the first.
