@@ -22,13 +22,15 @@ jobs:
 
       # The tag must match the version the bundlers will stamp on the
       # installers, or the release page and the artifacts disagree.
-      - name: Check tag matches tauri.conf.json version
+      - name: Check the tag matches the three version files
         run: |
           CONF=$(jq -r .version src-tauri/tauri.conf.json)
           PKG=$(jq -r .version package.json)
+          # The start-up log line and the update check read this one.
+          CARGO=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
           TAG="${{ steps.version.outputs.version }}"
-          if [ "$CONF" != "$TAG" ] || [ "$PKG" != "$TAG" ]; then
-            echo "Tag ($TAG) != tauri.conf.json ($CONF) or package.json ($PKG) - bump both and retag"
+          if [ "$CONF" != "$TAG" ] || [ "$PKG" != "$TAG" ] || [ "$CARGO" != "$TAG" ]; then
+            echo "Tag ($TAG) != tauri.conf.json ($CONF), package.json ($PKG) or src-tauri/Cargo.toml ($CARGO) - bump all three and retag"
             exit 1
           fi
 
