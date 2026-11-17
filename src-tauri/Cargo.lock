@@ -2404,7 +2404,7 @@ dependencies = [
 [[package]]
 name = "flowsta-update-check"
 version = "0.1.0"
-source = "git+https://github.com/WeAreFlowsta/flowsta-update-check?rev=1e892e20aa577a3ece65945b3d8f0fd4b95532f6#1e892e20aa577a3ece65945b3d8f0fd4b95532f6"
+source = "git+https://github.com/WeAreFlowsta/flowsta-update-check?rev=a4f9a9d85a6acd36b20dd6b1f81e795eb86625e8#a4f9a9d85a6acd36b20dd6b1f81e795eb86625e8"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",

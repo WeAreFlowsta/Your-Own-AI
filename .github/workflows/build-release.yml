@@ -416,6 +416,28 @@ jobs:
             }
             await github.rest.repos.uploadReleaseAsset({ owner, repo, release_id, name, data: fs.readFileSync(name) });
 
+      # The parts this version needs beside the app (its NVIDIA engine, its
+      # Projects helper): the release tool reads this file into the signed
+      # manifest, so the version before can fetch them ahead of the update.
+      # One copy, from the Linux build; a unit test holds the file to the
+      # pins the app is compiled with.
+      - name: Publish the parts list
+        if: runner.os == 'Linux'
+        uses: actions/github-script@v8
+        env:
+          release_id: ${{ needs.create-release.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const { owner, repo } = context.repo;
+            const release_id = Number(process.env.release_id);
+            const name = 'parts.json';
+            const { data: assets } = await github.rest.repos.listReleaseAssets({ owner, repo, release_id, per_page: 100 });
+            for (const a of assets) {
+              if (a.name === name) await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: a.id });
+            }
+            await github.rest.repos.uploadReleaseAsset({ owner, repo, release_id, name, data: fs.readFileSync('src-tauri/parts.json') });
+
       - name: Dump Windows signing transcript on failure
         if: failure() && runner.os == 'Windows'
         shell: pwsh

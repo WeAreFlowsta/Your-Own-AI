@@ -49,6 +49,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   in place. Before, models ran on the standard engine until you pressed
   Update. If the download is slow, the model loads on the standard engine
   and moves across when the engine arrives.
+- An update can bring its NVIDIA engine and its Projects helper with it:
+  when a release names them, the app fetches the ones you have before it
+  offers "Restart to update", each checked against the release's signed
+  list, so the new version opens complete. A slow download does not hold
+  the update back.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.

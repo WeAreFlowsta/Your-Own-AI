@@ -71,7 +71,7 @@ log = "0.4"
 # The app's own updates: the updater plugin (Tauri's signature on the file)
 # and flowsta-update-check (the release manifest Team Flowsta signs).
 tauri-plugin-updater = "~2.12.0"
-flowsta-update-check = { git = "https://github.com/WeAreFlowsta/flowsta-update-check", rev = "1e892e20aa577a3ece65945b3d8f0fd4b95532f6" }
+flowsta-update-check = { git = "https://github.com/WeAreFlowsta/flowsta-update-check", rev = "a4f9a9d85a6acd36b20dd6b1f81e795eb86625e8" }
 url = "2"
 flowsta-hc-lines = { git = "https://github.com/WeAreFlowsta/flowsta-hc-lines", rev = "5bd26e78845b2bd2c007b8975f62c8b6aafa9c2a" }
 async-trait = "0.1"

@@ -156,6 +156,11 @@ struct Ready {
 }
 
 static READY: Mutex<Option<Ready>> = Mutex::new(None);
+/// The update is kept but its parts are still being fetched: the restart is
+/// not offered yet.
+static PARTS_PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// How long the restart waits for the new version's parts.
+const PARTS_WAIT: Duration = Duration::from_secs(10 * 60);
 /// Something the person should know that the updater cannot do for them
 /// (install another version first, an MSI install).
 static NOTICE: Mutex<Option<String>> = Mutex::new(None);
@@ -363,6 +368,7 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
         .await
         .map_err(|e| format!("the download failed or its updater signature did not verify: {}", e))?;
     check_file(&file, &bytes).map_err(|e| format!("the download is not the file the manifest names: {}", e))?;
+    let parts = release.parts.clone();
     let said = format!("{} ready: installs at \"Restart to update\"{}", release.version, if INSTALLS_FIRST { "" } else { " or on quit" });
     let ready = Ready {
         update,
@@ -374,7 +380,24 @@ async fn check_once(app: &tauri::AppHandle, data_dir: &Path) -> Result<String, S
         sequence: release.sequence,
     };
     let info = ReadyInfo::of(&ready);
+    // The parts the new version needs (its NVIDIA engine, its Projects
+    // helper), for someone who has them: fetched now, so the new version
+    // starts complete. The update is kept from this moment (a quit installs
+    // it), and the restart is offered when the parts are in place, or after
+    // `PARTS_WAIT` if they are slow: the fetch then carries on by itself and
+    // the new version finishes whatever is missing at its first start.
+    PARTS_PENDING.store(!parts.is_empty(), std::sync::atomic::Ordering::SeqCst);
     *READY.lock().unwrap() = Some(ready);
+    if !parts.is_empty() {
+        let fetch_app = app.clone();
+        let fetch = tauri::async_runtime::spawn(async move { crate::parts::fetch_ahead(&fetch_app, &parts).await });
+        match tokio::time::timeout(PARTS_WAIT, fetch).await {
+            Ok(Ok(n)) if n > 0 => log::info!("[update] {} part(s) of the new version are in place", n),
+            Ok(_) => {}
+            Err(_) => log::info!("[update] the new version's parts are still downloading after {} min: the restart is offered now", PARTS_WAIT.as_secs() / 60),
+        }
+        PARTS_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
     let _ = app.emit("update-ready", info);
     Ok(said)
 }
@@ -477,7 +500,7 @@ fn status_of(data_dir: &Path) -> UpdateStatus {
         auto: saved.auto(),
         channel: channels_for(env!("CARGO_PKG_VERSION"))[0].into(),
         version: env!("CARGO_PKG_VERSION").into(),
-        ready: READY.lock().unwrap().as_ref().map(ReadyInfo::of),
+        ready: READY.lock().unwrap().as_ref().filter(|_| !PARTS_PENDING.load(std::sync::atomic::Ordering::SeqCst)).map(ReadyInfo::of),
         waiting: WAITING.lock().unwrap().clone(),
         notice: NOTICE.lock().unwrap().clone(),
         updated,

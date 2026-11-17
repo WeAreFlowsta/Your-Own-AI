@@ -63,6 +63,7 @@ mod model_caps;            // capability registry (benchmark-informed scores)
 mod process_ext;           // sidecar spawn and stop (flowsta-hc-lines): hidden consoles, tied to the app
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod updater;               // the app's own updates: signed manifest, download, restart to update
+mod parts;                 // the parts a release needs beside the app: fetched ahead of an update
 mod clipboard;
 mod skills;               // Add-ons > Skills: SKILL.md folders the AIs read
 mod webview_env;          // the webview's platform fix (Linux, NVIDIA) never reaches a child program
@@ -1049,6 +1050,10 @@ pub fn run() {
             // model (engine.rs, "The engine as an update's last step"). The
             // capability read comes first: an engine the card cannot run is
             // not fetched.
+            // A helper the version before this one fetched ahead of the
+            // update goes into place now, before any project can open.
+            build_install::adopt_fetched_ahead(app.handle());
+            parts::fetch_named_by_the_test(app.handle());
             {
                 engine::expect_due_update(app.handle());
                 let app_for_engine = app.handle().clone();

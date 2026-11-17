@@ -85,9 +85,7 @@ fn check_archive(path: &std::path::Path, expected: &str) -> Result<(), String> {
 }
 
 fn platform_asset() -> Option<String> {
-    let label = platform_label()?;
-    let ext = if std::env::consts::OS == "windows" { "zip" } else { "tar.gz" };
-    Some(format!("your-own-ai-build-{}-{}.{}", version(), label, ext))
+    asset_for(version())
 }
 
 fn binary_name() -> &'static str {
@@ -312,37 +310,53 @@ pub async fn ensure_build_agent(
 
 /// `quiet`: a background fetch, whose failure raises no error row.
 async fn download_and_install(app: &AppHandle, quiet: bool) -> Result<String, String> {
-    let archive = platform_asset().ok_or("No build is available for this platform yet")?;
-    let url = format!(
-        "https://github.com/{}/releases/download/{}/{}",
-        BUILD_REPO, BUILD_RELEASE_TAG, archive
-    );
+    let expected = platform_label().and_then(pinned_sha256).ok_or("No build is available for this platform yet")?;
+    let final_dir = install_dir(app)?;
+    let partial = final_dir.with_extension("partial");
+    fetch_and_unpack(app, version(), expected, &partial, quiet).await?;
+    let _ = std::fs::remove_dir_all(&final_dir);
+    std::fs::rename(&partial, &final_dir).map_err(|e| format!("cannot finalize install: {}", e))?;
+    let path = final_dir.join(binary_name()).display().to_string();
+    log::info!("[build] installed Your Own AI Build {} at {}", version(), path);
+    Ok(path)
+}
+
+/// This platform's archive name at a version.
+fn asset_for(version: &str) -> Option<String> {
+    let label = platform_label()?;
+    let ext = if std::env::consts::OS == "windows" { "zip" } else { "tar.gz" };
+    Some(format!("your-own-ai-build-{}-{}.{}", version, label, ext))
+}
+
+/// Download a version's archive, check it against `expected` (its SHA-256)
+/// and unpack it into `dest` with its VERSION marker. `dest` is left absent
+/// on any failure.
+async fn fetch_and_unpack(app: &AppHandle, version: &str, expected: &str, dest: &std::path::Path, quiet: bool) -> Result<(), String> {
+    let archive = asset_for(version).ok_or("No build is available for this platform yet")?;
+    let url = format!("https://github.com/{}/releases/download/v{}/{}", BUILD_REPO, version, archive);
     if quiet {
         crate::llm::download_model_inner(app.clone(), url, archive.clone()).await?;
     } else {
         crate::llm::download_model(app.clone(), url, archive.clone(), None).await?;
     }
-
     let archive_path = crate::llm::get_models_dir(app)?.join(&archive);
-    let final_dir = install_dir(app)?;
-    let partial = final_dir.with_extension("partial");
-    let _ = std::fs::remove_dir_all(&partial);
-    std::fs::create_dir_all(&partial).map_err(|e| format!("cannot create install dir: {}", e))?;
-
-    let expected = platform_label().and_then(pinned_sha256).ok_or("No build is available for this platform yet")?;
+    let _ = std::fs::remove_dir_all(dest);
+    std::fs::create_dir_all(dest).map_err(|e| format!("cannot create install dir: {}", e))?;
     if let Err(e) = check_archive(&archive_path, expected) {
         let _ = std::fs::remove_file(&archive_path);
-        let _ = std::fs::remove_dir_all(&partial);
+        let _ = std::fs::remove_dir_all(dest);
         return Err(e);
     }
-    let extract_result = extract_archive(&archive_path, &partial);
+    let extract_result = extract_archive(&archive_path, dest);
     // The archive is an installer artifact - clean it up either way.
     let _ = std::fs::remove_file(&archive_path);
-    extract_result?;
-
-    let binary = partial.join(binary_name());
+    if let Err(e) = extract_result {
+        let _ = std::fs::remove_dir_all(dest);
+        return Err(e);
+    }
+    let binary = dest.join(binary_name());
     if !binary.is_file() {
-        let _ = std::fs::remove_dir_all(&partial);
+        let _ = std::fs::remove_dir_all(dest);
         return Err("archive did not contain the agent".to_string());
     }
     #[cfg(unix)]
@@ -351,17 +365,96 @@ async fn download_and_install(app: &AppHandle, quiet: bool) -> Result<String, St
         std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("cannot mark executable: {}", e))?;
     }
-    let _ = std::fs::remove_dir_all(&final_dir);
-    std::fs::rename(&partial, &final_dir).map_err(|e| format!("cannot finalize install: {}", e))?;
     // Version marker - what update detection reads. A failed write is
     // tolerated (the install still works); the version then reads as the
-    // pre-marker 0.1.0 and the next update offer simply re-downloads.
-    if let Err(e) = std::fs::write(final_dir.join("VERSION"), version()) {
+    // pre-marker 0.1.0 and the next check simply fetches it again.
+    if let Err(e) = std::fs::write(dest.join("VERSION"), version) {
         log::warn!("[build] could not write version marker: {}", e);
     }
-    let path = final_dir.join(binary_name()).display().to_string();
-    log::info!("[build] installed Your Own AI Build {} at {}", version(), path);
-    Ok(path)
+    Ok(())
+}
+
+// --- Fetched ahead of an update ------------------------------------------
+//
+// A release's signed manifest names the helper the new version needs
+// (`parts`). The version doing the updating fetches it before it offers the
+// restart and keeps it beside the installed one (`build.next`); the new
+// version puts it in place at its first start, before any project opens.
+
+/// The part's name in a release manifest.
+pub(crate) const PART_NAME: &str = "projects-helper";
+
+fn staged_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    Ok(install_dir(app)?.with_extension("next"))
+}
+
+fn staged_version(app: &AppHandle) -> Option<String> {
+    let dir = staged_dir(app).ok()?;
+    dir.join(binary_name()).is_file().then(|| std::fs::read_to_string(dir.join("VERSION")).ok().map(|s| s.trim().to_string())).flatten()
+}
+
+/// Should this install fetch the named helper ahead of the update? Only
+/// for someone who has the helper and did not remove it, when it is another
+/// version than the installed one and not staged already.
+pub(crate) fn wants_ahead(app: &AppHandle, target: &str, version: &str) -> bool {
+    platform_label() == Some(target)
+        && !was_removed(app)
+        && matches!(installed_version(app), Some(v) if v != version)
+        && staged_version(app).as_deref() != Some(version)
+}
+
+/// Fetch the named helper version, check it against the hash the signed
+/// manifest gives, and keep it for the new version. Quiet.
+pub(crate) async fn fetch_ahead(app: &AppHandle, version: &str, sha256: &str) -> Result<(), String> {
+    if DOWNLOADING.swap(true, Ordering::SeqCst) {
+        return Err("a helper download is already running".to_string());
+    }
+    let result = async {
+        let staged = staged_dir(app)?;
+        let partial = staged.with_extension("next-partial");
+        fetch_and_unpack(app, version, sha256, &partial, true).await?;
+        let _ = std::fs::remove_dir_all(&staged);
+        std::fs::rename(&partial, &staged).map_err(|e| format!("cannot keep the fetched helper: {e}"))
+    }
+    .await;
+    DOWNLOADING.store(false, Ordering::SeqCst);
+    if result.is_ok() {
+        log::info!("[build] Your Own AI Build {} is in place for the update", version);
+    }
+    result
+}
+
+/// At start, before any project can open: a helper fetched ahead by the
+/// version before this one, at the version this one pins, goes into place.
+/// One for any other version is of no use and goes. Returns whether the
+/// helper was replaced.
+pub(crate) fn adopt_fetched_ahead(app: &AppHandle) -> bool {
+    let (Ok(staged), Ok(final_dir)) = (staged_dir(app), install_dir(app)) else { return false };
+    if !staged.exists() {
+        return false;
+    }
+    if staged_version(app).as_deref() != Some(version()) || was_removed(app) {
+        let _ = std::fs::remove_dir_all(&staged);
+        return false;
+    }
+    let _ = std::fs::remove_dir_all(&final_dir);
+    match std::fs::rename(&staged, &final_dir) {
+        Ok(()) => {
+            log::info!("[build] Your Own AI Build {} was fetched before the update: in place", version());
+            true
+        }
+        Err(e) => {
+            log::warn!("[build] the helper fetched before the update could not be put in place ({e}); the next check fetches it");
+            false
+        }
+    }
+}
+
+/// The pinned helper as release manifests name it: (target, version,
+/// sha256) for each platform with a build. `parts.json` must say the same.
+#[cfg(test)]
+pub(crate) fn pinned_parts() -> Vec<(String, String, String)> {
+    BUILD_ARCHIVE_SHA256.iter().map(|(l, h)| (l.to_string(), version().to_string(), h.to_string())).collect()
 }
 
 /// Flatten-extract: entries land by BASENAME (the archives wrap everything
