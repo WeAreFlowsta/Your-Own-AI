@@ -47,6 +47,16 @@ const CUDA_ZIP_BYTES: &[(&str, u64)] = &[
     ("x86_64-pc-windows-msvc", 790_346_417),
 ];
 
+/// The pinned engine as release manifests name it: (target, version, size,
+/// sha256) for each platform with a build. `parts.json` must say the same.
+#[cfg(test)]
+pub(crate) fn pinned_parts() -> Vec<(String, String, u64, String)> {
+    CUDA_ZIP_SHA256
+        .iter()
+        .map(|(t, h)| (t.to_string(), tag_version().to_string(), CUDA_ZIP_BYTES.iter().find(|(bt, _)| bt == t).map(|(_, b)| *b).unwrap_or(0), h.to_string()))
+        .collect()
+}
+
 fn cuda_zip_bytes() -> Option<u64> {
     let triple = cuda_triple()?;
     CUDA_ZIP_BYTES.iter().find(|(t, _)| *t == triple).map(|(_, b)| *b)
@@ -427,10 +437,70 @@ pub fn arriving() -> bool {
     ARRIVING.load(Ordering::SeqCst)
 }
 
+// --- Fetched ahead of an update ------------------------------------------
+//
+// A release's signed manifest names the engine the new version needs
+// (`parts`). The version doing the updating fetches it before it offers the
+// restart, into that engine's own versioned folder: this version ignores
+// the folder, and the new one finds its engine in place at its first start.
+
+/// The part's name in a release manifest.
+pub(crate) const PART_NAME: &str = "nvidia-engine";
+/// In an engine folder fetched ahead of an update, until the version that
+/// pins it starts.
+const AHEAD_MARK: &str = "fetched-ahead";
+
+/// Should this install fetch the named engine ahead of the update? Only for
+/// someone who has an NVIDIA engine installed, on a card that can run it,
+/// when it is another version than this one's and not there already.
+pub(crate) fn wants_ahead(app: &AppHandle, target: &str, version: &str) -> bool {
+    cuda_triple() == Some(target)
+        && version != tag_version()
+        && (cuda_engine_binary(app).is_some() || other_cuda_version_installed(app))
+        && cuda_gpu_supported()
+        && !engines_dir(app).map(|d| d.join(format!("cuda-{version}")).join(server_binary_name()).exists()).unwrap_or(true)
+}
+
+/// Fetch the named engine version, check it against the hash the signed
+/// manifest gives, and unpack it into its own folder. Quiet.
+pub(crate) async fn fetch_ahead(app: &AppHandle, version: &str, sha256: &str) -> Result<(), String> {
+    let triple = cuda_triple().ok_or("unsupported_platform")?;
+    // The address is built here from the version alone (plain words only,
+    // checked by the manifest's reader): the manifest cannot name another.
+    let url = format!("https://github.com/{ENGINE_RELEASE_REPO}/releases/download/llama-{version}/llama-server-cuda-{version}-{triple}.zip");
+    let zip_name = format!("llama-server-cuda-{version}.zip");
+    crate::llm::download_model(app.clone(), url, zip_name.clone(), Some(true)).await?;
+    let zip_path = crate::llm::get_models_dir(app)?.join(&zip_name);
+    let result = match sha256_file(&zip_path) {
+        Ok(actual) if actual == sha256 => install_cuda_zip_as(app, &zip_name, version),
+        Ok(actual) => Err(format!("the engine download's SHA-256 is {actual}, the manifest names {sha256}: not installed")),
+        Err(e) => Err(e),
+    };
+    let _ = std::fs::remove_file(&zip_path);
+    result?;
+    let dir = engines_dir(app)?.join(format!("cuda-{version}"));
+    std::fs::write(dir.join(AHEAD_MARK), b"").map_err(|e| format!("could not mark the engine folder: {e}"))?;
+    log::info!("[Engine] the NVIDIA engine {} is in place for the update", version);
+    Ok(())
+}
+
+/// At start: the pinned engine was fetched ahead by the version before this
+/// one. It is this version's engine now, and the earlier ones go.
+fn settle_fetched_ahead(app: &AppHandle) {
+    let Ok(dir) = cuda_engine_dir(app) else { return };
+    let mark = dir.join(AHEAD_MARK);
+    if cuda_engine_binary(app).is_some() && mark.exists() {
+        let _ = std::fs::remove_file(&mark);
+        log::info!("[Engine] the NVIDIA engine for this version was fetched before the update: in place");
+        remove_other_cuda_versions(app, false);
+    }
+}
+
 /// In setup, before the page can ask for a model: note that the engine is
 /// on its way, so the first load waits for it. `fetch_due_update` follows
 /// once the graphics card's generation has been read.
 pub fn expect_due_update(app: &AppHandle) {
+    settle_fetched_ahead(app);
     if !update_due(app) || ARRIVING.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -522,17 +592,22 @@ pub async fn wait_while_arriving(app: &AppHandle) {
 /// killed mid-extract can never leave a half-engine that the presence check
 /// would activate.
 fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
+    install_cuda_zip_as(app, zip_name, tag_version())
+}
+
+/// The same, into the folder of a named engine version (`fetch_ahead`).
+fn install_cuda_zip_as(app: &AppHandle, zip_name: &str, version: &str) -> Result<(), String> {
     let zip_path = crate::llm::get_models_dir(app)?.join(zip_name);
     let file = std::fs::File::open(&zip_path)
         .map_err(|e| format!("engine zip missing after download: {}", e))?;
     let mut archive =
         zip::ZipArchive::new(file).map_err(|e| format!("bad engine zip: {}", e))?;
 
-    let final_dir = cuda_engine_dir(app)?;
+    let final_dir = engines_dir(app)?.join(format!("cuda-{}", version));
     let dir = final_dir
         .parent()
         .ok_or("engine dir has no parent")?
-        .join(format!("cuda-{}.partial", tag_version()));
+        .join(format!("cuda-{}.partial", version));
     let _ = std::fs::remove_dir_all(&dir); // stale partial from a killed run
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create engine dir: {}", e))?;
 
@@ -578,12 +653,21 @@ fn install_cuda_zip(app: &AppHandle, zip_name: &str) -> Result<(), String> {
 }
 
 fn remove_stale_cuda_versions(app: &AppHandle) {
+    remove_other_cuda_versions(app, true)
+}
+
+/// Every engine folder but the pinned one goes. `keep_ahead`: except one
+/// fetched ahead for a version of the app that is not installed yet.
+fn remove_other_cuda_versions(app: &AppHandle, keep_ahead: bool) {
     let Ok(dir) = engines_dir(app) else { return };
     let current = format!("cuda-{}", tag_version());
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for e in entries.flatten() {
         let name = e.file_name();
         let Some(n) = name.to_str() else { continue };
+        if keep_ahead && e.path().join(AHEAD_MARK).exists() {
+            continue;
+        }
         if n.starts_with("cuda-") && n != current {
             let _ = std::fs::remove_dir_all(e.path());
             log::info!("[Engine] removed stale CUDA engine {}", n);
