@@ -220,19 +220,30 @@ fn merge_ai_lists(
             entry["foundingKey"] = serde_json::json!(b_id);
         }
 
+        // A starter here that has never been talked to gives way to the
+        // backup's AI in the same starter slot, whatever the wizard did to
+        // it on this device (the Work set gives all three one personality,
+        // and matching by personality then stood five AIs where three
+        // belong). Where either side carries no slot stamp (seeded before
+        // the stamp), the personality decides, as it did.
         let b_arch = b["baseArchetypeId"].as_str().unwrap_or("");
-        let replace_idx = if DEFAULT_ARCHETYPES.contains(&b_arch) {
-            merged.iter().position(|l| {
-                l["baseArchetypeId"] == b_arch
-                    && l["restoredFromId"].is_null()
-                    && l["agentPubKey"]
-                        .as_str()
-                        .map(|k| conv_counts.get(k).copied().unwrap_or(0) == 0)
-                        .unwrap_or(true)
-            })
-        } else {
-            None
+        let b_slot = b["seedSlot"].as_u64();
+        let unused = |l: &serde_json::Value| {
+            l["restoredFromId"].is_null()
+                && l["agentPubKey"]
+                    .as_str()
+                    .map(|k| conv_counts.get(k).copied().unwrap_or(0) == 0)
+                    .unwrap_or(true)
         };
+        let by_slot = b_slot.and_then(|slot| merged.iter().position(|l| l["seedSlot"].as_u64() == Some(slot) && unused(l)));
+        let replace_idx = by_slot.or_else(|| {
+            if !DEFAULT_ARCHETYPES.contains(&b_arch) {
+                return None;
+            }
+            merged.iter().position(|l| {
+                (b_slot.is_none() || l["seedSlot"].is_null()) && l["baseArchetypeId"] == b_arch && unused(l)
+            })
+        });
 
         match replace_idx {
             Some(i) => {
@@ -1474,6 +1485,31 @@ mod tests {
         assert_eq!(replaced_local.get("K2").map(String::as_str), Some("local-1"));
         assert_eq!(merged.len(), 3);
         assert!(merged.iter().any(|a| a["restoredFromId"] == "K2"));
+    }
+
+    #[test]
+    fn an_unused_starter_gives_way_by_its_slot_after_the_wizard_changed_it() {
+        // This device's wizard set the Work names: all three on one
+        // personality. The backup holds the identity's three, one of them
+        // renamed. Each takes the place of the starter in its slot: three
+        // AIs, not five.
+        let work = |slot: u64, agent: &str, name: &str| serde_json::json!({ "id": agent, "agentPubKey": agent, "seedSlot": slot, "baseArchetypeId": "reeves", "name": name });
+        let local = vec![work(1, "B1", "Assistant"), work(2, "B2", "Coder"), work(3, "B3", "Analyst")];
+        let backup = vec![
+            serde_json::json!({ "id": "K1", "seedSlot": 1, "baseArchetypeId": "veebo", "name": "Maya" }),
+            serde_json::json!({ "id": "K2", "seedSlot": 2, "baseArchetypeId": "teresa", "name": "Teresa" }),
+            serde_json::json!({ "id": "K3", "seedSlot": 3, "baseArchetypeId": "reeves", "name": "Reeves" }),
+        ];
+        let (merged, _, replaced_local, added, replaced) = merge_ai_lists(local.clone(), &backup, &HashMap::new());
+        assert_eq!((replaced, added, merged.len()), (3, 0, 3));
+        assert_eq!(merged.iter().map(|a| a["name"].as_str().unwrap()).collect::<Vec<_>>(), vec!["Maya", "Teresa", "Reeves"]);
+        assert_eq!(replaced_local.get("K1").map(String::as_str), Some("B1"));
+
+        // One that has been talked to here stays; the backup's stands beside it.
+        let counts = HashMap::from([("B1".to_string(), 2u64)]);
+        let (merged, _, _, added, replaced) = merge_ai_lists(local, &backup, &counts);
+        assert_eq!((replaced, added, merged.len()), (2, 1, 4));
+        assert_eq!(merged[0]["name"], "Assistant", "the used one is untouched");
     }
 
     #[test]

@@ -50,6 +50,10 @@ export interface UserDefinedAI {
    *  Names and personalities change (the Work set, the wizard), so this is the only stable way to
    *  fold one install's starters into another's when the person signs in on a second device. */
   seedSlot?: 1 | 2 | 3;
+  /** ms epoch when this install seeded the starter - stamped once, never edited. Of two installs'
+   *  starters that have never been talked to, the one seeded first is the identity's AI; the
+   *  other gives way to it. Absent on starters seeded before the stamp existed (the earliest). */
+  seededAt?: number;
   archivedAt?: number;  // ms epoch when the AI was archived (set on archive, cleared on restore)
 }
 

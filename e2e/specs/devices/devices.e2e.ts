@@ -28,6 +28,38 @@ async function aiList() {
   }, await invoke<string>("profile_store_path", { name: "ai-data.json" })) as Promise<{ name: string; agent: string; founding: string }[]>;
 }
 
+const WORK_NAMES = ["Assistant", "Coder", "Analyst"];
+
+/** As the wizard's Work set does to a fresh install's three starters: new
+ *  names, one personality, an edit stamped now. Only while they are still
+ *  this device's own untouched starters (their keys settled, nothing taken
+ *  from another device yet); returns the names written, or why not. */
+async function setWorkNamesOnFreshStarters(): Promise<string[] | string> {
+  const path = await invoke<string>("profile_store_path", { name: "ai-data.json" });
+  for (let i = 0; i < 40; i++) {
+    const out = await browser.execute(async (p: string, names: string[]) => {
+      const t = (window as any).__TAURI__;
+      const store = await t.store.load(p);
+      const ais = ((await store.get("custom-ais")) || []) as any[];
+      const starters = ais.filter((a) => a.seedSlot).sort((a, b) => a.seedSlot - b.seedSlot);
+      if (starters.length !== 3) return "waiting: three starters";
+      if (starters.some((a) => !a.agentPubKey || a.id !== a.agentPubKey)) return "waiting: their keys";
+      if (starters.some((a) => a.foundingKey && a.foundingKey !== a.agentPubKey)) return "too late: already the identity's AIs";
+      starters.forEach((a, n) => {
+        a.name = names[n];
+        a.baseArchetypeId = "reeves";
+        a.updatedAt = Date.now();
+      });
+      await store.set("custom-ais", ais);
+      await store.save();
+      return starters.map((a) => a.name);
+    }, path, WORK_NAMES);
+    if (Array.isArray(out) || out.startsWith("too late")) return out;
+    await new Promise((r) => setTimeout(r, 1_000));
+  }
+  return "the starters never settled";
+}
+
 const escrow = () => invoke<{ state: string }>("vault_escrow_sync");
 const bodyText = () => browser.execute(() => document.body.innerText);
 
@@ -111,6 +143,15 @@ describe(`devices, phase ${PHASE}`, () => {
         expect(ok.status).toBe(200);
       }
     } else if (PHASE === "b") {
+      // What the wizard does on a second computer before it has met the
+      // identity's AIs: the three starters become the Work set (new names,
+      // one personality, an edit stamped now). Done at once, ahead of the
+      // first sync round (40 s after start). These starters have never been
+      // talked to, so they must give way to A's AIs all the same, and the
+      // Work names must never reach A (phase d reads A's list).
+      const workSet = process.env.DEVICES_B_EARLIER === "1" ? null : await setWorkNamesOnFreshStarters();
+      console.log(`e2e: B's starters set to the Work set before the first sync: ${JSON.stringify(workSet)}`);
+      if (process.env.DEVICES_B_EARLIER !== "1") expect(workSet).toEqual(WORK_NAMES);
       await waitForChat();
       const st = await escrow();
       console.log(`e2e: escrow ${JSON.stringify(st)}`);
@@ -144,6 +185,12 @@ describe(`devices, phase ${PHASE}`, () => {
       console.log(`e2e: B's AIs ${JSON.stringify(ais)}`);
       const renamed = ais.find((a: any) => a.name === NAME);
       expect(renamed).toBeDefined();
+      // The wizard's Work set gave way in every slot: A's three AIs are
+      // here under A's names, and nothing stands beside them.
+      const namesOnB = ais.map((a: any) => a.name as string);
+      for (const w of WORK_NAMES) expect(namesOnB).not.toContain(w);
+      expect(ais.length).toBe(3);
+      expect(ais.every((a: any) => a.founding !== a.agent)).toBe(true);
       expect(renamed.agent.length).toBeGreaterThan(0);
       expect(renamed.founding).not.toBe(renamed.agent);
       // A's rule, with A off: folded from A's manifest copy into this
@@ -356,6 +403,14 @@ describe(`devices, phase ${PHASE}`, () => {
       // A's conversation (on a mixed run, from a device on an earlier release).
       const started = Date.now();
       await waitForChat();
+      // B's wizard had set its starters to the Work set before it met these
+      // AIs (phase b), and B has been online with A since. A's AIs are A's:
+      // its renamed one, none of the Work names, and none added beside them.
+      const onA = (await aiList()).map((a) => a.name);
+      console.log(`e2e: A's AIs after B joined: ${JSON.stringify(onA)}`);
+      expect(onA).toContain(NAME);
+      for (const w of WORK_NAMES) expect(onA).not.toContain(w);
+      expect(onA.length).toBe(3);
       await (await $('button[title^="Conversations"]')).click();
       const listed = () => browser.execute(() => [...document.querySelectorAll('[data-testid="conversation-item"]')].some((d) => (d as HTMLElement).innerText.includes("Devices test")));
       await browser.waitUntil(listed, { timeout: 60_000, timeoutMsg: "A's drawer never listed the devices conversation" });
