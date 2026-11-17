@@ -52,10 +52,13 @@ describe("memory work for an AI set to an online model", () => {
       const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: "Bearer local", ...headers },
-        body: JSON.stringify({ model: ai, messages: [{ role: "user", content: "In one short sentence: the session moved the release notes into the changelog." }], max_tokens: 48, stream: false }),
+        body: JSON.stringify({ model: ai, messages: [{ role: "user", content: "In one short sentence: the session moved the release notes into the changelog." }], max_tokens: 400, stream: false }),
       });
       const j = (await r.json().catch(() => null)) as any;
-      return { status: r.status, text: String(j?.choices?.[0]?.message?.content ?? ""), error: j?.error ?? null };
+      // A model whose template always thinks may put a short answer in its
+      // reasoning with the content empty: either is the local model answering.
+      const m = j?.choices?.[0]?.message;
+      return { status: r.status, text: String(m?.content || m?.reasoning_content || ""), error: j?.error ?? null };
     };
     const MEMORY = { "X-Your-Own-AI-Task": "memory-prose", "X-Your-Own-AI-Online-Share": "local" };
 

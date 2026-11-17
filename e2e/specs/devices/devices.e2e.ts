@@ -149,9 +149,14 @@ describe(`devices, phase ${PHASE}`, () => {
       // first sync round (40 s after start). These starters have never been
       // talked to, so they must give way to A's AIs all the same, and the
       // Work names must never reach A (phase d reads A's list).
-      const workSet = process.env.DEVICES_B_EARLIER === "1" ? null : await setWorkNamesOnFreshStarters();
-      console.log(`e2e: B's starters set to the Work set before the first sync: ${JSON.stringify(workSet)}`);
-      if (process.env.DEVICES_B_EARLIER !== "1") expect(workSet).toEqual(WORK_NAMES);
+      // Only on a build that has the rule: an earlier release as device B
+      // (a mixed run, the reattach run's 0.9.0 phases) keeps the wizard's
+      // names over A's, which is the fault this covers, not a failure of it.
+      // Such a build is known by a command it does not have.
+      const hasTheRule = process.env.DEVICES_B_EARLIER !== "1" && (await invoke("ai_pairing").then(() => true, () => false));
+      const workSet = hasTheRule ? await setWorkNamesOnFreshStarters() : null;
+      console.log(`e2e: B's starters set to the Work set before the first sync: ${JSON.stringify(workSet)}${hasTheRule ? "" : " (an earlier release: not tried)"}`);
+      if (hasTheRule) expect(workSet).toEqual(WORK_NAMES);
       await waitForChat();
       const st = await escrow();
       console.log(`e2e: escrow ${JSON.stringify(st)}`);
@@ -188,9 +193,11 @@ describe(`devices, phase ${PHASE}`, () => {
       // The wizard's Work set gave way in every slot: A's three AIs are
       // here under A's names, and nothing stands beside them.
       const namesOnB = ais.map((a: any) => a.name as string);
-      for (const w of WORK_NAMES) expect(namesOnB).not.toContain(w);
-      expect(ais.length).toBe(3);
-      expect(ais.every((a: any) => a.founding !== a.agent)).toBe(true);
+      if (hasTheRule) {
+        for (const w of WORK_NAMES) expect(namesOnB).not.toContain(w);
+        expect(ais.length).toBe(3);
+        expect(ais.every((a: any) => a.founding !== a.agent)).toBe(true);
+      }
       expect(renamed.agent.length).toBeGreaterThan(0);
       expect(renamed.founding).not.toBe(renamed.agent);
       // A's rule, with A off: folded from A's manifest copy into this
