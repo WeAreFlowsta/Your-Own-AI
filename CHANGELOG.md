@@ -40,6 +40,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   it. A photo of anything else stays a picture.
 - Quitting while a document is being read stops the reader with the app.
   Its engine could stay running, holding memory, until the next start.
+- Linux: quitting no longer brings up the desktop's crash report dialog.
+  The page's own process could fail in its clean-up a second after a
+  clean quit; the app now ends it as its last step.
 - **Up to four images on one message.** Two or more images on one
   message no longer stop the engine.
 - The built-in scanned-PDF reader's card says Installed once it is, and
