@@ -118,7 +118,10 @@ describe("background work on a busy computer", () => {
     // the answer is the last line.
     const answer = r.text.trim().split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? "";
     console.log(`e2e: ${at()}: a reply answered in ${Math.round((Date.now() - asked) / 1000)} s while the other program ran: ${answer.slice(0, 80)}`);
-    expect(answer).toMatch(/pacific|atlantic|indian|arctic|southern/i);
+    // What is tested is that a reply comes while the computer is busy, not
+    // what a small model knows: one answered "Oceans." (11-17).
+    expect(answer).toMatch(/[a-z]{3,}/i);
+    expect(answer).not.toMatch(/problem on our side|stopped while it was answering|went wrong/i);
     await shot("busy-reply");
     // Long enough for the timer's next look (every 5 minutes while held).
     await browser.waitUntil(async () => (await status()).held.some(([j]) => j === FOLDER_JOB) && Date.now() - asked > 330_000, {
