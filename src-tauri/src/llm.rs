@@ -2827,6 +2827,26 @@ pub async fn reload_for_engine_change(
         }
     }
     let with_vision = state.current_mmproj.lock().await.is_some();
+    // A reply being written is on the engine about to be replaced: the
+    // reload would restart the server under it and cut the reply off. A
+    // load of another model waits for such a turn (load_model_inner); this
+    // one reloads the same model, so it waits here, for as long.
+    let waited = std::time::Instant::now();
+    let mut said = false;
+    while FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst) > 0 && waited.elapsed() < FOREGROUND_SWAP_WAIT {
+        if !said {
+            log::info!("[LLM] engine change - the reload of '{}' waits for the reply being written", cur);
+            said = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    if said {
+        log::info!(
+            "[LLM] engine change - going ahead after {} ms ({} turn(s) left)",
+            waited.elapsed().as_millis(),
+            FOREGROUND_TURNS.load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
     log::info!("[LLM] engine change - reloading '{}' now so it applies", cur);
     FORCE_RELOAD_NEXT.store(true, std::sync::atomic::Ordering::SeqCst);
     load_model(app, state, cur, with_vision, "engine-switch".into()).await

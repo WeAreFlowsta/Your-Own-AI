@@ -53,6 +53,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The update is checked twice before it installs: the release is listed
   in a manifest signed by Flowsta, and the download must match both its
   signature and the size and fingerprint the manifest names.
+- Windows: when the NVIDIA engine finishes installing after an update, a
+  reply that is being written finishes first. The engine used to restart
+  under it.
+- Windows: the update's installer waits for the program file to be free
+  before it writes it. It could stop at "Error opening file for writing".
 - The Projects helper is v0.4.3 (security updates to the libraries it is
   built with). Its download is checked against the fingerprint this
   version of Your Own AI was built for before anything is installed.
