@@ -1223,6 +1223,12 @@ pub fn run() {
                 // (Windows, macOS); everything stops first.
                 updater::install_on_quit(app_handle, &profile::device_root(app_handle).unwrap_or_default());
                 stop_everything(app_handle);
+                // Linux: the page's processes end here, not in their own
+                // clean-up (see `end_page_processes`).
+                let ended = webview_env::end_page_processes();
+                if ended > 0 {
+                    log::info!("[exit] ended {} page process(es)", ended);
+                }
             }
         });
 }
