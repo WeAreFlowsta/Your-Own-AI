@@ -54,6 +54,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   offers "Restart to update", each checked against the release's signed
   list, so the new version opens complete. A slow download does not hold
   the update back.
+- The Projects helper is now a signed program on Windows and macOS (Your
+  Own AI Build 0.4.4), and from this version it is installed by itself
+  there too.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.
