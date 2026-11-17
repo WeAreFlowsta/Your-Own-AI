@@ -320,8 +320,8 @@ export default component$(() => {
     }
   });
 
-  const applyPreset$ = $(async (kind: DefaultAiPreset) => {
-    if (applying.value || preset.value === kind) return;
+  const applyPreset$ = $(async (kind: DefaultAiPreset, again = false) => {
+    if (applying.value || (preset.value === kind && !again)) return;
     applying.value = true;
     preset.value = kind;
     try {
@@ -378,7 +378,24 @@ export default component$(() => {
         a!.name === DEFAULT_AI_PRESETS.personal[i].name,
     );
     workTried.value = true;
-    if (untouched) await applyPreset$("work");
+    if (!untouched) return;
+    // Applied, then read back, and applied again if a slot did not hold.
+    // The context is still writing the list at this moment on a slow
+    // machine (each AI's new key, then its picture's move): a write of the
+    // whole list that began before an edit here puts the old name back
+    // (seen on a CI runner 2026-11-17: Veebo, Coder, Analyst).
+    const want = DEFAULT_AI_PRESETS.work.map((sl) => sl.name).join("\n");
+    const shown = () => slotIds.value.map((id) => aiData.userDefinedAis.find((a) => a.id === id)?.name ?? "").join("\n");
+    for (let attempt = 0, held = 0; attempt < 6 && held < 2; attempt++) {
+      if (shown() !== want) {
+        held = 0;
+        await applyPreset$("work", true);
+      }
+      await new Promise((r) => setTimeout(r, 1500));
+      // Someone chose the other set meanwhile: theirs stands.
+      if (preset.value !== "work") return;
+      if (shown() === want) held++;
+    }
   });
 
   // "Used Your Own AI before?": sign in here, then read the other devices
