@@ -1056,6 +1056,14 @@ pub(crate) fn apply_no_think(body: &mut serde_json::Value, dir: &std::path::Path
     forced
 }
 
+/// `apply_no_think` for a model in the app's own models folder.
+pub(crate) fn apply_no_think_here(body: &mut serde_json::Value, model: &str) -> bool {
+    match CURRENT_MODELS_DIR.lock().ok().and_then(|d| d.clone()) {
+        Some(dir) => apply_no_think(body, &dir, model),
+        None => false,
+    }
+}
+
 /// The assistant prefill that closes a forced thought: one space, which the
 /// template wraps as an empty thinking block followed by the reply's first
 /// character. The stream drops the leading whitespace it produces.

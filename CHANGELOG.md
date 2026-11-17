@@ -57,6 +57,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The Projects helper is now a signed program on Windows and macOS (Your
   Own AI Build 0.4.4), and from this version it is installed by itself
   there too.
+- A program that requires a tool call gets one from every offline model.
+  When a model answers in words instead, the app asks once more with the
+  answer held to the tool's own shape. Smaller models used to answer in
+  words most of the time (the Projects helper relies on this for its
+  structured answers).
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.
