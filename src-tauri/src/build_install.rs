@@ -16,23 +16,25 @@ use tauri::{AppHandle, Emitter, Manager};
 
 /// Pinned release: the app version and the agent it installs move together
 /// (same discipline as the engine downloads).
-const BUILD_RELEASE_TAG: &str = "v0.4.3";
+const BUILD_RELEASE_TAG: &str = "v0.4.4";
 /// The SHA-256 of each platform's archive at that release, by its label.
 /// The download is checked against it before anything is unpacked, so a
 /// file that is not the one this app was built for is never installed.
 /// They move with the tag.
 const BUILD_ARCHIVE_SHA256: &[(&str, &str)] = &[
-    ("linux-x86_64", "8b0ee10be2279b9aa665a78c931cdfde037c16b85aa08915f782c7b837f2a31c"),
-    ("macos-arm64", "7ce3db1a5a7f97e44a24ea56d400adb467c7aae44a0b39751eefca9fb9c37d66"),
-    ("macos-x86_64", "5059d5d7e1df57ea24560cebce9d0eb90e374d7eff70d2adee370e16c8037c42"),
-    ("windows-x86_64", "7834f2e9722cae66d4a0fd0ec060f8076f6debc2fecc8394b7884eabceeee7e8"),
+    ("linux-x86_64", "4b1f7230e59fb85d8a288ae19ff01ada9ce7a8dad28f54729a091013f7a56ec8"),
+    ("macos-arm64", "72a83bc262463c1a41aafbf56caefe358798bf774081a87adce1c7b86945f887"),
+    ("macos-x86_64", "de8a7d7be96613990beaa92f84f2b5c386a561fa27a81c898d1590a9289491fd"),
+    ("windows-x86_64", "c3e0bca601a57c32c748007e7405f21df366557cca7b35bdf24a8953f23cb37b"),
 ];
 /// Whether the pinned release's Windows and macOS builds are signed. It
 /// moves with the tag. Until it is true, the app does not install the
 /// helper by itself for the first time on those two systems (a program
 /// fetched and started for everyone should be a signed one); a helper the
 /// person installed is still replaced by itself, and the buttons work.
-const BUILD_IS_SIGNED: bool = false;
+/// v0.4.4 is the first signed release (Authenticode; Developer ID with
+/// notarization), checked in its build's log.
+const BUILD_IS_SIGNED: bool = true;
 
 /// May the app install the helper for the first time with nobody asking?
 fn may_install_first(os: &str, signed: bool) -> bool {

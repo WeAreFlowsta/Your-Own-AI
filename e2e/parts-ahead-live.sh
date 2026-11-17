@@ -65,7 +65,7 @@ PARTS_AHEAD_PHASE=before PARTS_AHEAD_DATA="$DATA" YOAI_TEST_PARTS_AHEAD="$PARTS"
 applog > "$LOGS/before-app.log"; rm -f "$DATA"/logs/*.log
 grep -oE "e2e: .*" "$LOGS/before.out" | cut -c1-200 | sed 's/^/   /'
 show "$LOGS/before-app.log"
-grep -q "Your Own AI Build 0.4.3 is in place for the update\|is in place for the update" "$LOGS/before-app.log" || fail "the log does not say a part was fetched ahead"
+grep -q "\[build\] Your Own AI Build .* is in place for the update" "$LOGS/before-app.log" || fail "the log does not say a part was fetched ahead"
 for p in $(strays); do kill "$p" 2>/dev/null || true; done
 
 # The new version pins the engine that is now installed: say it came ahead.
