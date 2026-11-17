@@ -1044,7 +1044,19 @@ pub fn run() {
 
             // Prime the CUDA compute-capability read (subprocess; done off
             // the startup path so no spawn decision ever waits on it).
-            tauri::async_runtime::spawn_blocking(engine::prime_compute_cap);
+            // ...and after an update that pins a newer engine, fetch it for
+            // someone who has the NVIDIA engine, before the page asks for a
+            // model (engine.rs, "The engine as an update's last step"). The
+            // capability read comes first: an engine the card cannot run is
+            // not fetched.
+            {
+                engine::expect_due_update(app.handle());
+                let app_for_engine = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tauri::async_runtime::spawn_blocking(engine::prime_compute_cap).await;
+                    engine::fetch_due_update(&app_for_engine);
+                });
+            }
 
             // Keep that proxy warm for signed-in users (cold start ≈ 3.5s).
             flowsta::spawn_proxy_keepalive(app.handle().clone());

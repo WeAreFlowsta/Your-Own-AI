@@ -141,10 +141,28 @@ export const ActivityTray = component$(() => {
     };
 
     const first = () => firstModelInFlight();
+    // After an app update that brought a newer NVIDIA engine, the app
+    // fetches it by itself: the row says what it is part of.
+    let engineArriving = false;
+    let engineZip = "";
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const st = await invoke<{ arriving?: boolean; tag?: string }>("engine_status");
+      engineArriving = !!st.arriving;
+      engineZip = `llama-server-cuda-${(st.tag ?? "").replace(/^llama-/, "")}.zip`;
+    } catch { /* not arriving */ }
     const downloadTitle = (filename: string) => {
       const f = first();
+      if (engineArriving && filename.toLowerCase().startsWith("llama-server-cuda-")) return "Finishing the update: NVIDIA engine";
       return f && f.filename === filename ? `Your first model: ${f.label}` : labelForFile(filename);
     };
+
+    // Already on its way when this page opened (the fetch starts with the
+    // app, and its unpacking sends no progress): the row is there from the
+    // start, and the events below carry it on.
+    if (engineArriving && engineZip) {
+      upsert(`dl:${engineZip}`, { kind: "download", home: homeForFile(engineZip), title: downloadTitle(engineZip), percent: null, state: "running", detail: "Downloading and installing..." });
+    }
 
     const unProgress = await listen<DownloadProgress>("model-download-progress", (e) => {
       const p = e.payload;
@@ -204,10 +222,18 @@ export const ActivityTray = component$(() => {
       if (!id) return;
       upsert(id, { kind: "download", title: "Projects helper", state: "error", detail: e.payload?.error ?? "The install did not finish" });
     });
+    const unEngineArriving = await listen("engine-arriving", () => { engineArriving = true; });
+    const unEnginePutOff = await listen("engine-install-put-off", () => {
+      engineArriving = false;
+      const id = engineRow();
+      if (id) remove(id);
+    });
     const unEngineDone = await listen("engine-installed", () => {
       const id = engineRow();
+      const wasUpdate = engineArriving;
+      engineArriving = false;
       if (!id) return;
-      upsert(id, { kind: "download", title: "CUDA engine", percent: 100, state: "done", detail: "Installed - your models use it now" });
+      upsert(id, { kind: "download", title: wasUpdate ? "Finishing the update: NVIDIA engine" : "CUDA engine", percent: 100, state: "done", detail: wasUpdate ? "Done - your models use it now" : "Installed - your models use it now" });
       linger(id, LINGER_MS);
     });
     const unEngineFailed = await listen<string>("engine-install-failed", (e) => {
@@ -364,6 +390,8 @@ export const ActivityTray = component$(() => {
       unEngineFailed();
       unHelperDone();
       unHelperPutOff();
+      unEngineArriving();
+      unEnginePutOff();
       unPutOff();
       unHelperFailed();
       unCorpus();
