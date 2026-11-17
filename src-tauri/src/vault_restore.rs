@@ -263,17 +263,32 @@ fn merge_ai_lists(
     (merged, to_provision, replaced_local, added, replaced)
 }
 
+/// Does a backup hold conversations for this AI? By the ids a cell can be
+/// filed under (the AI's id, its agent, the id it was restored from), else
+/// by the name its conversations carry: the same two ways the cells are
+/// routed to an AI.
+fn ai_was_talked_to(ai: &serde_json::Value, cells: &[CellGroups]) -> bool {
+    let name = ai["name"].as_str().map(|n| n.to_lowercase());
+    cells.iter().filter(|c| !c.groups.is_empty()).any(|c| {
+        ["id", "agentPubKey", "restoredFromId"].iter().any(|f| ai[*f].as_str() == Some(c.role_suffix.as_str()))
+            || name.as_ref().is_some_and(|n| c.groups.iter().any(|g| g.ai_personality_name.to_lowercase() == *n))
+    })
+}
+
 /// The island's AIs into the identity's (MULTI_DEVICE.md §7.1): an island
 /// starter folds into the identity's AI in the SAME starter slot only when
-/// its name and personality still match (both left as seeded); otherwise -
-/// and for every AI the person made - it stays a separate AI under its own
-/// founding key, name and history kept. Nothing is silently re-parented.
+/// its name and personality still match (both left as seeded) AND it was
+/// never talked to; otherwise - and for every AI the person made - it stays
+/// a separate AI under its own founding key, name and history kept. Nothing
+/// is silently re-parented, and two AIs that both have a history are joined
+/// only when the person says they are one.
 /// Returns the merged list, the island ids to provision, local ids whose
 /// thumbnail moves (none here), counts, and island id → the identity agent
 /// it folded into.
 fn merge_ai_lists_island(
     local: Vec<serde_json::Value>,
     island: &[serde_json::Value],
+    talked_to: &dyn Fn(&serde_json::Value) -> bool,
 ) -> (Vec<serde_json::Value>, Vec<String>, HashMap<String, String>, usize, usize, HashMap<String, String>) {
     let mut merged = local;
     let mut to_provision: Vec<String> = Vec::new();
@@ -287,7 +302,12 @@ fn merge_ai_lists_island(
         if merged.iter().any(|l| l["id"] == b_id || l["restoredFromId"] == b_id) {
             continue;
         }
-        let slot = b["seedSlot"].as_u64();
+        // An island starter that has been talked to is never joined to the
+        // identity's on a guess, however alike they look: it arrives as its
+        // own AI, and the person is asked whether the two are one
+        // (config_sync.rs, look-alikes). Only one with no conversations
+        // folds, and it has nothing to bring.
+        let slot = b["seedSlot"].as_u64().filter(|_| !talked_to(b));
         let twin = slot.and_then(|slot| {
             merged.iter().find(|l| {
                 l["seedSlot"].as_u64() == Some(slot)
@@ -1041,8 +1061,24 @@ async fn restore_backup(
             serde_json::Value::Array(arr) => arr.clone(),
             _ => Vec::new(),
         };
+    // The backup's cells, grouped into conversations (used below to route
+    // them, and here to know which of an island's AIs were talked to).
+    let cells: Vec<CellGroups> = backup["cells"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .map(|c| {
+                    group_cell(
+                        c["role_name"].as_str().unwrap_or(""),
+                        c["records"].as_array().map(|r| r.as_slice()).unwrap_or(&[]),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let talked_to = |ai: &serde_json::Value| ai_was_talked_to(ai, &cells);
     let (mut merged, to_provision, replaced_local, ais_added, ais_replaced, folded_aliases) = match &island {
-        Some(_) => merge_ai_lists_island(local_ais, &backup_ais),
+        Some(_) => merge_ai_lists_island(local_ais, &backup_ais, &talked_to),
         None => {
             let (m, t, r, a, rp) = merge_ai_lists(local_ais, &backup_ais, &conv_counts);
             (m, t, r, a, rp, HashMap::new())
@@ -1068,19 +1104,6 @@ async fn restore_backup(
     store.save().map_err(|e| e.to_string())?;
 
     // 3. Route each backup cell to a local agent.
-    let cells: Vec<CellGroups> = backup["cells"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .map(|c| {
-                    group_cell(
-                        c["role_name"].as_str().unwrap_or(""),
-                        c["records"].as_array().map(|r| r.as_slice()).unwrap_or(&[]),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default();
 
     let mut alias_to_agent: HashMap<String, String> = HashMap::new();
     let mut name_to_agent: HashMap<String, String> = HashMap::new();
@@ -1308,7 +1331,7 @@ mod tests {
             ai("id-b3", "Max", "reeves", Some(3), Some("agent-b3")),
             ai("id-b4", "Luna", "mQuddS8PXJRTCr7XE77U", None, Some("agent-b4")),
         ];
-        let (merged, to_provision, _moved, added, folded_n, folded) = super::merge_ai_lists_island(local, &island);
+        let (merged, to_provision, _moved, added, folded_n, folded) = super::merge_ai_lists_island(local, &island, &|_| false);
         assert_eq!(folded_n, 1, "only the untouched starter folds");
         assert_eq!(folded.get("id-b2").map(String::as_str), Some("agent-a2"), "Teresa's island chats go to the identity's Teresa");
         assert_eq!(added, 3, "Veebo, Max and Luna stay separate AIs");
@@ -1319,10 +1342,37 @@ mod tests {
         assert_eq!(veebo["name"], "Veebo", "its name and personality are kept");
         // Running it again adds nothing: the added ids are known; a fold is
         // only a mapping and repeats harmlessly.
-        let (again, prov2, _, added2, folded2, _) = super::merge_ai_lists_island(merged.clone(), &island);
+        let (again, prov2, _, added2, folded2, _) = super::merge_ai_lists_island(merged.clone(), &island, &|_| false);
         assert_eq!(again.len(), 6);
         assert!(prov2.is_empty() && added2 == 0);
         assert_eq!(folded2, 1);
+
+        // The same island, but its Teresa has been talked to: she is not
+        // joined to the identity's Teresa on a guess. She arrives as her
+        // own AI with her name; the person is asked whether they are one.
+        let local = vec![ai("id-a2", "Teresa", "teresa", Some(2), Some("agent-a2"))];
+        let (merged, to_provision, _, added, folded_n, folded) =
+            super::merge_ai_lists_island(local, &island[1..2], &|b| b["id"] == "id-b2");
+        assert_eq!((folded_n, added, merged.len()), (0, 1, 2));
+        assert!(folded.is_empty(), "her conversations are not re-homed");
+        assert_eq!(to_provision, vec!["id-b2"]);
+        assert_eq!(merged[1]["name"], "Teresa");
+        assert_eq!(merged[1]["foundingKey"], "id-b2", "under her own founding key");
+    }
+
+    #[test]
+    fn an_ai_was_talked_to_when_the_backup_holds_a_conversation_of_its_own() {
+        let conv = |name: &str| serde_json::json!({ "entryType": "Conversation", "actionHash": "h", "human_readable": { "started_at": 1, "ai_personality_name": name } });
+        let cells = vec![
+            super::group_cell("transcript_v1_local-7", &[conv("Teresa")]),
+            super::group_cell("transcript_v1_local-8", &[]),
+            super::group_cell("transcript_v1_gone", &[conv("Luna")]),
+        ];
+        let ai = |id: &str, name: &str| serde_json::json!({ "id": id, "name": name });
+        assert!(super::ai_was_talked_to(&ai("local-7", "Renamed since"), &cells), "by the id its cell is filed under");
+        assert!(!super::ai_was_talked_to(&ai("local-8", "Veebo"), &cells), "a cell with no conversation is not a history");
+        assert!(super::ai_was_talked_to(&ai("key-of-luna", "luna"), &cells), "else by the name its conversations carry");
+        assert!(!super::ai_was_talked_to(&ai("local-9", "Reeves"), &cells));
     }
 
     #[test]

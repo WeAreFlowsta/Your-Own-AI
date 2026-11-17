@@ -1,4 +1,5 @@
 import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@builder.io/qwik';
+import { LookalikeCard } from "./LookalikeCard";
 import CudaOfferCallout from './CudaOfferCallout';
 import HelperModelOfferCallout from './HelperModelOfferCallout';
 import GpuFallbackCallout from './GpuFallbackCallout';
@@ -134,6 +135,7 @@ export default component$<InitialViewProps>((props) => {
           )}
         </div>
       )}
+      <LookalikeCard />
       <EngineCannotStartCallout />
       <GpuFallbackCallout />
       {/* One offer slot: NVIDIA engine first, then the helper model - rules in utils/homeOffers.ts */}

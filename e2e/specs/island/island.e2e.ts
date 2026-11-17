@@ -72,6 +72,31 @@ describe(`island merge, phase ${PHASE}`, () => {
       const st = await escrow();
       console.log(`e2e: escrow after the merge ${JSON.stringify(st)}`);
       expect(st.state).toBe("synced");
+      // The AI B talked to before sign-in has a history, so it was not
+      // joined to the identity's AI of the same name on a guess: it arrived
+      // as its own AI, and the person is asked once whether the two are one.
+      type Pairing = { lookalikes: { a: string; b: string; name: string; kind: string; a_conversations: number; b_conversations: number; a_from: string | null; b_from: string | null }[] };
+      let asked: Pairing["lookalikes"] = [];
+      await browser.waitUntil(async () => { asked = (await invoke<Pairing>("ai_pairing")).lookalikes; return asked.length > 0; },
+        { timeout: 120_000, interval: 3_000, timeoutMsg: "the AI used before sign-in and the identity's AI of the same name were not offered as look-alikes" });
+      console.log(`e2e: asked about ${JSON.stringify(asked)}`);
+      expect(asked[0].kind).toBe("starter");
+      await browser.execute(() => location.reload());
+      await browser.pause(2000);
+      await waitForChat();
+      const question = await $('[data-testid="lookalike-question"]');
+      await question.waitForDisplayed({ timeout: 60_000 });
+      const said = await question.getText();
+      console.log(`e2e: the card says ${JSON.stringify(said)}`);
+      expect(said).toContain(`You have two AIs named ${asked[0].name}`);
+      expect(said).toContain("Are they the same AI?");
+      await shot("island-b2-asked");
+      // "Merge them": one AI, with the conversation written before sign-in.
+      await (await $('[data-testid="lookalike-merge"]')).click();
+      await browser.waitUntil(async () => (await invoke<Pairing>("ai_pairing")).lookalikes.every((l) => l.name !== asked[0].name), { timeout: 60_000, timeoutMsg: "Merge them left the two as look-alikes" });
+      await browser.execute(() => location.reload());
+      await browser.pause(2000);
+      await waitForChat();
       await (await $('button[title^="Conversations - pick up"]')).click();
       try {
         await browser.waitUntil(async () => (await $$('button[title="Rename"]')).length >= 1, {

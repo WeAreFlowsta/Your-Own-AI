@@ -75,6 +75,16 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   steps, shown only when Flowsta Vault is running on the computer.
 - Restoring from the Vault onto a computer whose welcome steps chose the
   Work set gives three AIs, not five.
+- Two AIs are never joined on a guess. When two look like the same AI
+  (a starter you used on a computer before signing in, and the same
+  starter on your account), the app says so once, with how many
+  conversations each holds, and asks: Merge them, or Keep both. Merged,
+  you see one AI with both sets of conversations and both memories, with
+  the skills and tools of both; nothing is deleted, and "Separate them
+  again" on Your AIs brings the other back. Kept apart, a small tag
+  beside each name says where it is from. Your answer reaches your other
+  computers, so you are asked once. Before, a starter left with its
+  seeded name was joined to your account's by itself.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.

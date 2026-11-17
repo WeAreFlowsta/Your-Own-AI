@@ -43,6 +43,12 @@ export interface UserDefinedAI {
    *  person): the founding key of the AI it is folded into. Per device,
    *  computed by the config sync; such an AI is stored but never listed. */
   foldedInto?: string;
+  /** The person's answer about an AI that looks like this one (config_sync.rs): the founding key
+   *  of the AI it is one with, the founding keys of AIs it is NOT one with, and when that was
+   *  said. Written by the backend on "Merge them" / "Keep both"; travels to the other devices. */
+  mergedWith?: string;
+  apartFrom?: string[];
+  pairAnswerAt?: number;
   /** ms epoch of the person's last edit to this AI (never set by seeding or by key changes) - the
    *  newest edit wins when the same AI is edited on two devices. */
   updatedAt?: number;

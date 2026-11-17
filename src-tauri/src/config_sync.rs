@@ -124,9 +124,10 @@ fn starter_of(ai: &serde_json::Value) -> Option<&'static str> {
     STARTER_ARCHETYPES.iter().find(|a| **a == base).copied()
 }
 
-/// Whether two entries are one AI to the person: the same starter under the
-/// same name, and either neither was ever edited or their instructions are
-/// the same.
+/// Whether two entries look like one AI: the same starter under the same
+/// name, and either neither was ever edited or their instructions are the
+/// same. Since 2026-11-17 this joins nothing by itself: it is what makes two
+/// AIs look-alikes the person is asked about (`lookalikes`).
 fn same_ai(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     starter_of(a).is_some()
         && starter_of(a) == starter_of(b)
@@ -139,56 +140,124 @@ fn is_active(ai: &serde_json::Value) -> bool {
     ai["status"].as_str().map(|s| s == "active").unwrap_or(true)
 }
 
-/// Starter AIs that stand twice become one. A household that added its
-/// second computer before a joining device's starters folded into the
-/// identity's (0.9.0 to 0.9.1-beta.7) has two real AIs per starter, each
-/// with its own founding key, on every device. Of each group that is one AI
-/// to the person (`same_ai`), the one with the smallest founding key leads,
-/// on every device alike; each other takes `foldedInto: <the leader's
-/// founding key>`. A folded twin stays in the list with its cell, so the
-/// move, the backup and the restore treat it as before; what the person
-/// sees leaves it out, and the leader's lists and memory read it too
-/// (`folded_into`). The newest settings of the group go to the leader.
-/// An entry that no longer belongs to a group (renamed, new instructions)
-/// loses the mark. Returns how many marks changed.
+// --- The person's answer about two AIs that look alike --------------------
+//
+// Two AIs are shown as one only when the person said they are one. The
+// answer lives on the AIs and travels with them, so it is asked once for
+// all their devices:
+//   `mergedWith`: the founding key of the AI this one is one with;
+//   `apartFrom`: the founding keys of AIs this one is NOT one with;
+//   `pairAnswerAt`: when that was last said (ms; the newer answer wins when
+//     two devices disagree).
+// Starters an earlier version already showed as one (`foldedInto`, the
+// 11-13 fold of starters doubled by 0.9.0 to 0.9.1-beta.7) keep standing as
+// one: the first run here writes that fold down as an answer.
+
+fn merged_with(ai: &serde_json::Value) -> Option<&str> {
+    ai["mergedWith"].as_str().filter(|f| !f.is_empty())
+}
+
+fn is_apart_from(ai: &serde_json::Value, founding: &str) -> bool {
+    ai["apartFrom"].as_array().is_some_and(|l| l.iter().any(|f| f.as_str() == Some(founding)))
+}
+
+fn answer_at(ai: &serde_json::Value) -> i64 {
+    ai["pairAnswerAt"].as_i64().unwrap_or(0)
+}
+
+/// The answer fields of an AI, taken from another device's copy of it when
+/// that one's answer is the newer.
+const ANSWER_FIELDS: &[&str] = &["mergedWith", "apartFrom", "pairAnswerAt"];
+
+/// AIs the person said are one become one in what they see. Of each group
+/// linked by `mergedWith`, the one with the smallest founding key leads, on
+/// every device alike; each other takes `foldedInto: <the leader's founding
+/// key>`. A folded entry stays in the list with its cell, so the move, the
+/// backup and the restore treat it as before; what the person sees leaves
+/// it out, and the leader's lists and memory read it too (`folded_into`).
+/// The newest settings of the group go to the leader. An entry no longer
+/// linked loses the mark. Returns how many marks changed.
 pub(crate) fn fold_twins(list: &mut [serde_json::Value]) -> u32 {
     let mut changed = 0u32;
-    let mut lead_of: Vec<Option<String>> = vec![None; list.len()];
-    for i in 0..list.len() {
-        if !is_active(&list[i]) || founding_of(&list[i]).is_none() {
-            continue;
-        }
-        let group: Vec<usize> = (0..list.len()).filter(|j| is_active(&list[*j]) && founding_of(&list[*j]).is_some() && same_ai(&list[i], &list[*j])).collect();
-        if group.len() < 2 {
-            continue;
-        }
-        let leader = *group.iter().min_by_key(|j| founding_of(&list[**j]).unwrap_or_default()).expect("not empty");
-        if i == leader {
-            // The starter's place in the list (a per-device stamp the twin
-            // may hold alone) goes with the AI the person sees.
-            if list[leader]["seedSlot"].is_null() {
-                if let Some(slot) = group.iter().find_map(|j| list[*j]["seedSlot"].as_u64()) {
-                    list[leader]["seedSlot"] = serde_json::json!(slot);
+    // A fold from before the answer existed is the answer.
+    for ai in list.iter_mut() {
+        if merged_with(ai).is_none() {
+            if let Some(leader) = ai["foldedInto"].as_str().filter(|f| !f.is_empty()).map(String::from) {
+                if !is_apart_from(ai, &leader) {
+                    ai["mergedWith"] = serde_json::json!(leader);
+                    if answer_at(ai) == 0 {
+                        ai["pairAnswerAt"] = serde_json::json!(1);
+                    }
+                    changed += 1; // written down once, so it is stored and travels
                 }
             }
-            // The newest settings of the group, once per group.
-            let newest = *group.iter().max_by_key(|j| updated_at(&list[**j])).expect("not empty");
-            if newest != leader && updated_at(&list[newest]) > updated_at(&list[leader]) {
-                let from = list[newest].clone();
-                for f in FOLDED_SETTINGS {
-                    match from.get(*f) {
-                        Some(v) => list[leader][*f] = v.clone(),
-                        None => {
-                            if let Some(obj) = list[leader].as_object_mut() {
-                                obj.remove(*f);
-                            }
+        }
+    }
+    // Groups: the entries joined by a link, either way round.
+    let n = list.len();
+    let live: Vec<bool> = list.iter().map(|ai| is_active(ai) && founding_of(ai).is_some()).collect();
+    let mut group: Vec<usize> = (0..n).collect();
+    fn root(group: &mut Vec<usize>, mut i: usize) -> usize {
+        while group[i] != i {
+            group[i] = group[group[i]];
+            i = group[i];
+        }
+        i
+    }
+    for i in 0..n {
+        if !live[i] {
+            continue;
+        }
+        let Some(other) = merged_with(&list[i]).map(String::from) else { continue };
+        let Some(j) = (0..n).find(|j| *j != i && live[*j] && founding_of(&list[*j]).as_deref() == Some(other.as_str())) else { continue };
+        // "Not one", said on either, stands against a link (an answer is
+        // written to both, and the newer one is taken whole from another
+        // device, so the two only disagree for a round).
+        let me = founding_of(&list[i]).unwrap_or_default();
+        if is_apart_from(&list[i], &other) || is_apart_from(&list[j], &me) {
+            continue;
+        }
+        let (a, b) = (root(&mut group, i), root(&mut group, j));
+        if a != b {
+            group[a] = b;
+        }
+    }
+    let mut lead_of: Vec<Option<String>> = vec![None; n];
+    let roots: Vec<usize> = (0..n).map(|i| root(&mut group, i)).collect();
+    for r in 0..n {
+        let members: Vec<usize> = (0..n).filter(|i| live[*i] && roots[*i] == r).collect();
+        if members.len() < 2 {
+            continue;
+        }
+        let leader = *members.iter().min_by_key(|j| founding_of(&list[**j]).unwrap_or_default()).expect("not empty");
+        // The starter's place in the list (a per-device stamp a follower
+        // may hold alone) goes with the AI the person sees.
+        if list[leader]["seedSlot"].is_null() {
+            if let Some(slot) = members.iter().find_map(|j| list[*j]["seedSlot"].as_u64()) {
+                list[leader]["seedSlot"] = serde_json::json!(slot);
+            }
+        }
+        // The newest settings of the group, once per group.
+        let newest = *members.iter().max_by_key(|j| updated_at(&list[**j])).expect("not empty");
+        if newest != leader && updated_at(&list[newest]) > updated_at(&list[leader]) {
+            let from = list[newest].clone();
+            for f in FOLDED_SETTINGS {
+                match from.get(*f) {
+                    Some(v) => list[leader][*f] = v.clone(),
+                    None => {
+                        if let Some(obj) = list[leader].as_object_mut() {
+                            obj.remove(*f);
                         }
                     }
                 }
-                list[leader]["updatedAt"] = from["updatedAt"].clone();
             }
-        } else {
-            lead_of[i] = founding_of(&list[leader]);
+            list[leader]["updatedAt"] = from["updatedAt"].clone();
+        }
+        let lead_founding = founding_of(&list[leader]);
+        for m in members {
+            if m != leader {
+                lead_of[m] = lead_founding.clone();
+            }
         }
     }
     for (ai, lead) in list.iter_mut().zip(lead_of) {
@@ -206,6 +275,44 @@ pub(crate) fn fold_twins(list: &mut [serde_json::Value]) -> u32 {
         }
     }
     changed
+}
+
+/// Two listed AIs that look like one, with no answer between them yet.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Lookalike {
+    /// Founding keys of the two.
+    pub a: String,
+    pub b: String,
+    pub name: String,
+    /// "starter": the same starter under the same name (the person is asked
+    /// with a card). "own": two AIs the person made under the same name (a
+    /// quiet line on Your AIs only).
+    pub kind: &'static str,
+}
+
+/// The pairs the person has not been asked about, or has not answered.
+pub(crate) fn lookalikes(list: &[serde_json::Value]) -> Vec<Lookalike> {
+    let shown: Vec<&serde_json::Value> = list.iter().filter(|ai| is_active(ai) && founding_of(ai).is_some() && !ai["foldedInto"].is_string()).collect();
+    let mut out = Vec::new();
+    for (i, a) in shown.iter().enumerate() {
+        for b in shown.iter().skip(i + 1) {
+            let (fa, fb) = (founding_of(a).unwrap_or_default(), founding_of(b).unwrap_or_default());
+            if fa == fb || is_apart_from(a, &fb) || is_apart_from(b, &fa) || merged_with(a) == Some(fb.as_str()) || merged_with(b) == Some(fa.as_str()) {
+                continue;
+            }
+            let (Some(na), Some(nb)) = (a["name"].as_str(), b["name"].as_str()) else { continue };
+            if na.trim().is_empty() || na.trim().to_lowercase() != nb.trim().to_lowercase() {
+                continue;
+            }
+            // The same starter: by the personality they still share, or by
+            // the slot both were seeded into (the Work set gives all three
+            // one personality; the slot tells Assistant from Coder).
+            let same_slot = a["seedSlot"].as_u64().is_some() && a["seedSlot"].as_u64() == b["seedSlot"].as_u64();
+            let kind = if same_ai(a, b) || same_slot { "starter" } else { "own" };
+            out.push(Lookalike { a: fa, b: fb, name: na.to_string(), kind });
+        }
+    }
+    out
 }
 
 /// `fold_twins` on a stored list, and what a new fold brings with it on this
@@ -385,6 +492,21 @@ pub(crate) fn merge_sibling_configs(
                         touched.push((s_id.clone(), local_id.to_string()));
                     }
                 }
+                // The person's answer about look-alikes: the newer one, whole,
+                // whatever else was or was not edited since.
+                if answer_at(s) > answer_at(&merged[i]) {
+                    for f in ANSWER_FIELDS {
+                        match s.get(*f) {
+                            Some(v) => merged[i][*f] = v.clone(),
+                            None => {
+                                if let Some(obj) = merged[i].as_object_mut() {
+                                    obj.remove(*f);
+                                }
+                            }
+                        }
+                    }
+                    updated += 1;
+                }
                 if take_fields || fold {
                     if merged[i]["foundingKey"].as_str().map(|f| f.is_empty()).unwrap_or(true) {
                         merged[i]["foundingKey"] = serde_json::json!(founding);
@@ -408,6 +530,11 @@ pub(crate) fn merge_sibling_configs(
                 // provisioning pass re-keys it, keeping foundingKey).
                 let mut entry = serde_json::json!({ "id": founding, "foundingKey": founding, "model": "auto:offline" });
                 for f in SYNCED_FIELDS {
+                    if let Some(v) = s.get(*f) {
+                        entry[*f] = v.clone();
+                    }
+                }
+                for f in ANSWER_FIELDS {
                     if let Some(v) = s.get(*f) {
                         entry[*f] = v.clone();
                     }
@@ -1045,6 +1172,258 @@ pub(crate) fn fold_stored_twins(app: &tauri::AppHandle) -> Result<u32, String> {
     Ok(folded)
 }
 
+// --- Look-alikes: what the person is asked, and their answer --------------
+
+/// A look-alike pair as the page shows it: who each is, where it came from
+/// and how much it holds.
+#[derive(Serialize, Clone, Debug)]
+pub struct LookalikeView {
+    pub a: String,
+    pub b: String,
+    pub name: String,
+    /// "starter" (asked with a card) or "own" (a quiet line on Your AIs).
+    pub kind: &'static str,
+    pub a_conversations: u64,
+    pub b_conversations: u64,
+    /// None: made on this computer. Some(name): from that device (empty
+    /// when the Vault has no name for it).
+    pub a_from: Option<String>,
+    pub b_from: Option<String>,
+}
+
+/// Conversations an AI holds as far as this device knows: this device's
+/// list for its agent, or the other devices' lists for its founding key,
+/// whichever is longer (they overlap once the records have arrived).
+fn conversations_known(app: &tauri::AppHandle, ai: &serde_json::Value, siblings: &[SiblingConversation]) -> u64 {
+    let here = ai["agentPubKey"].as_str().and_then(|a| crate::conversation_cache::read_cache(app, a).ok()).map(|c| c.len() as u64).unwrap_or(0);
+    let there = founding_of(ai).map(|f| siblings.iter().filter(|c| c.agent.as_deref() == Some(f.as_str())).count() as u64).unwrap_or(0);
+    here.max(there)
+}
+
+/// Where an AI came from: None when this computer made it.
+fn origin_of(ai: &serde_json::Value, siblings: &[SiblingConversation]) -> Option<String> {
+    let founding = founding_of(ai)?;
+    if ai["agentPubKey"].as_str() == Some(founding.as_str()) {
+        return None;
+    }
+    Some(siblings.iter().find(|c| c.agent.as_deref() == Some(founding.as_str())).and_then(|c| c.device_name.clone()).unwrap_or_default())
+}
+
+fn stored_ais(app: &tauri::AppHandle) -> Result<(std::sync::Arc<tauri_plugin_store::Store<tauri::Wry>>, Vec<serde_json::Value>), String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store(crate::profile::store_path(app, "ai-data.json")).map_err(|e| e.to_string())?;
+    let list = match store.get("custom-ais") {
+        Some(serde_json::Value::Array(a)) => a,
+        Some(serde_json::Value::String(raw)) => serde_json::from_str::<Vec<serde_json::Value>>(&raw).unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    Ok((store, list))
+}
+
+/// The pairs of listed AIs that look like one AI and have no answer yet.
+#[tauri::command]
+pub fn ai_lookalikes(app: tauri::AppHandle) -> Vec<LookalikeView> {
+    let Ok((_, list)) = stored_ais(&app) else { return Vec::new() };
+    let siblings = sibling_conversations(&app);
+    lookalikes(&list)
+        .into_iter()
+        .filter_map(|p| {
+            let a = list.iter().find(|ai| founding_of(ai).as_deref() == Some(p.a.as_str()))?;
+            let b = list.iter().find(|ai| founding_of(ai).as_deref() == Some(p.b.as_str()))?;
+            Some(LookalikeView {
+                a_conversations: conversations_known(&app, a, &siblings),
+                b_conversations: conversations_known(&app, b, &siblings),
+                a_from: origin_of(a, &siblings),
+                b_from: origin_of(b, &siblings),
+                a: p.a,
+                b: p.b,
+                name: p.name,
+                kind: p.kind,
+            })
+        })
+        .collect()
+}
+
+/// One AI that stands as part of another since the person said they are one.
+#[derive(Serialize, Clone, Debug)]
+pub struct MergedView {
+    /// The AI the person sees.
+    pub leader: String,
+    /// The one standing as part of it.
+    pub other: String,
+    pub other_from: Option<String>,
+    pub other_conversations: u64,
+}
+
+/// Everything the page needs about AIs that look alike or were joined: the
+/// pairs still to ask about, the ones joined (to offer "Separate them
+/// again"), and where each listed AI came from (the tag two AIs of one name
+/// carry so the person can tell them apart).
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct PairingView {
+    pub lookalikes: Vec<LookalikeView>,
+    pub merged: Vec<MergedView>,
+    /// founding key -> None (made on this computer) or the device it came from.
+    pub origins: std::collections::HashMap<String, Option<String>>,
+}
+
+#[tauri::command]
+pub fn ai_pairing(app: tauri::AppHandle) -> PairingView {
+    let Ok((_, list)) = stored_ais(&app) else { return PairingView::default() };
+    let siblings = sibling_conversations(&app);
+    let merged = list
+        .iter()
+        .filter(|ai| is_active(ai))
+        .filter_map(|ai| {
+            Some(MergedView {
+                leader: ai["foldedInto"].as_str().filter(|f| !f.is_empty())?.to_string(),
+                other: founding_of(ai)?,
+                other_from: origin_of(ai, &siblings),
+                other_conversations: conversations_known(&app, ai, &siblings),
+            })
+        })
+        .collect();
+    let origins = list.iter().filter_map(|ai| Some((founding_of(ai)?, origin_of(ai, &siblings)))).collect();
+    PairingView { lookalikes: ai_lookalikes(app), merged, origins }
+}
+
+/// Settings that add up when two AIs become one: what either carried, the
+/// one AI carries.
+const COMBINED_LISTS: &[&str] = &["skills", "mcp"];
+/// Their "switched off for now" lists: off on the one AI only when no side
+/// had it on.
+const OFF_LISTS: &[(&str, &str)] = &[("skillsOff", "skills"), ("mcpOff", "mcp")];
+/// Settings that hold one value: the one AI takes them from the side with
+/// more conversations (the one the person knows best).
+const SINGLE_SETTINGS: &[&str] = &["description", "emoji", "askBlurb", "lengthDisposition", "defaultMode", "useEmojis", "sampling", "baseArchetypeId", "systemPrompt"];
+
+fn strings(v: &serde_json::Value) -> Vec<String> {
+    v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
+}
+
+/// The settings of the one AI two become (`a` holds `a_conversations`).
+/// Nothing a person added disappears: lists are combined; a single value
+/// comes from the side with more conversations (`a` on a tie).
+pub(crate) fn combined_settings(a: &serde_json::Value, a_conversations: u64, b: &serde_json::Value, b_conversations: u64) -> serde_json::Map<String, serde_json::Value> {
+    let (richer, other) = if b_conversations > a_conversations { (b, a) } else { (a, b) };
+    let mut out = serde_json::Map::new();
+    for f in SINGLE_SETTINGS {
+        match richer.get(*f).filter(|v| !v.is_null()).or_else(|| other.get(*f).filter(|v| !v.is_null())) {
+            Some(v) => { out.insert(f.to_string(), v.clone()); }
+            None => {}
+        }
+    }
+    for f in COMBINED_LISTS {
+        let mut all = strings(&richer[*f]);
+        for x in strings(&other[*f]) {
+            if !all.contains(&x) {
+                all.push(x);
+            }
+        }
+        if !all.is_empty() || richer.get(*f).is_some() || other.get(*f).is_some() {
+            out.insert(f.to_string(), serde_json::json!(all));
+        }
+    }
+    for (off, carried) in OFF_LISTS {
+        // On for a side: it carries it and has not switched it off.
+        let on = |side: &serde_json::Value, x: &String| strings(&side[*carried]).contains(x) && !strings(&side[*off]).contains(x);
+        let mut all: Vec<String> = Vec::new();
+        for x in strings(&richer[*off]).into_iter().chain(strings(&other[*off])) {
+            if !all.contains(&x) && !on(richer, &x) && !on(other, &x) {
+                all.push(x);
+            }
+        }
+        if !all.is_empty() || richer.get(*off).is_some() || other.get(*off).is_some() {
+            out.insert(off.to_string(), serde_json::json!(all));
+        }
+    }
+    out
+}
+
+/// Write the person's answer about a pair onto both, in a list. `merge`:
+/// they are one (each links the other, and both take `settings`); else
+/// they are two, and are not asked about again.
+pub(crate) fn answer_pair(list: &mut [serde_json::Value], a: &str, b: &str, merge: bool, settings: Option<&serde_json::Map<String, serde_json::Value>>, now: i64) -> Result<(), String> {
+    for (me, other) in [(a, b), (b, a)] {
+        let ai = list.iter_mut().find(|ai| founding_of(ai).as_deref() == Some(me)).ok_or("that AI is not on this computer")?;
+        let mut apart: Vec<String> = strings(&ai["apartFrom"]).into_iter().filter(|f| f != other).collect();
+        if merge {
+            ai["mergedWith"] = serde_json::json!(other);
+            if let Some(settings) = settings {
+                for (k, v) in settings {
+                    ai[k.as_str()] = v.clone();
+                }
+                ai["updatedAt"] = serde_json::json!(now);
+            }
+        } else {
+            apart.push(other.to_string());
+            if merged_with(ai) == Some(other) {
+                if let Some(obj) = ai.as_object_mut() {
+                    obj.remove("mergedWith");
+                }
+            }
+        }
+        if let Some(obj) = ai.as_object_mut() {
+            if apart.is_empty() {
+                obj.remove("apartFrom");
+            } else {
+                obj.insert("apartFrom".into(), serde_json::json!(apart));
+            }
+            // A fold mark from before stands as nothing by itself now.
+            if !merge && obj.get("foldedInto").and_then(|f| f.as_str()) == Some(other) {
+                obj.remove("foldedInto");
+            }
+        }
+        ai["pairAnswerAt"] = serde_json::json!(now);
+    }
+    Ok(())
+}
+
+/// The person's answer, stored, applied to what they see and sent on its
+/// way to their other devices.
+fn store_answer(app: &tauri::AppHandle, a: &str, b: &str, merge: bool) -> Result<(), String> {
+    let (store, mut list) = stored_ais(app)?;
+    let settings = if merge {
+        let siblings = sibling_conversations(app);
+        let find = |f: &str| list.iter().find(|ai| founding_of(ai).as_deref() == Some(f)).cloned().ok_or("that AI is not on this computer");
+        let (ai_a, ai_b) = (find(a)?, find(b)?);
+        let (ca, cb) = (conversations_known(app, &ai_a, &siblings), conversations_known(app, &ai_b, &siblings));
+        // The picture of the side with more conversations shows on both,
+        // when the person gave it one.
+        if let (Ok(root), Some(ia), Some(ib)) = (crate::profile::root(app), ai_a["id"].as_str(), ai_b["id"].as_str()) {
+            let dir = root.join("thumbnails");
+            let (from, to) = if cb > ca { (ib, ia) } else { (ia, ib) };
+            if has_own_picture(&dir, from) && std::fs::copy(dir.join(format!("{from}.jpg")), dir.join(format!("{to}.jpg"))).is_ok() {
+                mark_picture(&dir, to, false);
+            }
+        }
+        Some(combined_settings(&ai_a, ca, &ai_b, cb))
+    } else {
+        None
+    };
+    answer_pair(&mut list, a, b, merge, settings.as_ref(), now_ms() as i64)?;
+    let folded = fold_and_carry(app, &mut list);
+    store.set("custom-ais", serde_json::json!(list));
+    store.save().map_err(|e| e.to_string())?;
+    log::info!("[config-sync] the person said two AIs named alike are {}", if merge { "one AI" } else { "two AIs" });
+    let _ = app.emit("ai-configs-changed", serde_json::json!({ "updated": 0, "added": 0, "folded": folded, "answered": true }));
+    crate::vault_escrow::schedule_ai_backup(app);
+    Ok(())
+}
+
+/// "Merge them": the two are one AI from now on, on every device.
+#[tauri::command]
+pub fn ai_pair_merge(app: tauri::AppHandle, a: String, b: String) -> Result<(), String> {
+    store_answer(&app, &a, &b, true)
+}
+
+/// "Keep both" and "Separate them again": the two are two AIs, and the
+/// question is not asked again.
+#[tauri::command]
+pub fn ai_pair_keep_apart(app: tauri::AppHandle, a: String, b: String) -> Result<(), String> {
+    store_answer(&app, &a, &b, false)
+}
+
 /// `fold_stored_twins` now (the start of the app, tests).
 #[tauri::command]
 pub fn fold_twins_now(app: tauri::AppHandle) -> Result<u32, String> {
@@ -1186,89 +1565,154 @@ mod tests {
         assert_eq!((again.len(), added), (3, 0));
     }
 
+    fn twin(id: &str, founding: &str, base: &str, name: &str) -> serde_json::Value {
+        serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "baseArchetypeId": base, "name": name, "systemPrompt": "p", "status": "active", "model": format!("{id}.gguf") })
+    }
+
     #[test]
-    fn starters_that_stand_twice_become_one_under_the_smaller_founding_key() {
-        use super::{fold_twins, folded_into};
-        let starter = |id: &str, founding: &str, base: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": founding, "baseArchetypeId": base, "name": name, "systemPrompt": "p", "status": "active" });
-        // This device's own Veebo and Teresa, and the other device's, each
+    fn two_ais_that_look_alike_are_two_until_the_person_says_they_are_one() {
+        use super::{answer_pair, fold_twins, folded_into, lookalikes};
+        // This device's own Veebo and Teresa, and another device's, each
         // provisioned here under an agent of its own.
         let mut list = vec![
-            starter("b-veebo", "b-veebo", "veebo", "Veebo"),
-            starter("b-teresa", "b-teresa", "teresa", "Teresa"),
-            starter("k1", "a-veebo", "veebo", "Veebo"),
-            starter("k2", "a-teresa", "mhJ4WU8bn34In1lJUuHH", "Teresa"),
+            twin("b-veebo", "b-veebo", "veebo", "Veebo"),
+            twin("b-teresa", "b-teresa", "teresa", "Teresa"),
+            twin("k1", "a-veebo", "veebo", "Veebo"),
+            twin("k2", "a-teresa", "mhJ4WU8bn34In1lJUuHH", "Teresa"),
         ];
-        assert_eq!(fold_twins(&mut list), 2);
-        assert_eq!(list[0]["foldedInto"], "a-veebo", "the smaller founding key leads");
-        assert_eq!(list[1]["foldedInto"], "a-teresa", "a retired duplicate id is its twin");
-        assert!(list[2].get("foldedInto").is_none() && list[3].get("foldedInto").is_none());
+        assert_eq!(fold_twins(&mut list), 0, "nothing is joined on a guess");
+        let pairs = lookalikes(&list);
+        assert_eq!(pairs.len(), 2, "the person is asked about each pair");
+        assert!(pairs.iter().all(|p| p.kind == "starter"));
+        assert_eq!((pairs[0].a.as_str(), pairs[0].b.as_str(), pairs[0].name.as_str()), ("b-veebo", "a-veebo", "Veebo"));
+
+        // "Merge them" for Veebo: one AI, the smaller founding key leads.
+        answer_pair(&mut list, "b-veebo", "a-veebo", true, None, 500).unwrap();
+        assert_eq!(fold_twins(&mut list), 1);
+        assert_eq!(list[0]["foldedInto"], "a-veebo");
+        assert!(list[2].get("foldedInto").is_none());
         assert_eq!(folded_into(&list, "a-veebo").len(), 1);
+        assert_eq!(lookalikes(&list).len(), 1, "only Teresa is still asked about");
+        assert_eq!(fold_twins(&mut list), 0, "a second round changes nothing");
+        // Renaming the one AI does not pull it apart again.
+        list[2]["name"] = serde_json::json!("Vee");
+        assert_eq!(fold_twins(&mut list), 0);
+        assert_eq!(list[0]["foldedInto"], "a-veebo");
+
+        // "Keep both" for Teresa: two AIs, and the question is not asked again.
+        answer_pair(&mut list, "b-teresa", "a-teresa", false, None, 600).unwrap();
+        assert_eq!(fold_twins(&mut list), 0);
+        assert!(lookalikes(&list).is_empty());
+
+        // "Separate them again" for Veebo: the other comes back as it was.
+        answer_pair(&mut list, "a-veebo", "b-veebo", false, None, 700).unwrap();
+        fold_twins(&mut list);
+        assert!(list[0].get("foldedInto").is_none() && list[0].get("mergedWith").is_none());
+        assert!(lookalikes(&list).is_empty(), "and they are not asked about again");
+
+        // The other device, holding the same pair under its own agents with
+        // the same answer, makes the same choice of leader.
+        let mut other = vec![twin("a-veebo", "a-veebo", "veebo", "Veebo"), twin("k3", "b-veebo", "veebo", "Veebo")];
+        answer_pair(&mut other, "a-veebo", "b-veebo", true, None, 500).unwrap();
+        fold_twins(&mut other);
+        assert_eq!(other[1]["foldedInto"], "a-veebo");
         // The starter's place in the list goes to the AI the person sees.
-        let mut stamped = vec![
-            { let mut t = starter("b-veebo", "b-veebo", "veebo", "Veebo"); t["seedSlot"] = serde_json::json!(1); t },
-            starter("k1", "a-veebo", "veebo", "Veebo"),
-        ];
+        let mut stamped = vec![{ let mut t = twin("b-veebo", "b-veebo", "veebo", "Veebo"); t["seedSlot"] = serde_json::json!(1); t }, twin("k1", "a-veebo", "veebo", "Veebo")];
+        answer_pair(&mut stamped, "a-veebo", "b-veebo", true, None, 500).unwrap();
         fold_twins(&mut stamped);
         assert_eq!(stamped[1]["seedSlot"], 1);
-        // The other device, holding the same four under its own agents,
-        // makes the same choice.
-        let mut other = vec![
-            starter("a-veebo", "a-veebo", "veebo", "Veebo"),
-            starter("a-teresa", "a-teresa", "teresa", "Teresa"),
-            starter("k3", "b-veebo", "veebo", "Veebo"),
-            starter("k4", "b-teresa", "teresa", "Teresa"),
-        ];
-        fold_twins(&mut other);
-        assert_eq!(other[2]["foldedInto"], "a-veebo");
-        assert_eq!(other[3]["foldedInto"], "a-teresa");
-        // A second round changes nothing.
+    }
+
+    #[test]
+    fn starters_an_earlier_version_already_showed_as_one_stay_one() {
+        use super::{fold_twins, lookalikes};
+        // As the 11-13 fold left a household's doubled starters: the mark,
+        // and no answer (nobody was asked then).
+        let mut list = vec![{ let mut t = twin("b-veebo", "b-veebo", "veebo", "Veebo"); t["foldedInto"] = serde_json::json!("a-veebo"); t }, twin("k1", "a-veebo", "veebo", "Veebo")];
+        assert_eq!(fold_twins(&mut list), 1, "the fold is written down as the answer, once");
+        assert_eq!(list[0]["foldedInto"], "a-veebo");
+        assert_eq!(list[0]["mergedWith"], "a-veebo");
+        assert_eq!(list[0]["pairAnswerAt"], 1, "older than any answer a person gives");
+        assert!(lookalikes(&list).is_empty(), "nobody is asked about something already settled");
         assert_eq!(fold_twins(&mut list), 0);
+        // An archived one is left alone, and so is its pair.
+        let mut archived = vec![{ let mut t = twin("b", "b", "veebo", "Veebo"); t["foldedInto"] = serde_json::json!("a"); t["status"] = serde_json::json!("archived"); t }, twin("a", "a", "veebo", "Veebo")];
+        fold_twins(&mut archived);
+        assert!(lookalikes(&archived).is_empty());
     }
 
     #[test]
-    fn a_twin_that_was_made_its_own_ai_stays_and_a_fold_is_undone_when_it_becomes_one() {
-        use super::{fold_twins, folded_into};
-        let starter = |id: &str, name: &str, prompt: &str, updated: i64| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": name, "systemPrompt": prompt, "updatedAt": updated, "status": "active" });
-        // Renamed on one computer: two AIs.
-        let mut renamed = vec![starter("a", "Veebo", "p", 0), starter("b", "Max", "p", 5)];
-        assert_eq!(fold_twins(&mut renamed), 0);
-        // New instructions under the old name: two AIs.
-        let mut rewritten = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "be brief", 5)];
-        assert_eq!(fold_twins(&mut rewritten), 0);
-        // Only a setting changed (the instructions are the same): one AI.
-        let mut setting = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "p", 5)];
-        assert_eq!(fold_twins(&mut setting), 1);
-        // An archived twin is left alone, and so is its pair.
-        let mut archived = vec![starter("a", "Veebo", "p", 0), { let mut t = starter("b", "Veebo", "p", 0); t["status"] = serde_json::json!("archived"); t }];
-        assert_eq!(fold_twins(&mut archived), 0);
-        // Folded, then renamed (its edit arrives from the other device): the mark goes.
-        let mut list = vec![starter("a", "Veebo", "p", 0), starter("b", "Veebo", "p", 0)];
-        fold_twins(&mut list);
-        assert_eq!(list[1]["foldedInto"], "a");
-        list[1]["name"] = serde_json::json!("Max");
-        assert_eq!(fold_twins(&mut list), 1);
-        assert!(list[1].get("foldedInto").is_none());
-        // Two AIs of the person's own making on one base are never starters' twins unless they are the same AI.
-        let custom = |id: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "reeves", "name": name, "systemPrompt": name, "updatedAt": 3, "status": "active" });
-        let mut customs = vec![custom("s", "Sterling"), custom("n", "Newstalicious")];
-        assert_eq!(fold_twins(&mut customs), 0);
+    fn what_looks_alike_and_how_the_person_is_asked() {
+        use super::lookalikes;
+        let own = |id: &str, name: &str, base: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": base, "name": name, "systemPrompt": name, "updatedAt": 3, "status": "active" });
+        // Two AIs the person made under one name: the quiet line, not the card.
+        let pairs = lookalikes(&[own("l1", "Luna", "custom-1"), own("l2", " luna ", "custom-2"), own("s", "Sterling", "custom-1")]);
+        assert_eq!(pairs.len(), 1);
+        assert_eq!((pairs[0].kind, pairs[0].name.as_str()), ("own", "Luna"));
+        // The Work set on two computers: one personality for all three, so
+        // the slot tells which is which, and each pair is a starter pair.
+        let work = |id: &str, slot: u64, name: &str| { let mut a = own(id, name, "reeves"); a["seedSlot"] = serde_json::json!(slot); a };
+        let pairs = lookalikes(&[work("a1", 1, "Assistant"), work("a2", 2, "Coder"), work("b1", 1, "Assistant"), work("b2", 2, "Coder")]);
+        assert_eq!(pairs.iter().map(|p| (p.name.as_str(), p.kind)).collect::<Vec<_>>(), vec![("Assistant", "starter"), ("Coder", "starter")]);
+        // Renamed on one computer: plainly two AIs, nobody is asked.
+        assert!(lookalikes(&[twin("a", "a", "veebo", "Veebo"), twin("b", "b", "veebo", "Max")]).is_empty());
     }
 
     #[test]
-    fn the_newest_settings_of_a_folded_group_go_to_the_leader() {
-        use super::{fold_twins, folded_into};
-        let starter = |id: &str, updated: i64, length: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": "Veebo", "systemPrompt": "p", "updatedAt": updated, "lengthDisposition": length, "model": format!("{id}.gguf"), "status": "active" });
+    fn the_newest_settings_of_a_group_go_to_the_leader() {
+        use super::{answer_pair, fold_twins};
+        let starter = |id: &str, updated: i64, length: &str| serde_json::json!({ "id": id, "agentPubKey": id, "foundingKey": id, "baseArchetypeId": "veebo", "name": "Veebo", "systemPrompt": "p", "updatedAt": updated, "lengthDisposition": length, "status": "active", "model": format!("{id}.gguf") });
         let mut list = vec![starter("a", 10, "conversational"), starter("b", 20, "brief")];
+        answer_pair(&mut list, "a", "b", true, None, 5).unwrap();
         fold_twins(&mut list);
         assert_eq!(list[1]["foldedInto"], "a");
-        assert_eq!(list[0]["lengthDisposition"], "brief", "the twin's newer setting");
+        assert_eq!(list[0]["lengthDisposition"], "brief", "the other's newer setting");
         assert_eq!(list[0]["updatedAt"], 20);
         assert_eq!(list[0]["model"], "a.gguf", "the model file is per device and per entry");
         assert_eq!(list[0]["foundingKey"], "a");
-        // The leader's own newer setting stays.
-        let mut list = vec![starter("a", 30, "conversational"), starter("b", 20, "brief")];
-        fold_twins(&mut list);
-        assert_eq!(list[0]["lengthDisposition"], "conversational");
+    }
+
+    #[test]
+    fn on_a_merge_nothing_the_person_added_disappears() {
+        use super::combined_settings;
+        let a = serde_json::json!({ "description": "the long-used one", "lengthDisposition": "brief", "skills": ["notes", "search"], "skillsOff": ["search"], "mcp": ["files"], "systemPrompt": "A" });
+        let b = serde_json::json!({ "description": "the new one", "defaultMode": "report", "skills": ["search", "calendar"], "mcp": ["git"], "mcpOff": ["git"], "systemPrompt": "B" });
+        // `a` has more conversations: its single values stay; what it lacks
+        // comes from the other; the lists are combined.
+        let m = combined_settings(&a, 240, &b, 12);
+        assert_eq!(m["description"], "the long-used one");
+        assert_eq!(m["systemPrompt"], "A");
+        assert_eq!(m["lengthDisposition"], "brief");
+        assert_eq!(m["defaultMode"], "report", "a value only the other had is kept");
+        assert_eq!(m["skills"], serde_json::json!(["notes", "search", "calendar"]));
+        assert_eq!(m["mcp"], serde_json::json!(["files", "git"]));
+        // "search" was off on one and on on the other: on. "git" was off on
+        // the only side that carried it: still off.
+        assert_eq!(m["skillsOff"], serde_json::json!([]));
+        assert_eq!(m["mcpOff"], serde_json::json!(["git"]));
+        // The other way round, the other's single values lead.
+        let m = combined_settings(&a, 3, &b, 12);
+        assert_eq!((m["description"].as_str(), m["systemPrompt"].as_str()), (Some("the new one"), Some("B")));
+        assert_eq!(m["lengthDisposition"], "brief");
+    }
+
+    #[test]
+    fn the_answer_travels_to_the_other_devices_and_the_newer_one_wins() {
+        // Device A said "Merge them" at 500. Device B holds the same two AIs
+        // with no answer, then with an older "Keep both".
+        let a_side = |answer: i64| { let mut t = ai("a-agent", "F1", "Teresa", 10); t["mergedWith"] = serde_json::json!("F2"); t["pairAnswerAt"] = serde_json::json!(answer); t };
+        let local = vec![ai("b-agent", "F1", "Teresa", 10)];
+        let (merged, updated, _, _) = merge_sibling_configs(local, &[a_side(500)], &Used::default());
+        assert_eq!(updated, 1);
+        assert_eq!((merged[0]["mergedWith"].as_str(), merged[0]["pairAnswerAt"].as_i64()), (Some("F2"), Some(500)));
+        assert_eq!(merged[0]["agentPubKey"], "b-agent");
+        let mut kept = ai("b-agent", "F1", "Teresa", 10);
+        kept["apartFrom"] = serde_json::json!(["F2"]);
+        kept["pairAnswerAt"] = serde_json::json!(900);
+        let (merged, updated, _, _) = merge_sibling_configs(vec![kept], &[a_side(500)], &Used::default());
+        assert_eq!(updated, 0, "this device's newer answer stands");
+        assert!(merged[0].get("mergedWith").is_none());
+        assert_eq!(merged[0]["apartFrom"], serde_json::json!(["F2"]));
     }
 
     #[test]
