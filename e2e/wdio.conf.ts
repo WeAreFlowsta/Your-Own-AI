@@ -127,6 +127,9 @@ function seedWindowsProfile() {
 
 const CAPTURE = !!process.env.YOAI_CAPTURE;
 
+const LONG_SPECS = /specs\/models\/queue\.e2e\.ts/;
+// Set where the run is started; the workers that run the specs inherit it.
+if (LONG_SPECS.test(process.argv.join(" "))) process.env.YOAI_E2E_LONG = "1";
 export const config: WebdriverIO.Config = {
   runner: "local",
   // Spec sets by launch mode (e2e/run.mjs): fresh profile (the welcome
@@ -163,6 +166,9 @@ export const config: WebdriverIO.Config = {
   // A cold model load plus a reply can take three minutes on a small card.
   // A capture take records whole flows, measurements included.
   // YOAI_E2E_LONG=1: a spec that runs a matrix leg (a load per model).
+  // A spec's own this.timeout() does not reach this runner: the limit is set
+  // here. LONG_SPECS (above) need more than five minutes by their nature
+  // (queue: a reply of thousands of words, then a model switch).
   mochaOpts: { ui: "bdd", timeout: CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000 },
   reporters: ["spec"],
   logLevel: "warn",

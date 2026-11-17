@@ -945,6 +945,67 @@ pub(crate) fn strip_channel_markers(text: &str) -> String {
     out
 }
 
+/// A line still being written reaches the page in parts: once this much of
+/// it has arrived with no line end, the text up to its last space is sent.
+/// The stream used to send finished lines only, so a reply written as one
+/// long paragraph showed nothing until it ended (seen 11-17: 13,600
+/// characters in one piece after two minutes of "thinking").
+pub(crate) const LONG_LINE_PART: usize = 60;
+
+/// The part of an unfinished line that can be sent now, taken off the front
+/// of `buffer`: everything up to and including its last space, once the
+/// buffer holds `LONG_LINE_PART` bytes. Never while the buffer holds a `<`:
+/// every marker the stream looks for in a line starts with one, and a
+/// marker must reach that check whole, so such a line waits for its end as
+/// before.
+pub(crate) fn take_long_line_part(buffer: &mut String) -> Option<String> {
+    if buffer.len() < LONG_LINE_PART || buffer.contains('<') {
+        return None;
+    }
+    let cut = buffer.rfind(' ')? + 1;
+    let rest = buffer.split_off(cut);
+    Some(std::mem::replace(buffer, rest))
+}
+
+#[cfg(test)]
+mod long_line_tests {
+    use super::{take_long_line_part, LONG_LINE_PART};
+
+    #[test]
+    fn a_short_unfinished_line_waits() {
+        let mut b = "The story of tea begins".to_string();
+        assert_eq!(take_long_line_part(&mut b), None);
+        assert_eq!(b, "The story of tea begins");
+    }
+
+    #[test]
+    fn a_long_unfinished_line_is_sent_up_to_its_last_space() {
+        let words = "tea ".repeat(LONG_LINE_PART / 4);
+        let mut b = format!("{words}unfinis");
+        assert_eq!(take_long_line_part(&mut b).as_deref(), Some(words.as_str()));
+        assert_eq!(b, "unfinis");
+        // Nothing is lost or repeated: what was sent plus what is kept is the line.
+        assert_eq!(take_long_line_part(&mut b), None);
+    }
+
+    #[test]
+    fn a_line_that_may_hold_a_marker_waits_for_its_end() {
+        let mut b = format!("{}<|im_e", "tea ".repeat(LONG_LINE_PART));
+        let before = b.clone();
+        assert_eq!(take_long_line_part(&mut b), None);
+        assert_eq!(b, before);
+    }
+
+    #[test]
+    fn one_long_word_waits_and_other_alphabets_are_cut_whole() {
+        let mut b = "x".repeat(LONG_LINE_PART * 2);
+        assert_eq!(take_long_line_part(&mut b), None);
+        let mut b = format!("{} 茶", "茶の歴史 ".repeat(LONG_LINE_PART));
+        let sent = take_long_line_part(&mut b).expect("a part");
+        assert!(sent.ends_with(' ') && b == "茶");
+    }
+}
+
 pub(crate) fn contains_channel_marker(text: &str) -> bool {
     CHANNEL_MARKERS.iter().any(|(open, _)| text.contains(open))
 }
@@ -4094,10 +4155,10 @@ pub async fn stop_llama_server(
     let mut is_running = state.is_server_running.lock().await;
     
     if let Some(child) = server_process.take() {
-        println!("[LLM] Stopping server...");
+        log::info!("[LLM] stopping the chat engine");
         child.kill().map_err(|e| format!("Failed to stop server: {}", e))?;
         *is_running = false;
-        println!("[LLM] Server stopped");
+        log::info!("[LLM] the chat engine is stopped");
         // The card is being given back (sub-second by the driver's count,
         // audit 09-13): let it settle, then forget the figure read while
         // this server held it - the loader's sizing reads fresh next.
@@ -6168,7 +6229,7 @@ async fn load_model_inner(
         }
     }
 
-    println!("[LLM] Loading model: {}", filename);
+    log::info!("[LLM] loading model: {}", filename);
 
     // Mark the load in flight so routing sees an incumbent for the whole
     // load window (cleared at the single exit below).
@@ -6176,6 +6237,7 @@ async fn load_model_inner(
 
     // Stop existing server if running - and the helpers leave the card
     // first: the incoming model gets all of it.
+    log::info!("[LLM] the switch to '{}' stops the running engine", filename);
     helpers_off_card(&state).await;
     stop_llama_server(state.clone()).await.ok();
 
@@ -6184,14 +6246,14 @@ async fn load_model_inner(
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         match is_llama_server_running().await {
             Ok(false) => {
-                println!("[LLM] Port {} freed after {}ms", chat_port(), attempt * 500);
+                log::info!("[LLM] port {} free after {} ms", chat_port(), attempt * 500);
                 break;
             }
             _ => {
                 if attempt == 10 {
                     // Our stopped engine has not exited: end it. Anything else
                     // on the port is left alone (the start moves to a free port).
-                    println!("[LLM] Port {} still in use after 5s, ending our own engine there", chat_port());
+                    log::info!("[LLM] port {} still in use after 5 s: ending our own engine there", chat_port());
                     end_our_engines_on(&app_handle, crate::ports::chat());
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 }
@@ -7120,6 +7182,9 @@ pub async fn stream_chat_completion(
                                             chunk: complete_line,
                                         });
                                     }
+                                    if let Some(part) = take_long_line_part(&mut content_buffer) {
+                                        let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData { chunk: part });
+                                    }
                                 }
                             }
 
@@ -7168,6 +7233,10 @@ pub async fn stream_chat_completion(
                                             translate_gemma_thought_markers(&complete_line)
                                         },
                                     });
+                                }
+                                // A long line with no end yet: send what has arrived.
+                                if let Some(part) = take_long_line_part(&mut content_buffer) {
+                                    let _ = app.emit(&format!("chat-stream-{}", request_id), StreamChunkData { chunk: part });
                                 }
                             }
 
