@@ -38,6 +38,14 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - With it installed, a picture you attach that is mostly text is read as
   a document, so a model that cannot see pictures can still answer about
   it. A photo of anything else stays a picture.
+- The Projects helper (Your Own AI Build) follows the app by itself. It
+  downloads once you have a model, and is replaced by itself when an
+  update of the app brings a newer one, so there is no "Update available"
+  to press. If you remove it, it stays removed until you ask for it. A
+  project you open while it is still downloading opens by itself when it
+  is in place.
+- The memory model follows the first model on every path. It was skipped
+  when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.
   Its engine could stay running, holding memory, until the next start.
 - Linux: quitting no longer brings up the desktop's crash report dialog.

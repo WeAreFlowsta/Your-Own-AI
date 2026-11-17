@@ -186,7 +186,7 @@ export const CarryChip = component$<CarryChipProps>((props) => {
                 })}
                 {needsProjects && (
                   <div class="px-4 py-2 text-xs text-[var(--text-muted)]">
-                    Tools need Projects, a free ~50 MB helper.{' '}
+                    Tools need Projects, a free ~70 MB helper.{' '}
                     {props.installing ? (
                       <span>Installing... {props.installPercent ?? 0}%</span>
                     ) : (

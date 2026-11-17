@@ -351,7 +351,7 @@ pub async fn download_mlx_artifact(
                 }
             })
         };
-        let dl = crate::llm::download_model(app.clone(), url, rel).await;
+        let dl = crate::llm::download_model(app.clone(), url, rel, None).await;
         ticker.abort();
         dl?;
         let got = std::fs::metadata(&target).map(|m| m.len()).unwrap_or(0);

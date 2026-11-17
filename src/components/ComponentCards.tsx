@@ -3,6 +3,7 @@
  * Build agent). Used twice: Add-ons > Components (get: download or remove)
  * and Settings > Storage (manage: only what is installed, remove).
  */
+import { notePartRemoved, notePartWanted } from "../utils/partsJob";
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useBuildInstall } from '../hooks/useBuildInstall';
 import { invoke } from "@tauri-apps/api/core";
@@ -83,6 +84,8 @@ export const ComponentCard = component$<CardProps>((props) => {
     error.value = "";
     downloading.value = true;
     percent.value = 0;
+    // Asked for: a removal no longer stands (utils/partsJob).
+    notePartWanted(props.model.id);
     try {
       const files = filesOf(props.model);
       for (let i = 0; i < files.length; i++) {
@@ -134,6 +137,8 @@ export const ComponentCard = component$<CardProps>((props) => {
       for (const f of filesOf(props.model)) {
         await modelManager.deleteModel(f.filename);
       }
+      // Remembered, so the app does not fetch it again by itself.
+      notePartRemoved(props.model.id);
       if (props.stopCommand) {
         try {
           await invoke(props.stopCommand);
@@ -320,7 +325,7 @@ export const BuildComponentCard = component$<{ manageOnly?: boolean }>((props) =
       <div class="min-w-0 flex-1">
         <h3 class="text-base font-semibold text-[var(--text-primary)] flex items-center gap-2">
           Your Own AI Build
-          <span class="text-xs font-normal text-[var(--text-muted)]">~50 MB</span>
+          <span class="text-xs font-normal text-[var(--text-muted)]">~70 MB</span>
         </h3>
         <p class="text-sm text-[var(--text-secondary)] mt-0.5">
           Lets your AIs work in project folders with you - reading files,

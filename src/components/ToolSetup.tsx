@@ -237,7 +237,7 @@ export const ToolSetup = component$<ToolSetupProps>((props) => {
         <div class="min-w-0 flex-1">
           <p class={head}>Your Own AI Build</p>
           <p class={sub}>
-            The helper that lets your AIs use tools and work in project folders. A free add-on, about 50 MB.
+            The helper that lets your AIs use tools and work in project folders. A free add-on, about 70 MB.
           </p>
           {build.downloading.value && (
             <p class={sub}>Downloading... {build.percent.value}% - keeps going if you leave this page.</p>

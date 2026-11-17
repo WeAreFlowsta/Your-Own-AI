@@ -1,7 +1,9 @@
-//! Your Own AI Build - install on demand.
+//! Your Own AI Build - the Projects helper, one of the app's parts.
 //!
-//! The projects surface ships visible to everyone; the agent itself is a
-//! free add-on downloaded from its GitHub release when the user asks.
+//! The agent is downloaded from its GitHub release: by itself once the
+//! person has a model (`ensure_build_agent`, asked by the page's parts job),
+//! replaced by itself when this app pins another version, and by a button
+//! as before. Someone who removed it is not given it again uninvited.
 //! Downloads ride the shared model-download transport (resume, retry,
 //! `model-download-progress` events keyed by the archive name) and run in
 //! the Rust runtime, so navigating the app - or closing the dropdown -
@@ -25,6 +27,18 @@ const BUILD_ARCHIVE_SHA256: &[(&str, &str)] = &[
     ("macos-x86_64", "5059d5d7e1df57ea24560cebce9d0eb90e374d7eff70d2adee370e16c8037c42"),
     ("windows-x86_64", "7834f2e9722cae66d4a0fd0ec060f8076f6debc2fecc8394b7884eabceeee7e8"),
 ];
+/// Whether the pinned release's Windows and macOS builds are signed. It
+/// moves with the tag. Until it is true, the app does not install the
+/// helper by itself for the first time on those two systems (a program
+/// fetched and started for everyone should be a signed one); a helper the
+/// person installed is still replaced by itself, and the buttons work.
+const BUILD_IS_SIGNED: bool = false;
+
+/// May the app install the helper for the first time with nobody asking?
+fn may_install_first(os: &str, signed: bool) -> bool {
+    signed || !matches!(os, "windows" | "macos")
+}
+
 const BUILD_REPO: &str = "WeAreFlowsta/Your-Own-AI-Build";
 
 static DOWNLOADING: AtomicBool = AtomicBool::new(false);
@@ -84,6 +98,50 @@ fn binary_name() -> &'static str {
     }
 }
 
+/// The note that the person removed the helper: `<app-data>/build-removed`.
+/// While it is there the helper is fetched only when they ask for it.
+fn removed_marker(app: &AppHandle) -> Option<std::path::PathBuf> {
+    Some(app.path().app_data_dir().ok()?.join("build-removed"))
+}
+
+fn was_removed(app: &AppHandle) -> bool {
+    removed_marker(app).map(|p| p.exists()).unwrap_or(false)
+}
+
+/// What the background check does about the helper.
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum Ensure {
+    /// No build exists for this platform.
+    Unavailable,
+    /// The person removed it: it comes back only when they ask.
+    Removed,
+    /// The pinned version is installed.
+    Current,
+    /// A download is running, or an agent is running on the program file.
+    Busy,
+    /// Missing, or another version than this app pins: fetch it.
+    Fetch,
+    /// Missing, and a first install by itself waits for a signed build on
+    /// this system (`BUILD_IS_SIGNED`).
+    NotYet,
+}
+
+fn what_to_do(has_build: bool, removed: bool, installed: Option<&str>, pin: &str, agent_running: bool, downloading: bool, first_allowed: bool) -> Ensure {
+    if !has_build {
+        Ensure::Unavailable
+    } else if removed {
+        Ensure::Removed
+    } else if installed == Some(pin) {
+        Ensure::Current
+    } else if downloading || (installed.is_some() && agent_running) {
+        Ensure::Busy
+    } else if installed.is_none() && !first_allowed {
+        Ensure::NotYet
+    } else {
+        Ensure::Fetch
+    }
+}
+
 /// Where the installed agent lives: `<app-data>/build/<binary>`.
 fn install_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(app
@@ -126,6 +184,8 @@ pub struct BuildInstallStatus {
     /// The archive name progress events are keyed by.
     pub archive: Option<String>,
     pub error: Option<String>,
+    /// The person removed it; it is not fetched again uninvited.
+    pub removed: bool,
 }
 
 #[tauri::command]
@@ -142,6 +202,7 @@ pub fn build_install_status(app: AppHandle) -> BuildInstallStatus {
         downloading: DOWNLOADING.load(Ordering::SeqCst),
         archive: platform_asset(),
         error: LAST_ERROR.lock().ok().and_then(|e| e.clone()),
+        removed: was_removed(&app),
     }
 }
 
@@ -167,7 +228,11 @@ pub async fn download_build_agent(
     if let Ok(mut e) = LAST_ERROR.lock() {
         *e = None;
     }
-    let result = download_and_install(&app).await;
+    // Asked for: a removal no longer stands.
+    if let Some(m) = removed_marker(&app) {
+        let _ = std::fs::remove_file(m);
+    }
+    let result = download_and_install(&app, false).await;
     DOWNLOADING.store(false, Ordering::SeqCst);
     match &result {
         Ok(path) => {
@@ -183,13 +248,80 @@ pub async fn download_build_agent(
     result
 }
 
-async fn download_and_install(app: &AppHandle) -> Result<String, String> {
+/// The background check: fetch the helper when it is missing or is not the
+/// version this app pins, unless the person removed it, a download is
+/// running, or an agent is running on it (then the next check does it).
+/// Quiet: a failure is logged and tried again at a later check, with no
+/// error shown, since nobody pressed anything. Returns what happened:
+/// `current`, `removed`, `busy`, `unavailable`, `off`, `not-yet`, `installed`,
+/// `updated`.
+#[tauri::command]
+pub async fn ensure_build_agent(
+    app: AppHandle,
+    bridge: tauri::State<'_, crate::agent_bridge::AgentBridgeState>,
+) -> Result<String, String> {
+    // An install with downloads switched off fetches nothing by itself.
+    if crate::llm::downloads_blocked() {
+        return Ok("off".to_string());
+    }
+    let installed = installed_version(&app);
+    let decision = what_to_do(
+        platform_asset().is_some(),
+        was_removed(&app),
+        installed.as_deref(),
+        version(),
+        bridge.agent_running().await,
+        DOWNLOADING.load(Ordering::SeqCst),
+        may_install_first(std::env::consts::OS, BUILD_IS_SIGNED),
+    );
+    let name = match decision {
+        Ensure::Unavailable => "unavailable",
+        Ensure::Removed => "removed",
+        Ensure::Current => "current",
+        Ensure::Busy => "busy",
+        Ensure::NotYet => "not-yet",
+        Ensure::Fetch => "",
+    };
+    if decision != Ensure::Fetch {
+        return Ok(name.to_string());
+    }
+    if DOWNLOADING.swap(true, Ordering::SeqCst) {
+        return Ok("busy".to_string());
+    }
+    let updated = installed.is_some();
+    log::info!(
+        "[build] fetching Your Own AI Build {} in the background ({})",
+        version(),
+        match &installed { Some(v) => format!("replacing {v}"), None => "not installed yet".to_string() }
+    );
+    let result = download_and_install(&app, true).await;
+    DOWNLOADING.store(false, Ordering::SeqCst);
+    match result {
+        Ok(path) => {
+            let _ = app.emit("build-install-done", serde_json::json!({ "path": path, "background": true, "updated": updated }));
+            Ok(if updated { "updated" } else { "installed" }.to_string())
+        }
+        Err(e) => {
+            log::warn!("[build] the background fetch did not finish (tried again at a later check): {}", e);
+            // The tray's row for it goes; nothing is said.
+            let _ = app.emit("build-install-put-off", serde_json::json!({}));
+            Err(e)
+        }
+    }
+}
+
+/// `quiet`: a background fetch, whose failure raises no error row.
+async fn download_and_install(app: &AppHandle, quiet: bool) -> Result<String, String> {
     let archive = platform_asset().ok_or("No build is available for this platform yet")?;
     let url = format!(
         "https://github.com/{}/releases/download/{}/{}",
         BUILD_REPO, BUILD_RELEASE_TAG, archive
     );
-    crate::llm::download_model(app.clone(), url, archive.clone()).await?;
+    if quiet {
+        crate::llm::download_model_inner(app.clone(), url, archive.clone()).await?;
+    } else {
+        crate::llm::download_model(app.clone(), url, archive.clone(), None).await?;
+    }
 
     let archive_path = crate::llm::get_models_dir(app)?.join(&archive);
     let final_dir = install_dir(app)?;
@@ -289,6 +421,12 @@ pub async fn uninstall_build_agent(
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(|e| format!("could not remove: {}", e))?;
     }
+    // Remembered, so the background check does not bring it back.
+    if let Some(m) = removed_marker(&app) {
+        if let Err(e) = std::fs::write(&m, b"") {
+            log::warn!("[build] could not note the removal: {}", e);
+        }
+    }
     let _ = app.emit("build-uninstalled", serde_json::json!({}));
     log::info!("[build] uninstalled Your Own AI Build");
     Ok(())
@@ -297,6 +435,33 @@ pub async fn uninstall_build_agent(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_background_check_fetches_only_what_is_missing_or_another_version() {
+        let pin = "0.4.3";
+        // A new person, or an existing one who never had it.
+        assert_eq!(what_to_do(true, false, None, pin, false, false, true), Ensure::Fetch);
+        // Another version than the pin, older or newer: the pinned one.
+        assert_eq!(what_to_do(true, false, Some("0.4.2"), pin, false, false, true), Ensure::Fetch);
+        assert_eq!(what_to_do(true, false, Some("0.5.0"), pin, false, false, true), Ensure::Fetch);
+        assert_eq!(what_to_do(true, false, Some(pin), pin, true, false, true), Ensure::Current);
+        // Removed by the person: never uninvited, whatever else is true.
+        assert_eq!(what_to_do(true, true, None, pin, false, false, true), Ensure::Removed);
+        assert_eq!(what_to_do(true, true, Some("0.4.2"), pin, false, false, true), Ensure::Removed);
+        // An agent running on the old program file holds the replacement;
+        // a first install has nothing running on it.
+        assert_eq!(what_to_do(true, false, Some("0.4.2"), pin, true, false, true), Ensure::Busy);
+        assert_eq!(what_to_do(true, false, None, pin, true, false, true), Ensure::Fetch);
+        assert_eq!(what_to_do(true, false, None, pin, false, true, true), Ensure::Busy);
+        assert_eq!(what_to_do(false, false, None, pin, false, false, true), Ensure::Unavailable);
+        // No signed build for this system yet: nothing is installed for the
+        // first time by itself, but one the person installed is replaced.
+        assert_eq!(what_to_do(true, false, None, pin, false, false, false), Ensure::NotYet);
+        assert_eq!(what_to_do(true, false, Some("0.4.2"), pin, false, false, false), Ensure::Fetch);
+        assert!(may_install_first("linux", false));
+        assert!(!may_install_first("windows", false) && !may_install_first("macos", false));
+        assert!(may_install_first("windows", true) && may_install_first("macos", true));
+    }
 
     #[test]
     fn every_platform_with_a_build_has_a_pinned_fingerprint() {
