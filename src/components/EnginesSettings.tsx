@@ -36,6 +36,8 @@ interface EngineStatus {
   gpu_supported: boolean;
   installed: boolean;
   stale_version_installed: boolean;
+  /** The app is fetching the pinned engine by itself after an update. */
+  arriving?: boolean;
   /** What the next chat-server start will use. */
   active_backend: "bundled" | "cuda";
   /** What the RUNNING chat server was spawned with, if one is running. */
@@ -128,10 +130,17 @@ export default component$(() => {
       downloading.value = false;
       error.value = e.payload;
     });
+    // The app's own fetch after an update did not finish: the Update
+    // button is back, with nothing said (the next start tries again).
+    const unPutOff = await listen("engine-install-put-off", async () => {
+      downloading.value = false;
+      await refresh();
+    });
     cleanup(() => {
       unp();
       unDone();
       unFail();
+      unPutOff();
     });
   });
 
@@ -402,7 +411,13 @@ export default component$(() => {
                   still works.
                 </p>
               )}
-              {s.gpu_supported && s.stale_version_installed && !s.installed && (
+              {s.gpu_supported && s.stale_version_installed && !s.installed && (downloading.value || s.arriving) && (
+                <p class="mt-1.5 text-xs text-[var(--text-muted)]" data-testid="engine-arriving">
+                  Finishing the update - the app was updated and its matching
+                  engine is downloading. Nothing to do.
+                </p>
+              )}
+              {s.gpu_supported && s.stale_version_installed && !s.installed && !downloading.value && !s.arriving && (
                 <p class="mt-1.5 text-xs text-amber-500/90">
                   Update available - the app was updated and needs a matching
                   engine. Download to update.

@@ -46,7 +46,7 @@ export interface CudaOffer {
 export async function cudaOffer(): Promise<CudaOffer> {
   try {
     const [status, info, safe] = await Promise.all([
-      invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; tag: string; download_bytes?: number | null }>('engine_status'),
+      invoke<{ supported: boolean; gpu_supported: boolean; installed: boolean; stale_version_installed: boolean; arriving?: boolean; tag: string; download_bytes?: number | null }>('engine_status'),
       invoke<{ gpu_name?: string | null }>('get_system_info'),
       invoke<{ cuda_disabled?: boolean }>('gpu_safe_mode_status').catch(() => ({ cuda_disabled: false })),
     ]);
@@ -54,7 +54,9 @@ export async function cudaOffer(): Promise<CudaOffer> {
     return {
       // gpu_supported: never pitch an engine the card's generation cannot
       // execute (a GTX 960M install crashed every load until this gate).
-      eligible: nvidia && status.supported && status.gpu_supported && !status.installed && !safe.cuda_disabled,
+      // arriving: the app is fetching it by itself after an update, so
+      // there is nothing to offer.
+      eligible: nvidia && status.supported && status.gpu_supported && !status.installed && !safe.cuda_disabled && !status.arriving,
       isUpdate: status.stale_version_installed && !status.installed,
       tag: status.tag,
       bytes: status.download_bytes ?? 0,

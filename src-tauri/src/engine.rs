@@ -12,6 +12,8 @@
 
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 /// The llama.cpp release tag this app is built against. MUST match
@@ -221,6 +223,9 @@ pub struct EngineStatus {
     pub installed: bool,
     /// An older CUDA engine version is on disk (update available).
     pub stale_version_installed: bool,
+    /// The pinned engine is being fetched by the app itself after an
+    /// update: there is nothing to press.
+    pub arriving: bool,
     /// What the NEXT chat-server spawn will use.
     pub active_backend: Backend,
     /// What the bundled engine runs models on, on THIS platform: "metal"
@@ -252,6 +257,7 @@ pub async fn engine_status(
         gpu_supported: cuda_gpu_supported(),
         installed: cuda_engine_binary(&app).is_some(),
         stale_version_installed: other_cuda_version_installed(&app),
+        arriving: arriving(),
         active_backend: active_backend(&app),
         bundled_runs_on: if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
             "metal"
@@ -270,22 +276,54 @@ pub async fn engine_status(
 /// Download + install the CUDA engine. Reuses the model downloader's
 /// transport (resume, retry, `model-download-progress` events keyed by the
 /// zip filename), then extracts into the versioned engine dir and removes
-/// the zip. `url` override exists for dev testing against a locally served
-/// zip (the release repo is private until launch).
+/// the zip.
 #[tauri::command]
 pub async fn download_cuda_engine(
     app: AppHandle,
     state: tauri::State<'_, crate::llm::LLMState>,
 ) -> Result<(), String> {
+    install_pinned(&app, state, false).await
+}
+
+/// Test builds only: the engine zip from another address, with its own
+/// fingerprint (`e2e/engine-update-live.sh` serves this machine's installed
+/// engine, so the test needs no 800 MB download). A release build has no
+/// such door: its only source is the pinned release.
+#[cfg(debug_assertions)]
+fn test_source() -> Option<(String, String)> {
+    let url = std::env::var("YOAI_TEST_CUDA_ZIP_URL").ok()?;
+    let sha = std::env::var("YOAI_TEST_CUDA_ZIP_SHA256").ok()?;
+    log::warn!("[Engine] TEST: the engine zip comes from {url}");
+    Some((url, sha))
+}
+
+#[cfg(not(debug_assertions))]
+fn test_source() -> Option<(String, String)> {
+    None
+}
+
+/// The pinned engine's zip, as the download is named on disk.
+fn cuda_zip_name() -> String {
+    format!("llama-server-cuda-{}.zip", tag_version())
+}
+
+/// `quiet`: fetched by the app itself after an update (`fetch_due_update`).
+/// A failure then raises no error; it is logged and the offer card stands.
+async fn install_pinned(
+    app: &AppHandle,
+    state: tauri::State<'_, crate::llm::LLMState>,
+    quiet: bool,
+) -> Result<(), String> {
     // The URL is derived from the pin, never taken from the caller: an
     // engine is an executable, and the only source is the pinned release.
     let url = cuda_download_url().ok_or("unsupported_platform")?;
-    let expected = cuda_zip_expected_sha256().ok_or("unsupported_platform")?;
-    let zip_name = format!("llama-server-cuda-{}.zip", tag_version());
-    crate::llm::download_model(app.clone(), url, zip_name.clone(), None).await?;
-    let zip_path = crate::llm::get_models_dir(&app)?.join(&zip_name);
+    let expected = cuda_zip_expected_sha256().ok_or("unsupported_platform")?.to_string();
+    let (url, expected) = test_source().unwrap_or((url, expected));
+    let zip_name = cuda_zip_name();
+    crate::llm::download_model(app.clone(), url, zip_name.clone(), Some(quiet)).await?;
+    let zip_path = crate::llm::get_models_dir(app)?.join(&zip_name);
     let result = match sha256_file(&zip_path) {
-        Ok(actual) if actual == expected => install_cuda_zip(&app, &zip_name),
+        Ok(actual) if actual == expected => install_cuda_zip(app, &zip_name),
         Ok(actual) => {
             log::warn!("[Engine] CUDA zip checksum mismatch: expected {expected}, got {actual} - not installed");
             Err("The engine download did not match its published checksum, so it was not installed. Try again later.".to_string())
@@ -293,25 +331,188 @@ pub async fn download_cuda_engine(
         Err(e) => Err(e),
     };
     // The zip is an installer artifact, not a model - clean it up either way.
-    if let Ok(models) = crate::llm::get_models_dir(&app) {
+    if let Ok(models) = crate::llm::get_models_dir(app) {
         let _ = std::fs::remove_file(models.join(&zip_name));
     }
     // The page that started this may be gone (the download outlives the
     // webview route); the outcome goes out as an event so any page can
     // reflect it - the offer card and Settings both listen.
     if let Err(e) = &result {
-        let _ = app.emit("engine-install-failed", e.clone());
+        if !quiet {
+            let _ = app.emit("engine-install-failed", e.clone());
+        }
     }
     result?;
+    // No load waits on it any more, and the next one finds it in place.
+    ARRIVING.store(false, Ordering::SeqCst);
     let _ = app.emit("engine-installed", LLAMA_ENGINE_TAG);
     // Older versions are superseded the moment the new one is in place.
-    remove_stale_cuda_versions(&app);
+    remove_stale_cuda_versions(app);
     log::info!("[Engine] CUDA engine installed ({})", LLAMA_ENGINE_TAG);
     // Applies now: the loaded model moves onto the new engine.
     if let Err(e) = crate::llm::reload_for_engine_change(app.clone(), state, None, None).await {
         log::warn!("[Engine] reload after CUDA install failed: {}", e);
     }
     Ok(())
+}
+
+// --- The engine as an update's last step ---------------------------------
+//
+// An app update that pins a newer engine leaves the installed NVIDIA engine
+// behind: `cuda_engine_binary` looks only at the pinned version. Someone who
+// chose the NVIDIA engine keeps it across updates with nothing to press: the
+// pinned one is fetched as the app starts, and a model asked for meanwhile
+// loads when it arrives (bounded: `hold_decision`), so the first replies
+// after an update are not slower than the ones before it.
+
+/// The pinned engine is on its way after an update.
+static ARRIVING: AtomicBool = AtomicBool::new(false);
+/// A load already stopped waiting for this arrival: later loads do not
+/// wait again, and the model moves across when the engine lands.
+static GAVE_UP: AtomicBool = AtomicBool::new(false);
+/// The download so far: when it began, and the first and latest percent
+/// seen (the first is not zero when it resumes a partial file).
+static PROGRESS: Mutex<Option<Arrival>> = Mutex::new(None);
+
+#[derive(Clone, Copy)]
+struct Arrival {
+    began: std::time::Instant,
+    first: Option<(f64, f64)>, // (seconds since `began`, percent)
+    latest: f64,
+}
+
+/// The longest a model load waits for the engine.
+const HOLD_MAX_SECS: f64 = 180.0;
+/// How long the download is watched before its pace is judged.
+const HOLD_JUDGE_AFTER_SECS: f64 = 15.0;
+
+#[derive(Debug, PartialEq)]
+enum Hold {
+    Wait,
+    GiveUp,
+}
+
+/// Should a model load keep waiting for the engine? It waits while the
+/// download's pace says the engine lands inside `HOLD_MAX_SECS` of its
+/// start, and gives up as soon as it says otherwise: nobody waits three
+/// minutes for a download that needs ten.
+fn hold_decision(elapsed: f64, first: Option<(f64, f64)>, latest: f64) -> Hold {
+    if elapsed >= HOLD_MAX_SECS {
+        return Hold::GiveUp;
+    }
+    if elapsed < HOLD_JUDGE_AFTER_SECS {
+        return Hold::Wait;
+    }
+    let Some((t0, p0)) = first else { return Hold::GiveUp }; // nothing has moved
+    let (dt, dp) = (elapsed - t0, latest - p0);
+    if dt <= 0.0 || dp <= 0.0 {
+        return Hold::GiveUp;
+    }
+    let left = (100.0 - latest).max(0.0) / (dp / dt);
+    if elapsed + left <= HOLD_MAX_SECS { Hold::Wait } else { Hold::GiveUp }
+}
+
+/// Is an update of the installed NVIDIA engine due: another version is on
+/// disk (the person chose it and did not remove it), the pinned one is
+/// not, and this machine can use it?
+pub fn update_due(app: &AppHandle) -> bool {
+    cuda_triple().is_some()
+        && cuda_engine_binary(app).is_none()
+        && other_cuda_version_installed(app)
+        && cuda_gpu_supported()
+        && !crate::llm::downloads_blocked()
+}
+
+pub fn arriving() -> bool {
+    ARRIVING.load(Ordering::SeqCst)
+}
+
+/// In setup, before the page can ask for a model: note that the engine is
+/// on its way, so the first load waits for it. `fetch_due_update` follows
+/// once the graphics card's generation has been read.
+pub fn expect_due_update(app: &AppHandle) {
+    if !update_due(app) || ARRIVING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    GAVE_UP.store(false, Ordering::SeqCst);
+    *PROGRESS.lock().unwrap() = Some(Arrival { began: std::time::Instant::now(), first: None, latest: 0.0 });
+}
+
+/// At start: fetch the pinned engine when an update of it is due. Returns
+/// at once; the fetch runs on its own. A failure is quiet (the offer card
+/// with its Update button stands, and the next start tries again).
+pub fn fetch_due_update(app: &AppHandle) {
+    // Marked in `expect_due_update`; the graphics card's generation is
+    // known by now, and an engine it cannot run is not fetched.
+    if !arriving() {
+        return;
+    }
+    if !update_due(app) {
+        ARRIVING.store(false, Ordering::SeqCst);
+        return;
+    }
+    log::info!("[Engine] the installed NVIDIA engine is from before this update: fetching {} now", LLAMA_ENGINE_TAG);
+    let _ = app.emit("engine-arriving", LLAMA_ENGINE_TAG);
+    // The download's pace, for the loads that wait on it.
+    {
+        use tauri::Listener as _;
+        let zip = cuda_zip_name();
+        app.listen("model-download-progress", move |event| {
+            if !arriving() {
+                return;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(event.payload()) else { return };
+            if v.get("filename").and_then(|f| f.as_str()) != Some(zip.as_str()) {
+                return;
+            }
+            let Some(percent) = v.get("percent").and_then(|p| p.as_f64()) else { return };
+            if let Some(a) = PROGRESS.lock().unwrap().as_mut() {
+                if a.first.is_none() {
+                    a.first = Some((a.began.elapsed().as_secs_f64(), percent));
+                }
+                a.latest = percent;
+            }
+        });
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let state = app.state::<crate::llm::LLMState>();
+        let result = install_pinned(&app, state, true).await;
+        ARRIVING.store(false, Ordering::SeqCst);
+        if let Err(e) = result {
+            log::warn!("[Engine] the NVIDIA engine was not fetched (the Update button stands; the next start tries again): {}", e);
+            let _ = app.emit("engine-install-put-off", ());
+        }
+    });
+}
+
+/// A model load waits here while the engine is on its way, so it starts on
+/// the engine the person chose. Bounded by `hold_decision`. Not when safe
+/// mode holds models off the graphics card: the engine is still fetched,
+/// but no load would use it.
+pub async fn wait_while_arriving(app: &AppHandle) {
+    if !arriving() || GAVE_UP.load(Ordering::SeqCst) || !crate::gpu_safety::cuda_allowed(app) {
+        return;
+    }
+    log::info!("[Engine] the model loads when the NVIDIA engine is in place (it is downloading)");
+    loop {
+        if !arriving() {
+            log::info!("[Engine] the wait for the NVIDIA engine is over");
+            return;
+        }
+        let snapshot = *PROGRESS.lock().unwrap();
+        let Some(a) = snapshot else { return };
+        let elapsed = a.began.elapsed().as_secs_f64();
+        if hold_decision(elapsed, a.first, a.latest) == Hold::GiveUp {
+            GAVE_UP.store(true, Ordering::SeqCst);
+            log::info!(
+                "[Engine] the NVIDIA engine is not close enough ({:.0}% after {:.0} s): the model loads on the standard engine and moves across when it lands",
+                a.latest, elapsed
+            );
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 }
 
 /// Extract the downloaded zip (flat: binary + CUDA runtime libraries) into
@@ -703,6 +904,27 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_load_waits_for_the_engine_only_while_it_is_close() {
+        // The first seconds: wait, whatever the download says yet.
+        assert_eq!(hold_decision(3.0, None, 0.0), Hold::Wait);
+        assert_eq!(hold_decision(14.0, Some((1.0, 0.0)), 1.0), Hold::Wait);
+        // Nothing has moved by the time it is judged.
+        assert_eq!(hold_decision(15.0, None, 0.0), Hold::GiveUp);
+        assert_eq!(hold_decision(20.0, Some((2.0, 40.0)), 40.0), Hold::GiveUp);
+        // 2% a second: lands about a minute in. Wait.
+        assert_eq!(hold_decision(20.0, Some((0.0, 0.0)), 40.0), Hold::Wait);
+        // 0.2% a second: eight minutes. Not waited for.
+        assert_eq!(hold_decision(20.0, Some((0.0, 0.0)), 4.0), Hold::GiveUp);
+        // A resumed download is judged on what moved since, not on where
+        // it started: 60% already there, 1% in 19 s is slow.
+        assert_eq!(hold_decision(20.0, Some((1.0, 60.0)), 61.0), Hold::GiveUp);
+        // ...and quick when it moves quickly.
+        assert_eq!(hold_decision(20.0, Some((1.0, 60.0)), 90.0), Hold::Wait);
+        // Never past the cap.
+        assert_eq!(hold_decision(180.0, Some((0.0, 0.0)), 99.0), Hold::GiveUp);
+    }
 
     #[test]
     fn tag_version_strips_prefix() {

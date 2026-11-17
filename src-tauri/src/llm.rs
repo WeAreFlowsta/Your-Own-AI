@@ -6057,6 +6057,11 @@ async fn load_model_inner(
         return Err("Model file not found".to_string());
     }
 
+    // After an update that brought a newer NVIDIA engine, it is on its way:
+    // the model loads when it is in place (bounded), not on the standard
+    // engine first.
+    crate::engine::wait_while_arriving(&app_handle).await;
+
     // Never load an embedding/encoder model (bge etc.) into the chat server  - 
     // it can't do causal generation, so completions 500 with "context does not
     // [support] logits computation". The embedding server (port 8091) loads it

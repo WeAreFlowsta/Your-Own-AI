@@ -44,6 +44,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   to press. If you remove it, it stays removed until you ask for it. A
   project you open while it is still downloading opens by itself when it
   is in place.
+- NVIDIA engine: after an update that brings a newer engine, the app
+  fetches it by itself as it starts, and your model loads on it when it is
+  in place. Before, models ran on the standard engine until you pressed
+  Update. If the download is slow, the model loads on the standard engine
+  and moves across when the engine arrives.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.
