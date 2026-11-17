@@ -2,10 +2,13 @@
 // (linked before a joining device's starters folded into the identity's):
 // devices-live.sh, with DEVICES_TWINS=1, writes that state into both stored
 // lists after its own phases, then runs these two.
-//   e (device B driven, A up): B stands the two as one under TWINS_LEADER, and
-//     writes a conversation under its own copy's founding key.
-//   f (device A driven, B up): A stands them as one under the same leader, and
-//     its one AI lists the conversation B wrote under the other founding key.
+// Two AIs that look alike are never joined on a guess (2026-11-17):
+//   e (device B driven, A up): B is asked with the card; "Merge them" is
+//     pressed; B stands the two as one under TWINS_LEADER, and writes a
+//     conversation under its own copy's founding key.
+//   f (device A driven, B up): the answer arrives from B, so A stands them as
+//     one under the same leader without being asked, and its one AI lists the
+//     conversation B wrote under the other founding key.
 import { waitForChat, invoke, invokeLong } from "../models/_helpers";
 
 const PHASE = process.env.TWINS_PHASE ?? "";
@@ -26,16 +29,49 @@ async function stored(): Promise<Ai[]> {
   }, path) as unknown as Promise<Ai[]>;
 }
 
-/** Both copies have an agent here and stand as one under LEADER; returns the
- *  one that leads. */
+type Pairing = { lookalikes: { a: string; b: string; name: string; kind: string }[] };
+
+/** Both copies have an agent here. Nothing joins them on a guess: on the
+ *  device the person answers on (phase e, B) the card asks and "Merge them"
+ *  is pressed; on the other (phase f, A) the answer arrives from B and the
+ *  two stand as one with nobody asked again. Either way they stand as one
+ *  under LEADER; returns the one that leads. */
 async function oneAi(): Promise<Ai> {
   let pair: Ai[] = [];
+  const both = async () => (await stored()).filter((a) => a.name === NAME && (a.status ?? "active") === "active");
   await browser.waitUntil(async () => {
-    pair = (await stored()).filter((a) => a.name === NAME && (a.status ?? "active") === "active");
+    pair = await both();
     return pair.length === 2 && pair.every((a) => !!a.agentPubKey);
   }, { timeout: 300_000, interval: 3_000, timeoutMsg: `the two ${NAME}s never both had an agent here` });
-  await invoke<number>("fold_twins_now");
-  pair = (await stored()).filter((a) => a.name === NAME && (a.status ?? "active") === "active");
+  if (PHASE === "e") {
+    // Two AIs until the person says otherwise.
+    expect(await invoke<number>("fold_twins_now")).toBe(0);
+    expect((await both()).some((a) => !!a.foldedInto)).toBe(false);
+    const asked = (await invoke<Pairing>("ai_pairing")).lookalikes.filter((l) => l.name === NAME);
+    console.log(`e2e: twins e: asked about ${JSON.stringify(asked.map((l) => [l.name, l.kind]))}`);
+    expect(asked.length).toBe(1);
+    expect(asked[0].kind).toBe("starter");
+    // The card on the home page, and "Merge them".
+    await browser.execute(() => location.reload());
+    await browser.pause(2000);
+    await waitForChat();
+    const question = await $('[data-testid="lookalike-question"]');
+    await question.waitForDisplayed({ timeout: 60_000 });
+    const text = await question.getText();
+    console.log(`e2e: twins e: the card says ${JSON.stringify(text)}`);
+    expect(text).toContain(`You have two AIs named ${NAME}`);
+    expect(text).toContain("Are they the same AI?");
+    await (await $('[data-testid="lookalike-merge"]')).click();
+    await browser.waitUntil(async () => (await both()).some((a) => !!a.foldedInto), { timeout: 60_000, timeoutMsg: "Merge them did not make the two one" });
+  } else {
+    // The answer given on B arrives with its AIs: one AI here too.
+    await browser.waitUntil(async () => {
+      try { await invoke("config_sync_now"); } catch { /* the next round */ }
+      return (await both()).some((a) => !!a.foldedInto);
+    }, { timeout: 600_000, interval: 15_000, timeoutMsg: `the answer given on the other device never arrived: A still shows two ${NAME}s` });
+    expect((await invoke<Pairing>("ai_pairing")).lookalikes.filter((l) => l.name === NAME)).toEqual([]);
+  }
+  pair = await both();
   const leader = pair.find((a) => !a.foldedInto)!;
   const folded = pair.find((a) => !!a.foldedInto)!;
   expect(leader).toBeTruthy();

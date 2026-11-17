@@ -43,6 +43,12 @@ export interface UserDefinedAI {
    *  person): the founding key of the AI it is folded into. Per device,
    *  computed by the config sync; such an AI is stored but never listed. */
   foldedInto?: string;
+  /** The person's answer about an AI that looks like this one (config_sync.rs): the founding key
+   *  of the AI it is one with, the founding keys of AIs it is NOT one with, and when that was
+   *  said. Written by the backend on "Merge them" / "Keep both"; travels to the other devices. */
+  mergedWith?: string;
+  apartFrom?: string[];
+  pairAnswerAt?: number;
   /** ms epoch of the person's last edit to this AI (never set by seeding or by key changes) - the
    *  newest edit wins when the same AI is edited on two devices. */
   updatedAt?: number;
@@ -50,6 +56,10 @@ export interface UserDefinedAI {
    *  Names and personalities change (the Work set, the wizard), so this is the only stable way to
    *  fold one install's starters into another's when the person signs in on a second device. */
   seedSlot?: 1 | 2 | 3;
+  /** ms epoch when this install seeded the starter - stamped once, never edited. Of two installs'
+   *  starters that have never been talked to, the one seeded first is the identity's AI; the
+   *  other gives way to it. Absent on starters seeded before the stamp existed (the earliest). */
+  seededAt?: number;
   archivedAt?: number;  // ms epoch when the AI was archived (set on archive, cleared on restore)
 }
 

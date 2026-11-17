@@ -62,6 +62,29 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   answer held to the tool's own shape. Smaller models used to answer in
   words most of the time (the Projects helper relies on this for its
   structured answers).
+- The welcome steps show the Work set first, already applied, with
+  Personal beside it. Coming back to that step now shows the set your AIs
+  are, and the three cards keep their order.
+- On a second computer, the welcome steps can no longer change the AIs you
+  already have. A starter that has never been talked to there gives way to
+  your existing AI in its place, whatever was chosen or renamed in the
+  welcome steps; one that has been talked to stays its own AI beside
+  yours. Before, a set chosen or a name typed on the second computer could
+  replace the name, personality and picture of an AI on the first.
+- "Used Your Own AI before? Sign in to bring your AIs here." in the welcome
+  steps, shown only when Flowsta Vault is running on the computer.
+- Restoring from the Vault onto a computer whose welcome steps chose the
+  Work set gives three AIs, not five.
+- Two AIs are never joined on a guess. When two look like the same AI
+  (a starter you used on a computer before signing in, and the same
+  starter on your account), the app says so once, with how many
+  conversations each holds, and asks: Merge them, or Keep both. Merged,
+  you see one AI with both sets of conversations and both memories, with
+  the skills and tools of both; nothing is deleted, and "Separate them
+  again" on Your AIs brings the other back. Kept apart, a small tag
+  beside each name says where it is from. Your answer reaches your other
+  computers, so you are asked once. Before, a starter left with its
+  seeded name was joined to your account's by itself.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.

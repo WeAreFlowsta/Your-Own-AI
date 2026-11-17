@@ -42,6 +42,7 @@ import AiPackImportModal from "../../components/AiPackImportModal";
 import { parseAiPack, verifyAiPack, thumbnailDataUrlToBytes, type AiPack } from "../../utils/aiPack";
 import type { VerifyState } from "../../utils/packSigning";
 import { addKnowledge } from "../../utils/transcriptMemory";
+import { readPairing, mergePair, keepPairApart, pairQuestion, tagOf, conversationsText, foundingOf, EMPTY_PAIRING, type Pairing, type Lookalike } from "../../utils/lookalikes";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -218,6 +219,39 @@ export default component$(() => {
   const currentModel = useSignal<string | null>(null);
   // Online model names for the description's "{models}" phrase ("GPT-6 Astra, online").
   const onlineNames = useSignal<Record<string, string>>({});
+  // AIs that look alike, or were made one (utils/lookalikes.ts): the tag
+  // two AIs of one name carry, the quiet "Looks the same" line, and
+  // "Separate them again".
+  const pairing = useSignal<Pairing>(EMPTY_PAIRING);
+  const pairToMerge = useSignal<Lookalike | null>(null);
+  const pairBusy = useSignal(false);
+  const refreshPairing = $(async () => {
+    pairing.value = await readPairing();
+  });
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    await refreshPairing();
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      const un = await listen("ai-configs-changed", () => void refreshPairing());
+      cleanup(() => un());
+    } catch {
+      /* not inside Tauri */
+    }
+  });
+  const answerPair = $(async (a: string, b: string, merge: boolean) => {
+    if (pairBusy.value) return;
+    pairBusy.value = true;
+    try {
+      await (merge ? mergePair(a, b) : keepPairApart(a, b));
+    } catch (e) {
+      console.warn("[your-ais] the answer about two AIs was not saved:", e);
+    } finally {
+      pairBusy.value = false;
+      pairToMerge.value = null;
+      await refreshPairing();
+    }
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(() => {
     const online = getCachedModels().online;
@@ -537,9 +571,49 @@ export default component$(() => {
                         >
                           {ai.name}
                         </h3>
+                        {/* Two AIs under one name: a tag says which is which.
+                            The name itself is the person's and is not changed. */}
+                        {(() => {
+                          const f = foundingOf(ai);
+                          const sameName = aiData.userDefinedAis.filter((x) => x.status !== "archived" && x.name.trim().toLowerCase() === ai.name.trim().toLowerCase()).length > 1;
+                          return sameName && f in pairing.value.origins ? (
+                            <span data-testid="ai-origin-tag" class="inline-block mb-0.5 px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wide bg-[var(--bg-dropdown)] text-[var(--text-muted)]">
+                              {tagOf(pairing.value.origins[f])}
+                            </span>
+                          ) : null;
+                        })()}
                         <p class="text-xs text-[var(--text-secondary)] truncate">
                           {getPersonalityName(ai)} • {ai.status === "active" ? "Active" : "Inactive"}
                         </p>
+                        {(() => {
+                          const f = foundingOf(ai);
+                          const look = pairing.value.lookalikes.find((p) => p.a === f || p.b === f);
+                          const joined = pairing.value.merged.filter((m) => m.leader === f);
+                          return (
+                            <>
+                              {look && (
+                                <p class="text-xs text-[var(--text-muted)]" data-testid="ai-lookalike-line">
+                                  Looks the same as another {look.name}.{" "}
+                                  <button type="button" class="underline hover:text-[var(--text-secondary)]" data-testid="ai-lookalike-merge" onClick$={() => { pairToMerge.value = look; }}>
+                                    Merge
+                                  </button>
+                                  {" · "}
+                                  <button type="button" class="underline hover:text-[var(--text-secondary)]" data-testid="ai-lookalike-keep" disabled={pairBusy.value} onClick$={() => answerPair(look.a, look.b, false)}>
+                                    Keep both
+                                  </button>
+                                </p>
+                              )}
+                              {joined.map((m) => (
+                                <p key={m.other} class="text-xs text-[var(--text-muted)]" data-testid="ai-merged-line">
+                                  Includes another {ai.name} ({tagOf(m.other_from)}, {conversationsText(m.other_conversations)}).{" "}
+                                  <button type="button" class="underline hover:text-[var(--text-secondary)]" data-testid="ai-separate" disabled={pairBusy.value} onClick$={() => answerPair(m.leader, m.other, false)}>
+                                    Separate them again
+                                  </button>
+                                </p>
+                              ))}
+                            </>
+                          );
+                        })()}
                         {/* The model line IS the switcher - the control
                             sits where its effect shows. The edit modal
                             keeps its picker; both render from
@@ -736,6 +810,17 @@ export default component$(() => {
         busyAction={deleteBusyAction.value}
       />
 
+      <ConfirmModal
+        isOpen={pairToMerge.value !== null}
+        testId="ai-merge-confirm"
+        title="Are they the same AI?"
+        message={pairToMerge.value ? `${pairQuestion(pairToMerge.value)} Merged, you see one ${pairToMerge.value.name} with both sets of conversations. Nothing is deleted, and you can separate them again here.` : ""}
+        confirmLabel="Merge them"
+        cancelLabel="Not now"
+        busy={pairBusy.value}
+        onConfirm$={() => { const p = pairToMerge.value; if (p) void answerPair(p.a, p.b, true); }}
+        onCancel$={() => { pairToMerge.value = null; }}
+      />
       <ConfirmModal
         isOpen={!!archivedToPurge.value}
         variant="danger"

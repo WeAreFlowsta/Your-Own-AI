@@ -88,11 +88,31 @@ describe("a starter AI that stands twice", () => {
       return before;
     }, id1, id2);
 
-    // Now they are the same AI to the person: the same starter, the same name.
+    // Now they look like the same AI: the same starter, the same name.
+    // Nothing joins them on a guess: the person is asked, once, with how
+    // much each holds.
     list = await storeGet(path);
     list.find((a) => a.agentPubKey === K2)!.name = name;
     await storeSet(path, list);
-    expect(await invoke<number>("fold_twins_now")).toBeGreaterThanOrEqual(1);
+    expect(await invoke<number>("fold_twins_now")).toBe(0);
+    type Pairing = { lookalikes: { a: string; b: string; name: string; kind: string; a_conversations: number; b_conversations: number }[] };
+    const asked = (await invoke<Pairing>("ai_pairing")).lookalikes;
+    console.log(`e2e: asked about ${JSON.stringify(asked)}`);
+    expect(asked.length).toBe(1);
+    expect(asked[0].kind).toBe("starter");
+    expect([asked[0].a, asked[0].b].sort()).toEqual([F1, F2].sort());
+    await reloadToChat();
+    const question = await $('[data-testid="lookalike-question"]');
+    await question.waitForDisplayed({ timeout: 60_000 });
+    const said = await question.getText();
+    console.log(`e2e: the card says ${JSON.stringify(said)}`);
+    expect(said).toBe(`You have two AIs named ${name} on this computer, one with 1 conversation and one with 1 conversation. Are they the same AI?`);
+    expect(said).toContain("Are they the same AI?");
+    // "Merge them".
+    await (await $('[data-testid="lookalike-merge"]')).click();
+    await browser.waitUntil(async () => (await storeGet(path)).some((x) => !!x.foldedInto), { timeout: 60_000, timeoutMsg: "Merge them did not make the two one" });
+    await browser.waitUntil(async () => !(await (await $('[data-testid="lookalike-question"]')).isExisting()), { timeout: 20_000, timeoutMsg: "the card stayed after the answer" });
+    expect((await invoke<Pairing>("ai_pairing")).lookalikes).toEqual([]);
     list = await storeGet(path);
     const a = list.find((x) => x.agentPubKey === K1)!;
     const b = list.find((x) => x.agentPubKey === K2)!;
@@ -135,6 +155,23 @@ describe("a starter AI that stands twice", () => {
     const texts = rows.map((r) => r.text);
     expect(texts).toContain(`the starter remembers ${STAMP}`);
     expect(texts).toContain(`the twin remembers ${STAMP}`);
+
+    // "Separate them again" on Your AIs: the other comes back as its own
+    // AI, each with a tag saying where it is from, and nobody is asked again.
+    await browser.url("tauri://localhost/your-ais/");
+    const separate = await $('[data-testid="ai-separate"]');
+    await separate.waitForDisplayed({ timeout: 60_000 });
+    const includes = await (await $('[data-testid="ai-merged-line"]')).getText();
+    console.log(`e2e: Your AIs says ${JSON.stringify(includes)}`);
+    expect(includes).toContain(`Includes another ${name}`);
+    await separate.click();
+    await browser.waitUntil(async () => (await storeGet(path)).every((x) => !x.foldedInto), { timeout: 60_000, timeoutMsg: "Separate them again left them as one" });
+    const apart = await storeGet(path);
+    expect(apart.find((x) => x.agentPubKey === K1)!.mergedWith).toBeUndefined();
+    expect(apart.find((x) => x.agentPubKey === K2)!.apartFrom).toContain(F1);
+    expect((await invoke<Pairing>("ai_pairing")).lookalikes).toEqual([]);
+    await browser.waitUntil(async () => (await $$('[data-testid="ai-origin-tag"]')).length === 2, { timeout: 30_000, timeoutMsg: "the two same-named AIs carry no tag telling them apart" });
+    expect(await (await $('[data-testid="ai-lookalike-line"]')).isExisting()).toBe(false);
 
     // Leave the profile as it was for the specs that follow: the planted AI
     // goes, and the mark with it.

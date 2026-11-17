@@ -138,6 +138,9 @@ export async function seedDefaultAisIfNeeded(): Promise<void> {
         useEmojis: prefs.useEmojis ?? false,
         // Slots follow DEFAULT_ARCHETYPE_IDS (Veebo 1, Teresa 2, Reeves 3), the same on every install.
         seedSlot: ((DEFAULT_ARCHETYPE_IDS as readonly string[]).indexOf(archetype.id) + 1 || slotIndex + 1) as 1 | 2 | 3,
+        // When this install seeded it: between two installs' unused starters
+        // the earlier one is the identity's (config_sync.rs `starter_gives_way`).
+        seededAt: Date.now(),
       };
 
       newAis.push(ai);

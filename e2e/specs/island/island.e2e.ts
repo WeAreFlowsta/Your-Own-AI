@@ -72,6 +72,26 @@ describe(`island merge, phase ${PHASE}`, () => {
       const st = await escrow();
       console.log(`e2e: escrow after the merge ${JSON.stringify(st)}`);
       expect(st.state).toBe("synced");
+      // The AI B talked to before sign-in is the identity's own AI here: this
+      // device holds its key, and no other device has AIs. So it is not a
+      // look-alike and nobody is asked; and it is not added a second time
+      // (found live 2026-11-18: it was, under the same key). A look-alike is
+      // an AI under ANOTHER key with the same name: specs/models/twins and
+      // specs/devices/twins cover that question and its answer.
+      type Pairing = { lookalikes: { name: string }[] };
+      const asked = (await invoke<Pairing>("ai_pairing")).lookalikes;
+      console.log(`e2e: asked about ${JSON.stringify(asked)}`);
+      expect(asked).toEqual([]);
+      const stored = (await browser.execute(async (path: string) => {
+        const t = (window as any).__TAURI__.core;
+        const rid = await t.invoke("plugin:store|load", { path, autoSave: false });
+        const got = await t.invoke("plugin:store|get", { rid, key: "custom-ais" });
+        const list = Array.isArray(got) && got.length === 2 && typeof got[1] === "boolean" ? got[0] : got;
+        return (Array.isArray(list) ? list : []).map((a: any) => ({ name: a.name as string, founding: (a.foundingKey ?? a.agentPubKey ?? "") as string }));
+      }, await invoke<string>("profile_store_path", { name: "ai-data.json" }))) as { name: string; founding: string }[];
+      console.log(`e2e: B's AIs after the merge ${JSON.stringify(stored.map((a) => [a.name, a.founding.slice(0, 10)]))}`);
+      expect(new Set(stored.map((a) => a.founding)).size).toBe(stored.length);
+      expect(stored.length).toBe(3);
       await (await $('button[title^="Conversations - pick up"]')).click();
       try {
         await browser.waitUntil(async () => (await $$('button[title="Rename"]')).length >= 1, {
