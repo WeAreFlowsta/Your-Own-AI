@@ -15,6 +15,8 @@ interface ConfirmModalProps {
   variant?: "danger" | "default";
   /** Action in flight — locks the buttons and shows a spinner. */
   busy?: boolean;
+  /** For the UI tests: marks the dialog's panel. */
+  testId?: string;
   onConfirm$: QRL<() => void>;
   onCancel$: QRL<() => void>;
 }
@@ -28,6 +30,7 @@ export default component$<ConfirmModalProps>(
     cancelLabel = "Cancel",
     variant = "default",
     busy = false,
+    testId,
     onConfirm$,
     onCancel$,
   }) => {
@@ -41,6 +44,7 @@ export default component$<ConfirmModalProps>(
       >
         <div
           class="bg-[var(--bg-header-footer)] p-6 md:p-7 rounded-xl shadow-2xl w-full max-w-md relative"
+          data-testid={testId}
           onClick$={(e: MouseEvent) => e.stopPropagation()}
         >
           <div class="flex items-start gap-4 mb-6">

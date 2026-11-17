@@ -185,11 +185,19 @@ export const ActivityTray = component$(() => {
     // page beside it says "Installing".
     const engineRow = () => store.rows.find((r) => r.id.startsWith("dl:llama-server-cuda-"))?.id;
     const helperRow = () => store.rows.find((r) => r.id.startsWith("dl:your-own-ai-build-"))?.id;
-    const unHelperDone = await listen("build-install-done", () => {
+    const unHelperDone = await listen<{ updated?: boolean }>("build-install-done", (e) => {
       const id = helperRow();
       if (!id) return;
-      upsert(id, { kind: "download", title: "Projects helper", percent: 100, state: "done", detail: "Installed - open a project folder to use it" });
+      // Replaced by itself after an app update: said once, nothing to do.
+      const detail = e.payload?.updated ? "Updated" : "Installed - open a project folder to use it";
+      upsert(id, { kind: "download", title: "Projects helper", percent: 100, state: "done", detail });
       linger(id, LINGER_MS);
+    });
+    // A background fetch that did not finish is tried again later and says
+    // nothing: its row goes.
+    const unHelperPutOff = await listen("build-install-put-off", () => {
+      const id = helperRow();
+      if (id) remove(id);
     });
     const unHelperFailed = await listen<{ error?: string }>("build-install-failed", (e) => {
       const id = helperRow();
@@ -206,6 +214,10 @@ export const ActivityTray = component$(() => {
       const id = engineRow();
       if (!id) return;
       upsert(id, { kind: "download", title: "CUDA engine", state: "error", detail: e.payload });
+    });
+    // A background fetch that did not finish says nothing: its row goes.
+    const unPutOff = await listen<{ filename: string }>("model-download-put-off", (e) => {
+      remove(`dl:${e.payload.filename}`);
     });
     const unFailed = await listen<{ filename: string; error: string }>("model-download-failed", (e) => {
       const id = `dl:${e.payload.filename}`;
@@ -351,6 +363,8 @@ export const ActivityTray = component$(() => {
       unEngineDone();
       unEngineFailed();
       unHelperDone();
+      unHelperPutOff();
+      unPutOff();
       unHelperFailed();
       unCorpus();
       unCards();

@@ -124,7 +124,10 @@ export class ModelManager {
   async downloadModel(
     url: string,
     filename: string,
-    onProgress?: (progress: DownloadProgress) => void
+    onProgress?: (progress: DownloadProgress) => void,
+    // `quiet`: a background fetch nobody pressed. A failure raises no error
+    // row; the tray's row for it simply goes.
+    opts?: { quiet?: boolean }
   ): Promise<void> {
     let unlistenProgress: UnlistenFn | null = null;
     let unlistenComplete: UnlistenFn | null = null;
@@ -157,7 +160,7 @@ export class ModelManager {
         });
 
         // Start download
-        invoke('download_model', { url, filename })
+        invoke('download_model', { url, filename, quiet: opts?.quiet ?? false })
           .then(() => {
             // Wait a bit for the completion event
             setTimeout(resolve, 100);

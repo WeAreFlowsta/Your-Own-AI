@@ -106,6 +106,13 @@ impl AgentBridgeState {
         self.folder.lock().await.is_some()
     }
 
+    /// Is the agent's process running now? A project whose agent has ended
+    /// keeps its folder (`has_open_folder` stays true), but nothing holds
+    /// the helper's program file then, so it can be replaced.
+    pub async fn agent_running(&self) -> bool {
+        self.child.lock().await.is_some()
+    }
+
     /// Is the open session a TOOLS session (a chat that carries tools, run
     /// in the hidden scratch workspace) rather than a project folder?
     pub async fn is_tools_session(&self) -> bool {

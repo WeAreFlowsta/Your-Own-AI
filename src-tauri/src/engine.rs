@@ -282,7 +282,7 @@ pub async fn download_cuda_engine(
     let url = cuda_download_url().ok_or("unsupported_platform")?;
     let expected = cuda_zip_expected_sha256().ok_or("unsupported_platform")?;
     let zip_name = format!("llama-server-cuda-{}.zip", tag_version());
-    crate::llm::download_model(app.clone(), url, zip_name.clone()).await?;
+    crate::llm::download_model(app.clone(), url, zip_name.clone(), None).await?;
     let zip_path = crate::llm::get_models_dir(&app)?.join(&zip_name);
     let result = match sha256_file(&zip_path) {
         Ok(actual) if actual == expected => install_cuda_zip(&app, &zip_name),

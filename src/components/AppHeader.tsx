@@ -786,7 +786,7 @@ export default component$<AppHeaderProps>(
                               >
                                 {buildError.value
                                   ? "Try the download again"
-                                  : "Download Your Own AI Build (about 50 MB)"}
+                                  : "Download Your Own AI Build (about 70 MB)"}
                               </LiquidMetalButton>
                             </span>
                           )}

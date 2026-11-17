@@ -5419,25 +5419,29 @@ pub async fn download_model(
     app_handle: AppHandle,
     url: String,
     filename: String,
+    // A background fetch nobody pressed: a failure is not an error row.
+    // The tray is told the download was put off, and its row goes.
+    quiet: Option<bool>,
 ) -> Result<(), String> {
+    let failed = if quiet.unwrap_or(false) { "model-download-put-off" } else { "model-download-failed" };
     // A managed or test install can switch model downloads off entirely:
     // the UI tests run a fresh profile that must never fetch gigabytes.
     if downloads_blocked() {
         let e = "Model downloads are switched off on this install.".to_string();
-        let _ = app_handle.emit("model-download-failed", serde_json::json!({ "filename": filename, "error": e }));
+        // A background fetch never started: there is no row to take away.
+        if !quiet.unwrap_or(false) {
+            let _ = app_handle.emit(failed, serde_json::json!({ "filename": filename, "error": e }));
+        }
         return Err(e);
     }
     let result = download_model_inner(app_handle.clone(), url, filename.clone()).await;
     if let Err(e) = &result {
-        let _ = app_handle.emit(
-            "model-download-failed",
-            serde_json::json!({ "filename": filename, "error": e }),
-        );
+        let _ = app_handle.emit(failed, serde_json::json!({ "filename": filename, "error": e }));
     }
     result
 }
 
-async fn download_model_inner(
+pub(crate) async fn download_model_inner(
     app_handle: AppHandle,
     url: String,
     filename: String,

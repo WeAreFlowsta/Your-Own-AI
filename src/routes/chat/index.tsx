@@ -467,9 +467,15 @@ export default component$(() => {
   // Any attempt to open a project without the Build add-on funnels here -
   // one modal, one download, installs in the background.
   const installAsk = useSignal(false);
+  // What the person was opening when the helper was not there yet: a
+  // folder's path, or BROWSE for the folder picker. It opens by itself when
+  // the helper is in place, so there is no second trip to the door.
+  const BROWSE = "\u0000browse";
+  const pendingProject = useSignal<string | null>(null);
 
   const openFolderGuarded = $(async (path: string) => {
     if (!buildInstalled.value) {
+      pendingProject.value = path;
       installAsk.value = true;
       return;
     }
@@ -2133,6 +2139,7 @@ export default component$(() => {
 
   const handleBrowseFolder = $(async () => {
     if (!buildInstalled.value) {
+      pendingProject.value = BROWSE;
       installAsk.value = true;
       return;
     }
@@ -2143,6 +2150,18 @@ export default component$(() => {
     } catch (err) {
       console.error("[ChatPage] Folder picker error:", err);
     }
+  });
+
+  // The helper landed while a project was waiting on it: go on in.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const ready = track(() => buildInstalled.value);
+    const waiting = track(() => pendingProject.value);
+    if (!ready || waiting === null) return;
+    pendingProject.value = null;
+    installAsk.value = false;
+    if (waiting === BROWSE) void handleBrowseFolder();
+    else void openFolderGuarded(waiting);
   });
 
   const handleAttachFiles = $(async (paths: string[]) => {
@@ -3086,20 +3105,30 @@ export default component$(() => {
           download, background install - the header icon shows progress. */}
       <ConfirmModal
         isOpen={installAsk.value}
-        title="Projects need Your Own AI Build"
-        message="Your AI can work in project folders once Your Own AI Build is installed - a free add-on, about 50 MB. It downloads in the background while you keep chatting; the project icon in the header shows progress."
-        confirmLabel="Download now"
+        testId="projects-door"
+        title={buildInstalling.value ? "Getting Projects ready" : "Projects need Your Own AI Build"}
+        message={
+          buildInstalling.value
+            ? `Your Own AI Build is downloading (${buildInstallPercent.value}%). Your project opens by itself when it is in place.`
+            : "Your AI can work in project folders once Your Own AI Build is installed - a free add-on, about 70 MB. Your project opens by itself when it is in place."
+        }
+        confirmLabel={buildInstalling.value ? "Keep chatting" : "Download now"}
         cancelLabel="Not now"
         onConfirm$={async () => {
-          installAsk.value = false;
-          try {
-            invoke("download_build_agent").catch(() => {});
-          } catch {
-            /* the header surfaces failures */
+          if (buildInstalling.value) {
+            // Already on its way: the project still opens when it lands.
+            installAsk.value = false;
+            return;
           }
+          buildInstalling.value = true;
+          buildInstallPercent.value = 0;
+          invoke("download_build_agent").catch(() => {
+            buildInstalling.value = false;
+          });
         }}
         onCancel$={() => {
           installAsk.value = false;
+          pendingProject.value = null;
         }}
       />
 

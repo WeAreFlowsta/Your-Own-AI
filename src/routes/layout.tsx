@@ -23,6 +23,7 @@ import LiquidMetalButton from "../components/LiquidMetalButton";
 import { Callout } from "../components/Callout";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
+import { runPartsJob } from "../utils/partsJob";
 
 export type AppTheme = "light" | "dark";
 
@@ -425,6 +426,30 @@ export default component$(() => {
         await nav(path);
       });
       cleanup(() => un());
+    } catch {
+      /* not inside Tauri */
+    }
+  });
+
+  // The app's parts (the memory model, the Projects helper) follow the app
+  // and are kept current by themselves: utils/partsJob. Checked a little
+  // after start, when a model download ends (the first model brings them),
+  // when a project's agent ends (a held replacement can go in), and every
+  // few hours with the app's own update check.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ cleanup }) => {
+    const first = setTimeout(() => void runPartsJob("start"), 20_000);
+    const every = setInterval(() => void runPartsJob("timer"), 3 * 60 * 60 * 1000);
+    const uns: (() => void)[] = [];
+    cleanup(() => {
+      clearTimeout(first);
+      clearInterval(every);
+      uns.forEach((fn) => fn());
+    });
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      uns.push(await listen("model-download-complete", () => void runPartsJob("a download ended")));
+      uns.push(await listen("agent-exit", () => void runPartsJob("an agent ended")));
     } catch {
       /* not inside Tauri */
     }

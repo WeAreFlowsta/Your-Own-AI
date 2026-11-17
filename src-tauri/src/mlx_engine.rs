@@ -152,7 +152,7 @@ pub async fn download_mlx_engine(app: AppHandle, url: Option<String>) -> Result<
     }
     let url = url.unwrap_or_else(download_url);
     let name = tarball_name();
-    crate::llm::download_model(app.clone(), url, name.clone()).await?;
+    crate::llm::download_model(app.clone(), url, name.clone(), None).await?;
     let result = verify_and_install(&app, &name);
     // The tarball is an installer artifact, not a model - clean it up
     // either way.
