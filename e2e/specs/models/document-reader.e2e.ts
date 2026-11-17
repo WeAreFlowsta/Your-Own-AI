@@ -9,7 +9,8 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { deflateSync, crc32 } from "node:zlib";
-import { shot, waitForChat, ask, waitForReplyDone, lastReply, invoke } from "./_helpers";
+import { randomBytes } from "node:crypto";
+import { shot, waitForChat, ask, lastReply, invoke } from "./_helpers";
 
 const FIX = resolve(process.cwd(), "e2e", "fixtures", "reader");
 const files = () => browser.execute(() => [...document.querySelectorAll('[data-testid="attached-file"]')].map((e) => e.getAttribute("data-name") ?? ""));
@@ -19,6 +20,19 @@ const pictures = () => browser.execute(() => document.querySelectorAll('[data-te
 // than a script may (the call was then sent again, and the page read twice).
 const attach = (paths: string[]) => browser.execute((p) => { void (window as any).__yoaiAttach(p); }, paths);
 const clear = () => browser.execute(() => { for (const b of document.querySelectorAll('[data-testid="attached-file"] button, [data-testid="attached-image"] button')) (b as HTMLElement).click(); });
+
+/** Ask, and wait for THIS question's answer. The last answer on the page
+ *  is the previous question's, already done, until the new one starts: a
+ *  wait for "done" alone can return on it (2026-11-17: the reply read was
+ *  "Reeves is thinking.."). */
+async function answer(question: string): Promise<string> {
+  const answers = () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]').length);
+  const before = await answers();
+  await ask(question);
+  await browser.waitUntil(async () => (await answers()) > before, { timeout: 120_000, interval: 1_000, timeoutMsg: "no answer started" });
+  await browser.waitUntil(async () => (await lastReply())?.state === "done", { timeout: 300_000, interval: 1_000, timeoutMsg: "the assistant never finished" });
+  return (await lastReply())!.text;
+}
 
 /** A solid square as a PNG file: a picture with no words in it. */
 function square(file: string, rgb: [number, number, number], side = 256) {
@@ -33,6 +47,21 @@ function square(file: string, rgb: [number, number, number], side = 256) {
   const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array.from({ length: side }, () => Buffer.from(rgb)))]);
   const raw = Buffer.concat(Array.from({ length: side }, () => row));
   writeFileSync(file, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", head), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]));
+}
+
+/** A square of noise as a PNG file: it does not compress, so its size is real. */
+function noise(file: string, side: number) {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body) >>> 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(side, 0); head.writeUInt32BE(side, 4); head[8] = 8; head[9] = 2;
+  const raw = randomBytes(side * (side * 3 + 1));
+  for (let y = 0; y < side; y++) raw[y * (side * 3 + 1)] = 0;
+  writeFileSync(file, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk("IHDR", head), chunk("IDAT", deflateSync(raw, { level: 0 })), chunk("IEND", Buffer.alloc(0))]));
 }
 
 describe("the document reader", () => {
@@ -51,9 +80,7 @@ describe("the document reader", () => {
     await attach([resolve(FIX, "1-letter.pdf")]);
     await browser.waitUntil(async () => (await files()).includes("1-letter.pdf"), { timeout: 600_000, interval: 3_000, timeoutMsg: "the scanned letter was never read into an attachment" });
     await shot("reader-pdf-attached");
-    await ask("What is the estimated cost of the treatment in the attached letter? Answer with the amount only.");
-    await waitForReplyDone(300_000);
-    const reply = (await lastReply()).text;
+    const reply = await answer("What is the estimated cost of the treatment in the attached letter? Answer with the amount only.");
     console.log(`e2e: about the letter: ${reply.slice(0, 200)}`);
     expect(reply).toContain("186.50");
   });
@@ -74,11 +101,21 @@ describe("the document reader", () => {
     await browser.waitUntil(async () => (await files()).includes("4-photo.jpg (text)"), { timeout: 600_000, interval: 3_000, timeoutMsg: `the photo of a notice was never read as a document: ${JSON.stringify(await files())}` });
     expect(await pictures()).toBe(1);
     await shot("reader-photo-attached");
-    await ask("On what date is the annual meeting in the attached notice? Answer with the date only.");
-    await waitForReplyDone(300_000);
-    const reply = (await lastReply()).text;
+    const reply = await answer("On what date is the annual meeting in the attached notice? Answer with the date only.");
     console.log(`e2e: about the notice: ${reply.slice(0, 200)}`);
     expect(reply).toMatch(/18(th)? (of )?June/i);
+  });
+
+  it("reads every page of a scanned PDF: a figure on the second page is answered", async function () {
+    this.timeout(1_500_000);
+    await clear();
+    await attach([resolve(FIX, "5-two-pages.pdf")]);
+    await browser.waitUntil(async () => (await files()).includes("5-two-pages.pdf"), { timeout: 1_200_000, interval: 3_000, timeoutMsg: "the two-page statement was never read into an attachment" });
+    const reply = await answer("In the attached statement, what is the balance carried forward? Answer with the amount only.");
+    console.log(`e2e: about the second page: ${reply.slice(0, 200)}`);
+    // 312.75 is on the second page and nowhere on the first.
+    expect(reply).toContain("312.75");
+    await clear();
   });
 
   it("gives a picture of a document sent to the local endpoint as its text", async function () {
@@ -129,5 +166,37 @@ describe("the document reader", () => {
     expect(path.status).toBe(400);
     const nothing = await read({ path: resolve(FIX, "1-letter.pdf") });
     expect(nothing.status).toBe(400);
+  });
+
+  it("takes a chat request with a large picture, and refuses one over the limit by its size", async function () {
+    this.timeout(900_000);
+    const port = await invoke<number>("inference_port");
+    const ai = await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const path = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(path);
+      const ais = ((await store.get("custom-ais")) || []) as { name: string }[];
+      return ais[0]?.name ?? null;
+    });
+    const send = async (content: unknown) => {
+      const body = JSON.stringify({ model: ai, messages: [{ role: "user", content }], max_tokens: 20, stream: false });
+      const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer local" }, body });
+      return { status: r.status, sent: body.length, text: (await r.text().catch(() => "")).slice(0, 200) };
+    };
+    // A picture of noise does not shrink: about 6 MB as a file, 8 MB in the
+    // request. The server library's own limit of 2 MB refused this before
+    // anything read it.
+    mkdirSync(resolve(process.cwd(), "e2e", "profile"), { recursive: true });
+    const big = resolve(process.cwd(), "e2e", "profile", "reader-noise.png");
+    noise(big, 1400);
+    const picture = `data:image/png;base64,${readFileSync(big).toString("base64")}`;
+    const large = await send([{ type: "image_url", image_url: { url: picture } }, { type: "text", text: "Describe this picture in five words." }]);
+    console.log(`e2e: a ${Math.round(large.sent / 1048576)} MB chat request answered ${large.status}: ${large.text}`);
+    expect(large.sent).toBeGreaterThan(4 * 1048576);
+    expect(large.status).not.toBe(413);
+    // Over 48 MB: refused for its size.
+    const over = await send("x".repeat(49 * 1048576));
+    console.log(`e2e: a ${Math.round(over.sent / 1048576)} MB chat request answered ${over.status}`);
+    expect(over.status).toBe(413);
   });
 });
