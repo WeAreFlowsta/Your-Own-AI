@@ -60,11 +60,32 @@ pub fn on_card(free_vram_gb: Option<f64>) -> bool {
     free_vram_gb.is_some_and(|f| f >= CARD_ROOM_GB)
 }
 
-struct KillOnDrop(std::process::Child);
+/// The reader's engine while a job runs (one job at a time, so one engine).
+/// Held here, not in the job, so the app can stop it when it closes: a quit
+/// in the middle of a read ends tasks without running their clean-up, and
+/// the engine would stay behind holding its memory until the next start.
+static ENGINE: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+/// Stop the reader's engine, if one is running. Nothing of a read that did
+/// not finish is kept: its text exists only once every page is read.
+pub fn stop_engine() {
+    let child = ENGINE.lock().ok().and_then(|mut e| e.take());
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+        log::info!("[reader] the reader's engine was stopped");
+    }
+}
+
+/// Whether the engine has exited by itself, and how.
+fn engine_exited() -> Option<std::process::ExitStatus> {
+    ENGINE.lock().ok().and_then(|mut e| e.as_mut().and_then(|c| c.try_wait().ok().flatten()))
+}
+
+struct KillOnDrop;
 impl Drop for KillOnDrop {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        stop_engine();
     }
 }
 
@@ -121,11 +142,15 @@ impl Reader {
             use std::os::windows::process::CommandExt;
             cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         }
-        let mut engine = KillOnDrop(cmd.spawn().map_err(|e| format!("The document reader could not start: {e}"))?);
+        let child = cmd.spawn().map_err(|e| format!("The document reader could not start: {e}"))?;
+        if let Ok(mut held) = ENGINE.lock() {
+            *held = Some(child);
+        }
+        let engine = KillOnDrop;
         let client = crate::llm::local_http();
         let deadline = Instant::now() + Duration::from_secs(180);
         loop {
-            if let Ok(Some(st)) = engine.0.try_wait() {
+            if let Some(st) = engine_exited() {
                 return Err(format!("The document reader stopped while loading ({st})"));
             }
             if let Ok(r) = client.get(format!("http://127.0.0.1:{port}/health")).send().await {
@@ -331,5 +356,38 @@ mod tests {
             }
         }
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    }
+
+    /// The app closing in the middle of a read: its stop sequence ends the
+    /// reader's engine (`stop_engine`), though the job that started it never
+    /// runs its own clean-up. Run by hand with the reader installed
+    /// (`YOAI_MODELS_DIR` holds its two files): on the processor, so it
+    /// needs no card.
+    #[tokio::test]
+    #[ignore]
+    async fn live_reader_engine_stops_when_the_app_closes() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let models = std::env::var("YOAI_MODELS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| Path::new(&home).join(".local/share/com.solar.yourowai/models"));
+        if !present(&models) {
+            eprintln!("[reader] not installed in {models:?}: skipped");
+            return;
+        }
+        let triple = if cfg!(target_os = "windows") { "x86_64-pc-windows-msvc.exe" }
+            else if cfg!(target_os = "macos") { if cfg!(target_arch = "aarch64") { "aarch64-apple-darwin" } else { "x86_64-apple-darwin" } }
+            else { "x86_64-unknown-linux-gnu" };
+        let bin = Path::new(env!("CARGO_MANIFEST_DIR")).join("bin").join(format!("{}-{triple}", crate::llm::BUNDLED_ENGINE));
+        let reader = Reader::start(&bin, &models, false).await.expect("the reader starts");
+        let pid = ENGINE.lock().unwrap().as_ref().map(|c| c.id()).expect("the engine is held while the job runs");
+        let health = format!("http://127.0.0.1:{}/health", reader.port);
+        assert!(crate::llm::local_http().get(&health).send().await.is_ok_and(|r| r.status().is_success()), "the engine answers before the stop");
+        // What the quit does, with the job still alive (as a task cut off).
+        stop_engine();
+        assert!(ENGINE.lock().unwrap().is_none());
+        assert!(crate::llm::local_http().get(&health).timeout(Duration::from_secs(3)).send().await.is_err(), "the engine (pid {pid}) no longer answers");
+        // The job ending afterwards finds nothing left to stop.
+        drop(reader);
+        assert!(engine_exited().is_none());
     }
 }

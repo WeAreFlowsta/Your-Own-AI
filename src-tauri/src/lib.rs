@@ -1259,6 +1259,9 @@ pub(crate) fn stop_everything(app_handle: &AppHandle) {
         println!("[Exit] embedding server stopped");
     }
 
+    // The document reader's engine, when a read is under way.
+    doc_reader::stop_engine();
+
     // Stop the utility server too, if it was started.
     if let Some(child) = llm_state.util_process.blocking_lock().take() {
         let _ = child.kill();

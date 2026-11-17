@@ -38,6 +38,8 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - With it installed, a picture you attach that is mostly text is read as
   a document, so a model that cannot see pictures can still answer about
   it. A photo of anything else stays a picture.
+- Quitting while a document is being read stops the reader with the app.
+  Its engine could stay running, holding memory, until the next start.
 - **Up to four images on one message.** Two or more images on one
   message no longer stop the engine.
 - The built-in scanned-PDF reader's card says Installed once it is, and
@@ -282,7 +284,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   closed unexpectedly.** Your Own AI moved the AI off the graphics card
   when it had closed twice without a clean exit, whatever the cause. It
   now does so only when it closed while a model was loading onto the
-  graphics card.
+  graphics card. The notice now says what happened ("Running on the
+  processor for now") and no longer names the graphics driver as the
+  cause.
 - **The chat page offers to continue your own last conversation only.**
   With two Flowsta identities on one computer, the start page could offer
   the other identity's last conversation title (never its messages).

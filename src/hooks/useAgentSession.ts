@@ -44,6 +44,9 @@ import { startConversation, recordMessage, waitForHolochainReady } from "../util
 import {
   rememberConversationFolder,
   rememberLastConversation,
+  clearWaitingNotes,
+  keepWaitingNotes,
+  waitingNotes,
 } from "../utils/conversationResume";
 import type {
   AgentAction,
@@ -421,13 +424,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
   const distillMemory$ = $(async (folderPath: string, digest: string) => {
     const ai = props.selectedAi.value;
     if (!ai.aiConfig?.agentPubKey || !digest) return;
-    const clearPending = () => {
-      try {
-        localStorage.removeItem(`project-pending-digest:${folderPath}`);
-      } catch {
-        /* safety copy only */
-      }
-    };
+    const clearPending = () => clearWaitingNotes(folderPath, ai.aiConfig?.agentPubKey);
     // Raw capture first (the memory design §5.5): one episode row per
     // session in the project's scope - what happened, in the digest's own
     // words, never rewritten here (dreaming consolidates later).
@@ -1695,15 +1692,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
             // A leftover pending digest means an earlier session ended
             // without its memory distillation (cancel, quit, crash) -
             // catch up now, with the memory freshly loaded.
-            try {
-              const leftover = localStorage.getItem(`project-pending-digest:${folder}`);
-              if (leftover) {
-                console.log("[WorkspaceMemory] Catching up an undistilled session for", folder);
-                distillMemory$(folder, leftover).catch(() => {});
-              }
-            } catch {
-              /* safety copy only */
-            }
+            // Only the notes this identity's AI left for the folder.
+            waitingNotes(folder, props.selectedAi.value.aiConfig?.agentPubKey)
+              .then((leftover) => {
+                if (leftover) {
+                  console.log("[WorkspaceMemory] Catching up an undistilled session for", folder);
+                  distillMemory$(folder, leftover).catch(() => {});
+                }
+              })
+              .catch(() => {});
           })
           .catch(() => {});
       }
@@ -2900,14 +2897,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // quit never distills - the NEXT open of this project notices the
         // leftover and catches up.
         if (state.folderPath) {
-          try {
-            localStorage.setItem(
-              `project-pending-digest:${state.folderPath}`,
-              sessionDigest.value,
-            );
-          } catch {
-            /* safety copy only */
-          }
+          keepWaitingNotes(state.folderPath, props.selectedAi.value.aiConfig?.agentPubKey, sessionDigest.value);
         }
       }
       // A turn killed by an overloaded upstream model earns the explicit
