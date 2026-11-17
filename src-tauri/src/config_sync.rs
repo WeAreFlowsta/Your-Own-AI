@@ -252,12 +252,87 @@ pub(crate) fn folded_into<'a>(list: &'a [serde_json::Value], leader: &str) -> Ve
     list.iter().filter(|ai| ai["foldedInto"].as_str() == Some(leader)).collect()
 }
 
+/// Which AIs have been talked to, as far as this device knows: its own (by
+/// agent key) and the other devices' (by the founding key their
+/// conversation lists carry). What decides whether a starter gives way.
+#[derive(Default)]
+pub(crate) struct Used {
+    pub local_agents: std::collections::HashSet<String>,
+    pub sibling_founding: std::collections::HashSet<String>,
+}
+
+impl Used {
+    fn local(&self, ai: &serde_json::Value) -> bool {
+        ai["agentPubKey"].as_str().is_some_and(|a| self.local_agents.contains(a))
+            || founding_of(ai).is_some_and(|f| self.local_agents.contains(&f))
+    }
+    fn sibling(&self, ai: &serde_json::Value) -> bool {
+        founding_of(ai).is_some_and(|f| self.sibling_founding.contains(&f))
+    }
+}
+
+/// Does this device's starter give way to another device's AI in the same
+/// starter slot (take its founding key and its settings)?
+///
+/// Every install seeds its own three starters before it can know the
+/// identity has them already, and the wizard lets a person rename them or
+/// swap the set before sign-in. So:
+///   - a starter that has been talked to here never gives way: it is this
+///     person's AI, with a history, and stays its own AI beside the other;
+///   - an unused one gives way to one that has been talked to;
+///   - of two unused ones, the one seeded first leads (`seededAt`; a
+///     starter from before that stamp existed counts as the earliest), and
+///     the smaller founding key between two seeded together. Both devices
+///     read the same two stamps and keys, so exactly one of them gives
+///     way, whichever reads the other first, and it is the newer install:
+///     a second computer's wizard never renames the first computer's AIs,
+///     talked to or not.
+/// What was done to an unused starter in the wizard does not count: it is
+/// minutes old, on a device that had not met the identity's AIs yet.
+pub(crate) fn starter_gives_way(local: &serde_json::Value, sibling: &serde_json::Value, used: &Used) -> bool {
+    if used.local(local) {
+        return false;
+    }
+    if used.sibling(sibling) {
+        return true;
+    }
+    match (founding_of(sibling), founding_of(local)) {
+        (Some(theirs), Some(ours)) => (seeded_at(sibling), theirs) < (seeded_at(local), ours),
+        _ => false,
+    }
+}
+
+/// When a starter was seeded (ms epoch), 0 for one seeded before the stamp
+/// existed: the earliest there is.
+fn seeded_at(ai: &serde_json::Value) -> i64 {
+    ai["seededAt"].as_i64().unwrap_or(0)
+}
+
+/// The same rule from the other side: will the sibling's starter give way
+/// to this device's in the same slot? As far as this device knows: the
+/// sibling's own view of what it has been talked to is the newer one, so a
+/// starter held back here on a guess is added on a later round once its
+/// conversations are listed.
+pub(crate) fn sibling_starter_gives_way(local: &serde_json::Value, sibling: &serde_json::Value, used: &Used) -> bool {
+    if used.sibling(sibling) {
+        return false;
+    }
+    if used.local(local) {
+        return true;
+    }
+    match (founding_of(sibling), founding_of(local)) {
+        (Some(theirs), Some(ours)) => (seeded_at(local), ours) < (seeded_at(sibling), theirs),
+        _ => false,
+    }
+}
+
 /// Merge one sibling's AI list into ours. Returns the merged list, how many
 /// were updated, how many added, and (sibling id → local id) for every AI
 /// that was updated or added - the key the sibling's thumbnails are under.
 pub(crate) fn merge_sibling_configs(
     local: Vec<serde_json::Value>,
     sibling: &[serde_json::Value],
+    used: &Used,
 ) -> (Vec<serde_json::Value>, u32, u32, Vec<(String, String)>) {
     let mut merged = local;
     let (mut updated, mut added) = (0u32, 0u32);
@@ -271,18 +346,18 @@ pub(crate) fn merge_sibling_configs(
                 || l["id"] == founding.as_str()
                 || (!s_id.is_empty() && l["restoredFromId"] == s_id.as_str())
         });
-        // A fresh device seeds its own three starters before it knows the
-        // identity has them already: an untouched starter in the same slot
-        // IS the identity's slot-N AI and folds into it (takes its founding
-        // key and config; keeps this device's agent) instead of standing
-        // beside it as a twin. An edited starter is this person's work and
-        // stays.
+        // This device's own starter in the same slot, when it gives way
+        // (`starter_gives_way`): it becomes the identity's slot-N AI (takes
+        // its founding key and its settings, keeps this device's agent). One
+        // that does not give way stays its own AI, and the sibling's is
+        // added beside it below.
         let local_slots = starter_slots(&merged);
         let fold = pos.is_none()
             && s_slot.is_some()
             && merged.iter().zip(&local_slots).position(|(l, l_slot)| {
                 *l_slot == s_slot
                     && founding_of(l).as_deref() == l["agentPubKey"].as_str()
+                    && starter_gives_way(l, s, used)
             }).map(|i| { merged[i]["foundingKey"] = serde_json::json!(founding); i }).is_some();
         let pos = if fold {
             merged.iter().position(|l| founding_of(l).as_deref() == Some(founding.as_str()))
@@ -291,9 +366,10 @@ pub(crate) fn merge_sibling_configs(
         };
         match pos {
             Some(i) => {
-                // The newer edit wins the fields (and the picture); a fold
-                // whose local side is newer takes only the key.
-                let take_fields = updated_at(s) > updated_at(&merged[i]);
+                // The newer edit wins the fields (and the picture). A starter
+                // that just gave way takes them whatever the times say: what
+                // it carried was a seed, or a wizard's edit of one.
+                let take_fields = fold || updated_at(s) > updated_at(&merged[i]);
                 if take_fields {
                     for f in SYNCED_FIELDS {
                         match s.get(*f) {
@@ -316,6 +392,16 @@ pub(crate) fn merge_sibling_configs(
                     updated += 1;
                 }
             }
+            // The sibling's own starter, which is about to give way to ours
+            // on its device (the same rule, read from its side): not added
+            // here in the meantime. Added, it would be left behind as an AI
+            // no device lists once the sibling has taken our founding key.
+            None if s_slot.is_some()
+                && merged.iter().zip(&local_slots).any(|(l, l_slot)| {
+                    *l_slot == s_slot
+                        && founding_of(l).as_deref() == l["agentPubKey"].as_str()
+                        && sibling_starter_gives_way(l, s, used)
+                }) => {}
             None => {
                 // New here: the founding key stands in as the id until this
                 // device provisions its own agent for it (the front end's
@@ -833,7 +919,16 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
                 sibling_pictures.entry(founding).or_insert_with(|| b64.to_string());
             }
         }
-        let (merged, updated, added, touched) = merge_sibling_configs(local, &sibling);
+        let used = Used {
+            local_agents: local
+                .iter()
+                .filter_map(|l| l["agentPubKey"].as_str())
+                .filter(|a| crate::conversation_cache::read_cache(app, a).map(|c| !c.is_empty()).unwrap_or(false))
+                .map(String::from)
+                .collect(),
+            sibling_founding: sibling_index.iter().filter_map(|c| c.agent.clone()).collect(),
+        };
+        let (merged, updated, added, touched) = merge_sibling_configs(local, &sibling, &used);
         local = merged;
         total_updated += updated;
         total_added += added;
@@ -1041,7 +1136,7 @@ mod tests {
         assert!(!is_here(None, 120), "never heard this session");
     }
 
-    use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures};
+    use super::{has_own_picture, mark_picture, merge_sibling_configs, missing_pictures, sibling_starter_gives_way, starter_gives_way, Used};
     use crate::vault_escrow::SiblingDevice;
 
     #[test]
@@ -1081,13 +1176,13 @@ mod tests {
         let starter = |id: &str, base: &str, name: &str| serde_json::json!({ "id": id, "agentPubKey": id, "baseArchetypeId": base, "name": name, "model": "auto:offline", "status": "active" });
         let local = vec![starter("b-veebo", "veebo", "Veebo"), starter("b-teresa", "teresa", "Teresa"), starter("b-reeves", "reeves", "Reeves")];
         let sibling = vec![starter("a-veebo", "veebo", "Veebo"), starter("a-teresa", "mhJ4WU8bn34In1lJUuHH", "Teresa"), starter("a-reeves", "reeves", "Reeves")];
-        let (merged, _updated, added, _touched) = merge_sibling_configs(local, &sibling);
+        let (merged, _updated, added, _touched) = merge_sibling_configs(local, &sibling, &Used::default());
         assert_eq!(added, 0, "no twin is added");
         assert_eq!(merged.len(), 3, "three starters, once each");
         assert_eq!(merged[1]["id"], "b-teresa", "this device's agent stays");
         assert_eq!(merged[1]["foundingKey"], "a-teresa", "and takes the identity's founding key");
         // A second round finds them by founding key and adds nothing.
-        let (again, _, added, _) = merge_sibling_configs(merged, &sibling);
+        let (again, _, added, _) = merge_sibling_configs(merged, &sibling, &Used::default());
         assert_eq!((again.len(), added), (3, 0));
     }
 
@@ -1195,7 +1290,7 @@ mod tests {
             { let mut s = ai("dev-a", "found-1", "Tessa", 20); s["model"] = serde_json::json!("other.gguf"); s },
             ai("dev-a2", "found-2", "Maximilian", 40),
         ];
-        let (merged, updated, added, touched) = merge_sibling_configs(local, &sibling);
+        let (merged, updated, added, touched) = merge_sibling_configs(local, &sibling, &Used::default());
         assert_eq!((updated, added), (1, 0));
         let t = &merged[0];
         assert_eq!(t["name"], "Tessa", "the sibling's newer edit wins");
@@ -1213,7 +1308,7 @@ mod tests {
         seeded.as_object_mut().unwrap().remove("updatedAt");
         let local = vec![seeded];
         let sibling = vec![ai("dev-a", "found-1", "Vee", 5), ai("dev-a3", "found-3", "Luna", 7)];
-        let (merged, updated, added, _) = merge_sibling_configs(local, &sibling);
+        let (merged, updated, added, _) = merge_sibling_configs(local, &sibling, &Used::default());
         assert_eq!((updated, added), (1, 1));
         assert_eq!(merged[0]["name"], "Vee", "a never-edited starter takes any edit");
         let luna = &merged[1];
@@ -1222,7 +1317,7 @@ mod tests {
         assert_eq!(luna["model"], "auto:offline");
         assert_eq!(luna["restoredFromId"], "dev-a3");
         // Again: nothing changes.
-        let (again, u2, a2, _) = merge_sibling_configs(merged.clone(), &sibling);
+        let (again, u2, a2, _) = merge_sibling_configs(merged.clone(), &sibling, &Used::default());
         assert_eq!((u2, a2), (0, 0));
         assert_eq!(again.len(), 2);
     }
@@ -1270,31 +1365,112 @@ mod tests {
         assert!(missing_pictures(&[ai("teresa", "found-t", "Teresa", 0)], &pics, |id| has_own_picture(d, id)).is_empty());
     }
 
+    fn starter(agent: &str, slot: u64, name: &str, base: &str, updated: Option<i64>) -> serde_json::Value {
+        let mut v = serde_json::json!({ "id": agent, "agentPubKey": agent, "foundingKey": agent, "name": name, "baseArchetypeId": base, "model": "auto:offline", "seedSlot": slot, "status": "active" });
+        if let Some(u) = updated {
+            v["updatedAt"] = serde_json::json!(u);
+        }
+        v
+    }
+
+    fn used(local: &[&str], sibling: &[&str]) -> Used {
+        Used { local_agents: local.iter().map(|s| s.to_string()).collect(), sibling_founding: sibling.iter().map(|s| s.to_string()).collect() }
+    }
+
     #[test]
-    fn a_fresh_devices_untouched_starter_folds_into_the_identitys_ai_in_that_slot() {
-        // B seeded its own Teresa (slot 2, never edited); A's Teresa was
-        // renamed on A. B's starter takes A's founding key and name, keeps
-        // its own agent; an edited starter on B stays beside the sibling's.
-        let mut b_teresa = ai("b-agent-2", "b-agent-2", "Teresa", 0);
-        b_teresa.as_object_mut().unwrap().remove("updatedAt");
-        b_teresa["seedSlot"] = serde_json::json!(2);
-        let mut b_veebo = ai("b-agent-1", "b-agent-1", "Veebo the Great", 9);
-        b_veebo["seedSlot"] = serde_json::json!(1);
-        let mut a_teresa = ai("a-agent-2", "a-agent-2", "Teresa Two", 30);
-        a_teresa["seedSlot"] = serde_json::json!(2);
-        let mut a_veebo = ai("a-agent-1", "a-agent-1", "Veebo", 0);
-        a_veebo.as_object_mut().unwrap().remove("updatedAt");
-        a_veebo["seedSlot"] = serde_json::json!(1);
-        let (merged, updated, added, touched) = merge_sibling_configs(vec![b_veebo, b_teresa], &[a_veebo, a_teresa]);
-        assert_eq!((updated, added), (2, 0), "both slots fold, nothing is added");
-        assert_eq!(merged.len(), 2);
-        let t = merged.iter().find(|l| l["seedSlot"] == 2).unwrap();
-        assert_eq!(t["name"], "Teresa Two");
-        assert_eq!(t["foundingKey"], "a-agent-2", "the identity's founding key");
-        assert_eq!(t["agentPubKey"], "b-agent-2", "this device's agent stays");
-        let v = merged.iter().find(|l| l["seedSlot"] == 1).unwrap();
-        assert_eq!(v["foundingKey"], "a-agent-1", "an edited starter still folds its KEY (one AI per slot)");
-        assert_eq!(v["name"], "Veebo the Great", "but keeps its newer edit");
-        assert_eq!(touched.len(), 1, "only the slot that took A's fields takes A's picture");
+    fn an_unused_starter_gives_way_to_the_identitys_ai_in_its_slot_whatever_the_wizard_did_to_it() {
+        // B is a second computer: nothing talked to yet, but its wizard
+        // renamed slot 1 a minute ago (the Work set). A's slot 1 has been
+        // talked to, and was renamed there long ago. B takes A's AI as it
+        // is; B's own key is the larger one, so the key order agrees, and
+        // the answer is the same when it does not (below).
+        let b = vec![starter("b-1", 1, "Assistant", "reeves", Some(900)), starter("b-2", 2, "Teresa", "teresa", None)];
+        let a = vec![starter("a-1", 1, "Maya", "veebo", Some(100)), starter("a-2", 2, "Teresa Two", "teresa", Some(30))];
+        let (merged, updated, added, touched) = merge_sibling_configs(b, &a, &used(&[], &["a-1", "a-2"]));
+        assert_eq!((updated, added, merged.len()), (2, 0, 2), "both slots give way, nothing is added");
+        assert_eq!(merged[0]["name"], "Maya", "the identity's name, not the wizard's newer one");
+        assert_eq!(merged[0]["baseArchetypeId"], "veebo");
+        assert_eq!(merged[0]["foundingKey"], "a-1", "the identity's founding key");
+        assert_eq!(merged[0]["agentPubKey"], "b-1", "this device's agent stays");
+        assert_eq!(merged[1]["name"], "Teresa Two");
+        assert_eq!(touched.len(), 2, "and the identity's pictures follow");
+
+        // The same with the keys the other way round: a used AI is given way
+        // to whichever key is smaller.
+        let z = vec![starter("z-1", 1, "Maya", "veebo", Some(100))];
+        let (merged, _, added, _) = merge_sibling_configs(vec![starter("b-1", 1, "Assistant", "reeves", Some(900))], &z, &used(&[], &["z-1"]));
+        assert_eq!((added, merged[0]["foundingKey"].as_str(), merged[0]["name"].as_str()), (0, Some("z-1"), Some("Maya")));
+    }
+
+    #[test]
+    fn the_first_computer_never_takes_a_second_computers_fresh_starters() {
+        // A has been used. It reads B's list before B has read A's: B's
+        // starters still carry B's own keys and the wizard's Work names.
+        let a = vec![starter("a-1", 1, "Maya", "veebo", Some(100)), starter("a-2", 2, "Teresa", "teresa", None)];
+        let b_fresh = vec![starter("0b-1", 1, "Assistant", "reeves", Some(900)), starter("0b-2", 2, "Coder", "reeves", Some(900))];
+        let u = used(&["a-1", "a-2"], &[]);
+        let (merged, updated, added, _) = merge_sibling_configs(a.clone(), &b_fresh, &u);
+        assert_eq!((updated, added), (0, 0), "nothing taken, and B's starters are not stood beside A's: they are about to give way on B");
+        assert_eq!(merged, a, "A's AIs are as they were, though B's keys are the smaller ones and B's edits the newer");
+
+        // Then B's list after it gave way: A's keys and A's settings.
+        let mut b_folded = a.clone();
+        for (e, agent) in b_folded.iter_mut().zip(["0b-1", "0b-2"]) {
+            e["id"] = serde_json::json!(agent);
+            e["agentPubKey"] = serde_json::json!(agent);
+        }
+        let (merged, updated, added, _) = merge_sibling_configs(a.clone(), &b_folded, &u);
+        assert_eq!((updated, added), (0, 0));
+        assert_eq!(merged, a);
+    }
+
+    #[test]
+    fn a_starter_that_has_been_talked_to_stays_its_own_ai() {
+        // B was used before it met the identity's AIs: its slot 1 has a
+        // history. It keeps its key, name and settings; A's slot-1 AI
+        // arrives beside it. Neither is changed.
+        let b = vec![starter("b-1", 1, "Veebo", "veebo", None)];
+        let a = vec![starter("a-1", 1, "Veebo", "veebo", None)];
+        let (merged, updated, added, _) = merge_sibling_configs(b.clone(), &a, &used(&["b-1"], &["a-1"]));
+        assert_eq!((updated, added, merged.len()), (0, 1, 2));
+        assert_eq!(merged[0], b[0], "this device's AI is untouched");
+        assert_eq!(merged[1]["foundingKey"], "a-1");
+        assert!(merged[1]["agentPubKey"].is_null(), "the identity's AI arrives as its own");
+    }
+
+    #[test]
+    fn of_two_unused_starters_exactly_one_gives_way_on_both_devices_alike() {
+        // Two computers set up side by side, nothing talked to on either.
+        let a = starter("a-1", 1, "Veebo", "veebo", None);
+        let b = starter("b-1", 1, "Assistant", "reeves", Some(900));
+        let nobody = Used::default();
+        // On B: A's key is the smaller, B gives way and takes A's settings.
+        let (on_b, updated, added, _) = merge_sibling_configs(vec![b.clone()], &[a.clone()], &nobody);
+        assert_eq!((updated, added), (1, 0));
+        assert_eq!((on_b[0]["foundingKey"].as_str(), on_b[0]["name"].as_str()), (Some("a-1"), Some("Veebo")));
+        // On A: it leads, and does not stand B's starter beside its own.
+        let (on_a, updated, added, _) = merge_sibling_configs(vec![a.clone()], &[b.clone()], &nobody);
+        assert_eq!((updated, added), (0, 0));
+        assert_eq!(on_a, vec![a.clone()]);
+        assert!(starter_gives_way(&b, &a, &nobody) && !starter_gives_way(&a, &b, &nobody));
+        assert!(sibling_starter_gives_way(&a, &b, &nobody) && !sibling_starter_gives_way(&b, &a, &nobody));
+
+        // The earlier install leads whatever the keys are: the first
+        // computer's starter (seeded long ago, or before the stamp existed)
+        // against a second computer's with the smaller key and a wizard's
+        // Work name. The first computer keeps its AI as it is.
+        let first = starter("z-1", 1, "Veebo", "veebo", None);
+        let mut first_stamped = first.clone();
+        first_stamped["seededAt"] = serde_json::json!(1_000);
+        let mut second = starter("0b-1", 1, "Assistant", "reeves", Some(900_000));
+        second["seededAt"] = serde_json::json!(800_000);
+        for first in [first, first_stamped] {
+            assert!(starter_gives_way(&second, &first, &nobody) && !starter_gives_way(&first, &second, &nobody));
+            let (on_first, updated, added, _) = merge_sibling_configs(vec![first.clone()], &[second.clone()], &nobody);
+            assert_eq!((updated, added), (0, 0));
+            assert_eq!(on_first, vec![first.clone()], "the first computer's unused AI is not renamed by the second's wizard");
+            let (on_second, _, added, _) = merge_sibling_configs(vec![second.clone()], &[first.clone()], &nobody);
+            assert_eq!((added, on_second[0]["foundingKey"].as_str(), on_second[0]["name"].as_str()), (0, Some("z-1"), Some("Veebo")));
+        }
     }
 }

@@ -118,7 +118,7 @@ describe("step 2: meet your AIs", () => {
     for (const n of names) expect(n.length).toBeGreaterThan(0);
   });
 
-  it("offers Personal or Work as two choice cards and swaps the AIs on pick", async () => {
+  it("shows the Work set first, applied by itself, and swaps the AIs on pick", async () => {
     const cards = () =>
       browser.execute(() =>
         [...document.querySelectorAll('[data-testid="welcome-ai-card"]')].map((c) => ({
@@ -138,35 +138,63 @@ describe("step 2: meet your AIs", () => {
     });
     const choices = await $$('[data-testid="welcome-preset-option"]');
     expect(choices.length).toBe(2);
-    expect(await choices[0].getAttribute("aria-pressed")).toBe("true");
-    const before = await cards();
-    await choices[1].click();
-    // Every card keeps its AI, gets its Work name and a new picture.
-    let after = before;
+    // Work is the first card, and nobody pressed it: a fresh install's
+    // three starters become the Work set by themselves.
+    expect(await choices[0].getAttribute("data-preset")).toBe("work");
+    expect(await choices[1].getAttribute("data-preset")).toBe("personal");
+    let work = await cards();
     try {
       await browser.waitUntil(
         async () => {
-          after = await cards();
-          return after.every((c, i) => c.id === before[i].id && c.name !== before[i].name && c.src !== before[i].src);
+          work = await cards();
+          return work.map((c) => c.name).join() === "Assistant,Coder,Analyst" && (await choices[0].getAttribute("aria-pressed")) === "true";
         },
-        { timeout: 30_000 },
+        { timeout: 60_000, timeoutMsg: "the Work set was not applied by itself" },
+      );
+    } finally {
+      console.log("[preset] by itself", JSON.stringify(work.map((c) => [c.id.slice(0, 8), c.name, c.src.slice(0, 40)])));
+    }
+    expect(await choices[1].getAttribute("aria-pressed")).toBe("false");
+    // The line for someone who already uses Your Own AI elsewhere shows
+    // only when a Vault is running on this computer (none on a CI runner;
+    // a developer's own may be). It is read, never pressed: pressing it
+    // would ask that Vault to sign this test profile in.
+    const vaultHere = await browser.execute(async () => {
+      try { return !!(await (window as any).__TAURI__.core.invoke("flowsta_vault_status")).installed; } catch { return false; }
+    });
+    const line = await $('[data-testid="welcome-bring-ais"]');
+    console.log(`[preset] a Vault is running here: ${vaultHere}; the line is shown: ${await line.isExisting()}`);
+    expect(await line.isExisting()).toBe(vaultHere);
+    if (vaultHere) expect(await line.getText()).toContain("Used Your Own AI before?");
+    await shot("04b-work-set");
+    // Personal: every card keeps its AI, gets its character's name and face.
+    await choices[1].click();
+    let personal = work;
+    try {
+      await browser.waitUntil(
+        async () => {
+          personal = await cards();
+          return personal.every((c, i) => c.id === work[i].id && c.name !== work[i].name && c.src !== work[i].src);
+        },
+        { timeout: 30_000, timeoutMsg: "picking Personal never swapped the three AIs" },
       );
     } finally {
       const log = await browser.execute(() => (window as any).__e2eLog as string[]);
-      console.log("[preset] before", JSON.stringify(before.map((c) => [c.id.slice(0, 8), c.name])));
-      console.log("[preset] after ", JSON.stringify(after.map((c) => [c.id.slice(0, 8), c.name, c.src.slice(0, 40)])));
+      console.log("[preset] personal", JSON.stringify(personal.map((c) => [c.id.slice(0, 8), c.name])));
       console.log("[preset] app console:", JSON.stringify(log));
     }
-    expect(after.map((c) => c.name)).toEqual(["Assistant", "Coder", "Analyst"]);
+    expect(personal.map((c) => c.name)).toEqual(["Veebo", "Teresa", "Reeves"]);
     expect(await choices[1].getAttribute("aria-pressed")).toBe("true");
-    await shot("04b-work-set");
-    // Back to Personal so the personality spec sees the characters.
+    // Work again, by its card this time, then back to Personal so the
+    // personality spec sees the characters.
     await choices[0].click();
+    await browser.waitUntil(async () => (await cards()).map((c) => c.name).join() === "Assistant,Coder,Analyst", {
+      timeout: 30_000,
+      timeoutMsg: "picking Work never brought the Work set back",
+    });
+    await choices[1].click();
     await browser.waitUntil(
-      async () => {
-        const now = await cards();
-        return now.every((c, i) => c.id === before[i].id && c.name === before[i].name);
-      },
+      async () => (await cards()).every((c, i) => c.id === personal[i].id && c.name === personal[i].name),
       { timeout: 30_000, timeoutMsg: "picking Personal again never restored the three AIs" },
     );
   });

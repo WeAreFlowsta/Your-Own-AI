@@ -89,8 +89,20 @@ export default component$(() => {
   const ready = useSignal(false);
   const error = useSignal<string | null>(null);
 
+  // The starters are seeded as the Personal set; the wizard shows Work
+  // first and applies it by itself on a fresh install (below).
   const preset = useSignal<DefaultAiPreset>("personal");
   const applying = useSignal(false);
+  // The Work set is applied by itself once, to starters nobody has touched.
+  const workTried = useSignal(false);
+  // Someone who already uses Your Own AI on another computer: the Vault on
+  // this one, the session, and what a sign-in at this step brought.
+  const vault = useSignal<{ installed: boolean; unlocked: boolean } | null>(null);
+  const session = useSignal<{ signed_in: boolean } | null>(null);
+  const bringing = useSignal(false);
+  const bringError = useSignal("");
+  /** Set when this identity has AIs on another device: the set choice goes. */
+  const fromAccount = useSignal<{ device: string | null } | null>(null);
   const slotIds = useSignal<string[]>([]);
   const names = useStore<Record<string, string>>({});
   const thumbPickerFor = useSignal<string | null>(null);
@@ -152,6 +164,32 @@ export default component$(() => {
     });
   });
 
+  // The Vault on this computer and the session, for the one line at step 2
+  // that someone who already uses Your Own AI elsewhere can take. A profile
+  // that is signed in already and has other devices shows their AIs.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const read = async () => {
+      try {
+        const [v, se] = await Promise.all([
+          invoke<{ installed: boolean; unlocked: boolean }>("flowsta_vault_status"),
+          invoke<{ signed_in: boolean }>("flowsta_session"),
+        ]);
+        vault.value = v;
+        session.value = se;
+        if (se.signed_in && !fromAccount.value) {
+          const st = await invoke<{ devices?: { name: string | null }[] } | null>("config_sync_status").catch(() => null);
+          if (st?.devices?.length) fromAccount.value = { device: st.devices[0].name ?? null };
+        }
+      } catch {
+        if (!session.value) session.value = { signed_in: false };
+      }
+    };
+    void read();
+    const t = setInterval(() => { if (!bringing.value && !session.value?.signed_in) void read(); }, 5000);
+    cleanup(() => clearInterval(t));
+  });
+
   // The three default AIs. Their order is fixed when the slots are first
   // captured (seed order: Veebo, Teresa, Reeves - the store does not keep
   // it) and kept from then on: ranking again by archetype or name would
@@ -168,19 +206,38 @@ export default component$(() => {
     track(() => ais.map((a) => a.id).join("\n"));
     if (ais.length === 0) return;
     if (slotIds.value.length > 0 && slotIds.value.every((id) => ais.some((a) => a.id === id))) return;
-    const rank = (id: string) => {
-      const i = SEED_ORDER.indexOf(id);
-      return i < 0 ? 99 : i;
+    // By the slot each starter was seeded into (stamped once, kept through
+    // every edit), then by personality for an AI with no stamp. Personality
+    // alone ties under the Work set (all three share one), and a recapture
+    // then came back in whatever order the list had: the Work set applied
+    // by itself showed Analyst, Coder, Assistant (2026-11-17).
+    const rank = (a: { seedSlot?: number; baseArchetypeId: string }) => {
+      if (a.seedSlot) return a.seedSlot;
+      const i = SEED_ORDER.indexOf(a.baseArchetypeId);
+      return i < 0 ? 99 : 10 + i;
     };
     const three = ais
       .filter((a) => a.status === "active")
-      .sort((a, b) => rank(a.baseArchetypeId) - rank(b.baseArchetypeId))
+      .sort((a, b) => rank(a) - rank(b))
       .slice(0, 3);
     const typed = slotIds.value.map((old) => names[old]);
     slotIds.value = three.map((a) => a.id);
     three.forEach((a, i) => {
       names[a.id] = typed[i] !== undefined && typed[i] !== "" ? typed[i] : a.name;
     });
+  });
+
+  // Which set the three AIs are, read from the AIs themselves (the wizard
+  // keeps no record of the choice: coming back to it used to show Personal
+  // whatever they were).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const ids = track(() => slotIds.value.join("\n"));
+    const shown = track(() => slotIds.value.map((id) => aiData.userDefinedAis.find((a) => a.id === id)?.name ?? "").join("\n"));
+    if (!ids || applying.value) return;
+    for (const kind of ["work", "personal"] as DefaultAiPreset[]) {
+      if (DEFAULT_AI_PRESETS[kind].map((sl) => sl.name).join("\n") === shown) preset.value = kind;
+    }
   });
 
   // One download, however many times the button is pressed. Coming back to
@@ -288,6 +345,77 @@ export default component$(() => {
       }
     } finally {
       applying.value = false;
+    }
+  });
+
+  // Work first: on a fresh install the three starters become the Work set
+  // with nobody pressing anything. Only starters nobody has touched, made
+  // on this computer, with their keys settled (the context re-keys each AI
+  // seconds after first launch, and an edit under a stale id is lost), and
+  // only while this computer has not signed in: an identity's own AIs are
+  // never changed by a default. Someone who already has AIs elsewhere and
+  // signs in later gets theirs in place of these (an unused starter gives
+  // way, `config_sync::starter_gives_way`).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const ids = track(() => slotIds.value.join("\n"));
+    const signedIn = track(() => session.value?.signed_in);
+    track(() => fromAccount.value);
+    track(() => aiData.userDefinedAis.map((a) => `${a.id}:${a.agentPubKey ?? ""}`).join("\n"));
+    if (workTried.value || !ids || signedIn === undefined) return;
+    if (signedIn || fromAccount.value) {
+      workTried.value = true;
+      return;
+    }
+    const three = slotIds.value.map((id) => aiData.userDefinedAis.find((a) => a.id === id));
+    if (three.length !== 3 || three.some((a) => !a)) return;
+    const settled = three.every((a) => !!a!.agentPubKey && a!.id === a!.agentPubKey);
+    if (!settled) return; // the re-key is still under way: this runs again when it lands
+    const untouched = three.every(
+      (a, i) =>
+        a!.updatedAt === undefined &&
+        (!a!.foundingKey || a!.foundingKey === a!.agentPubKey) &&
+        a!.name === DEFAULT_AI_PRESETS.personal[i].name,
+    );
+    workTried.value = true;
+    if (untouched) await applyPreset$("work");
+  });
+
+  // "Used Your Own AI before?": sign in here, then read the other devices
+  // at once. When there are any, this computer's unused starters have just
+  // become the identity's AIs, and step 2 shows them in place of the choice.
+  const bringMyAis$ = $(async () => {
+    if (bringing.value) return;
+    bringing.value = true;
+    bringError.value = "";
+    workTried.value = true;
+    try {
+      await invoke("flowsta_sign_in");
+      session.value = { signed_in: true };
+      const st = await invoke<{ devices?: { name: string | null }[] }>("config_sync_now").catch(() => null);
+      if (st?.devices?.length) fromAccount.value = { device: st.devices[0].name ?? null };
+    } catch (e) {
+      const msg = String(e);
+      bringError.value = msg.includes("vault_locked")
+        ? "Your Vault is locked. Unlock it and try again."
+        : msg.includes("denied") || msg.includes("rejected")
+          ? "You declined the sign-in in your Vault."
+          : "Sign-in did not finish. You can try again, or sign in at the last step.";
+    } finally {
+      bringing.value = false;
+    }
+  });
+
+  // The identity's AIs just took the starters' places: the name fields
+  // follow (they hold what was typed, by AI).
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const here = track(() => fromAccount.value);
+    const shown = track(() => slotIds.value.map((id) => aiData.userDefinedAis.find((a) => a.id === id)?.name ?? "").join("\n"));
+    if (!here || !shown) return;
+    for (const id of slotIds.value) {
+      const ai = aiData.userDefinedAis.find((a) => a.id === id);
+      if (ai) names[id] = ai.name;
     }
   });
 
@@ -475,13 +603,44 @@ export default component$(() => {
           {step.value === 2 && (
             <section class="pt-6 md:pt-10">
               <p class="text-sm uppercase tracking-widest text-[var(--text-muted)] mb-3">Step 2 of 3</p>
-              <h1 class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-3">Meet your AIs.</h1>
-              <p class="text-base md:text-lg text-[var(--text-secondary)] mb-6 max-w-2xl">
-                You start with three. Which set?
-              </p>
+              <h1 class="font-varela text-3xl md:text-5xl font-bold leading-tight mb-3">
+                {fromAccount.value ? "Your AIs are here." : "Meet your AIs."}
+              </h1>
+              {fromAccount.value ? (
+                <p class="text-base md:text-lg text-[var(--text-secondary)] mb-6 max-w-2xl" data-testid="welcome-from-account">
+                  They came from {fromAccount.value.device ?? "your other computer"}, with their names and pictures. Their conversations follow.
+                </p>
+              ) : (
+                <p class="text-base md:text-lg text-[var(--text-secondary)] mb-6 max-w-2xl">
+                  You start with three. Which set?
+                </p>
+              )}
 
-              <div class="grid gap-3 sm:grid-cols-2 mb-6 max-w-2xl">
-                {(["personal", "work"] as DefaultAiPreset[]).map((k) => {
+              {/* One quiet line for someone who already uses Your Own AI on
+                  another computer, shown only when a Vault is running here.
+                  A first-time person with no Vault never sees it. */}
+              {!fromAccount.value && vault.value?.installed && session.value && !session.value.signed_in && (
+                <p class="text-sm text-[var(--text-muted)] mb-4 max-w-2xl" data-testid="welcome-bring-ais">
+                  Used Your Own AI before?{" "}
+                  {vault.value.unlocked ? (
+                    <button
+                      type="button"
+                      disabled={bringing.value}
+                      data-testid="welcome-bring-ais-sign-in"
+                      onClick$={bringMyAis$}
+                      class="underline text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-60"
+                    >
+                      {bringing.value ? "Waiting for your Vault.." : "Sign in to bring your AIs here."}
+                    </button>
+                  ) : (
+                    <span>Unlock your Vault, then sign in to bring your AIs here.</span>
+                  )}
+                  {bringError.value && <span class="block mt-1 text-red-400">{bringError.value}</span>}
+                </p>
+              )}
+
+              <div class={`grid gap-3 sm:grid-cols-2 mb-6 max-w-2xl ${fromAccount.value ? "hidden" : ""}`}>
+                {(["work", "personal"] as DefaultAiPreset[]).map((k) => {
                   const on = preset.value === k;
                   return (
                     <button
@@ -490,6 +649,7 @@ export default component$(() => {
                       disabled={applying.value}
                       aria-pressed={on}
                       data-testid="welcome-preset-option"
+                      data-preset={k}
                       onClick$={() => applyPreset$(k)}
                       class={`text-left rounded-xl border-2 p-4 transition hover:border-[var(--text-primary)] ${
                         on ? "border-[var(--bg-button-primary)] bg-[var(--bg-card)]" : "border-[var(--border-subtle)]"

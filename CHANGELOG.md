@@ -57,6 +57,19 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - The Projects helper is now a signed program on Windows and macOS (Your
   Own AI Build 0.4.4), and from this version it is installed by itself
   there too.
+- The welcome steps show the Work set first, already applied, with
+  Personal beside it. Coming back to that step now shows the set your AIs
+  are, and the three cards keep their order.
+- On a second computer, the welcome steps can no longer change the AIs you
+  already have. A starter that has never been talked to there gives way to
+  your existing AI in its place, whatever was chosen or renamed in the
+  welcome steps; one that has been talked to stays its own AI beside
+  yours. Before, a set chosen or a name typed on the second computer could
+  replace the name, personality and picture of an AI on the first.
+- "Used Your Own AI before? Sign in to bring your AIs here." in the welcome
+  steps, shown only when Flowsta Vault is running on the computer.
+- Restoring from the Vault onto a computer whose welcome steps chose the
+  Work set gives three AIs, not five.
 - The memory model follows the first model on every path. It was skipped
   when the first download was joined part-way or resumed after a restart.
 - Quitting while a document is being read stops the reader with the app.
