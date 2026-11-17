@@ -1289,22 +1289,22 @@ fn catalog_slot_default(models: &[crate::flowsta::OnlineModel], slot: &str) -> O
 /// registry, so routing never breaks. The Settings page names these same
 /// models as "Recommended" - keep the two in sync.
 /// These mirror the catalog's slots as seeded 2026-09-25 (Grok 4.7 (Web)
-/// took Fresh, GPT-6 Luna took Everyday, GPT-6 Astra holds the four hard
+/// took Fresh, GPT-6 Luna took Everyday, GPT-6.2 Astra holds the four hard
 /// slots since 2026-09-05). The catalog wins whenever it speaks; these are
 /// the floor for an older catalog.
 pub(crate) const DEFAULT_FRESH: &str = "online:grok-4.7-search";
 /// The Everyday slot: frontier-class quality at the lowest price in the
 /// catalog - what an ordinary question gets in Online and Offline mode.
 pub(crate) const DEFAULT_EVERYDAY: &str = "online:gpt-6-luna";
-const DEFAULT_HARD_CODE: &str = "online:gpt-6-astra";
-const DEFAULT_HARD_GENERAL: &str = "online:gpt-6-astra";
+const DEFAULT_HARD_CODE: &str = "online:gpt-6.2-astra";
+const DEFAULT_HARD_GENERAL: &str = "online:gpt-6.2-astra";
 /// The agent slot: the strongest proven tool-driver, through the Responses
 /// passthrough (forced-tool calls measured ~1.7s with zero reasoning tokens
 /// on simple steps - it scales thinking to the step), so the flagship
 /// drives projects by default.
-const DEFAULT_AGENT: &str = "online:gpt-6-astra";
+const DEFAULT_AGENT: &str = "online:gpt-6.2-astra";
 /// Planning leans reasoning; must still drive tools (planners read files).
-const DEFAULT_PLAN: &str = "online:gpt-6-astra";
+const DEFAULT_PLAN: &str = "online:gpt-6.2-astra";
 
 /// Pick an online model for one routing decision. Order: the user's explicit
 /// choice for this slot (when still in the catalog) → the recommended default
@@ -1596,7 +1596,7 @@ mod search_rule_tests {
     #[test]
     fn only_a_setting_that_answers_online_may_search() {
         assert!(model_may_search("auto:online-offline"));
-        assert!(model_may_search("online:gpt-6-astra"));
+        assert!(model_may_search("online:gpt-6.2-astra"));
         assert!(!model_may_search("auto:offline"));
         assert!(!model_may_search("auto:my-hardware"));
         assert!(!model_may_search("Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf"));
@@ -3341,7 +3341,7 @@ mod tests {
 
     #[test]
     fn catalog_slot_defaults_beat_the_baked_ones() {
-        let mut astra = pm("online:gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", 4.0, 20.0, None);
+        let mut astra = pm("online:gpt-6.2-astra", "GPT-6.2 Astra", "OpenAI's newest flagship", 4.0, 20.0, None);
         astra.routing = Some(crate::flowsta::OnlineRouting {
             slots: vec!["hard_code".into(), "hard_general".into(), "agent".into(), "everyday".into()],
             caps: Some([10, 10, 10, 10, 9, 3]),
@@ -3427,7 +3427,7 @@ mod tests {
         vec![
             om("grok-4.7", "Grok 4.7", "xAI's frontier model", None),
             om("grok-4.7-search", "Grok 4.7 (Web)", "live web search", Some(0.005)),
-            om("gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", None),
+            om("gpt-6.2-astra", "GPT-6.2 Astra", "OpenAI's newest flagship", None),
             om("gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI's previous flagship", None),
             om("gpt-5.6-terra", "GPT-5.6 Terra", "balanced flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
@@ -3559,7 +3559,7 @@ mod tests {
         models.push(om("kimi-k2.6", "Kimi K2.6", "value tool-driver", None));
         models.push(om("kimi-k3", "Kimi K3", "flagship", None));
         // No pref -> the Astra default, never the alphabetical fallback.
-        assert_eq!(select_online_agent(&models, None).unwrap(), "online:gpt-6-astra");
+        assert_eq!(select_online_agent(&models, None).unwrap(), "online:gpt-6.2-astra");
         // Raw pref matches prefixed ids.
         assert_eq!(
             select_online_agent(&models, Some("kimi-k2.6")).unwrap(),
@@ -3573,7 +3573,7 @@ mod tests {
         // Unknown pref falls back to the default, not to silence.
         assert_eq!(
             select_online_agent(&models, Some("online:claude-nope")).unwrap(),
-            "online:gpt-6-astra"
+            "online:gpt-6.2-astra"
         );
         // Default missing from the catalog -> capability fallback, which
         // must never hand agents a tools-blind model (sonar scores 1).
@@ -3620,10 +3620,10 @@ mod tests {
         assert_eq!(select_online(&models, "general", true, None).unwrap(), "online:grok-4.7-search");
         // Hard code / math / reasoning → the flagship.
         for task in ["code", "math", "reasoning"] {
-            assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-6-astra");
+            assert_eq!(select_online(&models, task, false, None).unwrap(), "online:gpt-6.2-astra");
         }
         // Hard general → the same flagship (Astra holds both Hard slots).
-        assert_eq!(select_online(&models, "general", false, None).unwrap(), "online:gpt-6-astra");
+        assert_eq!(select_online(&models, "general", false, None).unwrap(), "online:gpt-6.2-astra");
     }
 
     #[test]
@@ -3637,7 +3637,7 @@ mod tests {
         // A pref no longer in the catalog is ignored → default applies.
         assert_eq!(
             select_online(&models, "code", false, Some("online:retired-model")).unwrap(),
-            "online:gpt-6-astra"
+            "online:gpt-6.2-astra"
         );
     }
 
@@ -3686,7 +3686,7 @@ mod tests {
         let luna_on: HashMap<String, bool> = [("gpt-6-luna".to_string(), true)].into();
         let openai_off: HashMap<String, bool> = [("openai".to_string(), false)].into();
         assert!(auto_allowed("gpt-6-luna", Some("openai"), &luna_on, &openai_off, &providers));
-        assert!(!auto_allowed("online:gpt-6-astra", Some("openai"), &luna_on, &openai_off, &providers));
+        assert!(!auto_allowed("online:gpt-6.2-astra", Some("openai"), &luna_on, &openai_off, &providers));
     }
 
     /// A default stays a default only until the person changes it. The
@@ -3730,7 +3730,7 @@ mod tests {
     #[test]
     fn fallback_goes_to_another_provider_of_the_same_kind() {
         let luna = op("gpt-6-luna", "GPT-6 Luna", "openai", Some("everyday"), 400_000, true, None);
-        let astra = op("gpt-6-astra", "GPT-6 Astra", "openai", Some("flagship"), 400_000, true, None);
+        let astra = op("gpt-6.2-astra", "GPT-6.2 Astra", "openai", Some("flagship"), 400_000, true, None);
         let flash = op("argon-flash", "Argon Flash", "google", Some("everyday"), 1_000_000, true, None);
         let argon = op("gemini-4-argon", "Gemini 4 Argon", "google", Some("flagship"), 1_000_000, true, None);
         let grok_s = op("grok-4.7-search", "Grok 4.7 (Web)", "xai", Some("search"), 256_000, false, Some(0.005));
@@ -3760,7 +3760,7 @@ mod tests {
     fn agent_catalog() -> Vec<crate::flowsta::OnlineModel> {
         vec![
             om("kimi-k2.6", "Kimi K2.6", "tool-driving flagship", None),
-            om("gpt-6-astra", "GPT-6 Astra", "OpenAI's newest flagship", None),
+            om("gpt-6.2-astra", "GPT-6.2 Astra", "OpenAI's newest flagship", None),
             om("sonar", "Sonar", "Perplexity search", Some(0.005)),
         ]
     }
@@ -3772,7 +3772,7 @@ mod tests {
         // Astra since 2026-09-05).
         assert_eq!(
             select_online_agent(&agent_catalog(), None).unwrap(),
-            "online:gpt-6-astra"
+            "online:gpt-6.2-astra"
         );
     }
 
@@ -3786,7 +3786,7 @@ mod tests {
         // A pref no longer in the catalog is ignored → default applies.
         assert_eq!(
             select_online_agent(&agent_catalog(), Some("online:retired")).unwrap(),
-            "online:gpt-6-astra"
+            "online:gpt-6.2-astra"
         );
     }
 
@@ -3794,15 +3794,15 @@ mod tests {
     fn agent_override_set_get_clear() {
         // The overload offer's session pick: set wins, empty = clear, and
         // select_online_agent honors it only while it exists in the catalog.
-        set_agent_online_override(Some("online:gpt-6-astra".into()));
-        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-6-astra"));
+        set_agent_online_override(Some("online:gpt-6.2-astra".into()));
+        assert_eq!(agent_online_override().as_deref(), Some("online:gpt-6.2-astra"));
         assert_eq!(
             select_online_agent(&agent_catalog(), agent_online_override().as_deref()).unwrap(),
-            "online:gpt-6-astra"
+            "online:gpt-6.2-astra"
         );
         set_agent_online_override(Some(String::new()));
         assert_eq!(agent_online_override(), None);
-        set_agent_online_override(Some("online:gpt-6-astra".into()));
+        set_agent_online_override(Some("online:gpt-6.2-astra".into()));
         clear_agent_online_override();
         assert_eq!(agent_online_override(), None);
     }
