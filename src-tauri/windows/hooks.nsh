@@ -2,6 +2,12 @@
 ; llama-server.exe; from 0.9.1 they are your-own-ai.exe and
 ; yourowai-llama-server.exe. An install over an earlier version removes the
 ; old files.
+!include "${__FILEDIR__}\wait-for-program-file.nsh"
+
+!macro NSIS_HOOK_PREINSTALL
+  !insertmacro WaitForProgramFile
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   Delete "$INSTDIR\app.exe"
   Delete "$INSTDIR\llama-server.exe"

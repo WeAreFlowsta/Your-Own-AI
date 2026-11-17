@@ -121,6 +121,47 @@ jobs:
             touch "src-tauri/${n}-x86_64-pc-windows-msvc.exe"
           done
 
+      # The installer's wait for the program file at an update, run for
+      # real: the file is held for four seconds, as Windows can hold a
+      # program that has just exited, and the installer must wait and then
+      # write it. With no /UPDATE it must not wait.
+      - name: Installer waits for the program file at an update
+        shell: pwsh
+        working-directory: src-tauri/windows
+        run: |
+          $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
+          & $makensis /V2 hook-test.nsi
+          if ($LASTEXITCODE -ne 0) { throw "the installer hooks did not compile" }
+          New-Item -ItemType Directory -Force hook-test-inst | Out-Null
+          $target = Join-Path (Get-Location) "hook-test-inst\hook-target.exe"
+          function Hold([int]$seconds) {
+            Set-Content -Path $target -Value "old"
+            Start-Job -ArgumentList $target, $seconds -ScriptBlock {
+              param($path, $secs)
+              $f = [IO.File]::Open($path, 'Open', 'ReadWrite', 'None')
+              Start-Sleep -Seconds $secs
+              $f.Close()
+            } | Out-Null
+            Start-Sleep -Seconds 1
+          }
+          Hold 4
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $run = Start-Process .\hook-test.exe -ArgumentList "/UPDATE" -Wait -PassThru
+          $took = $clock.Elapsed.TotalSeconds
+          "update: exit $($run.ExitCode) after $([math]::Round($took, 1)) s; the file holds '$(Get-Content $target)'"
+          if ($run.ExitCode -ne 0) { throw "at an update the held program file was not written" }
+          if ($took -lt 2) { throw "the installer did not wait for the held file" }
+          if ((Get-Content $target) -ne "new") { throw "the program file was not replaced" }
+          Get-Job | Wait-Job | Remove-Job
+          Hold 4
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $run = Start-Process .\hook-test.exe -Wait -PassThru
+          $took = $clock.Elapsed.TotalSeconds
+          "by hand: exit $($run.ExitCode) after $([math]::Round($took, 1)) s"
+          if ($took -gt 2) { throw "an install by hand was held up by the update wait" }
+          if ($run.ExitCode -ne 3) { throw "expected the held file to refuse the write when nothing waits" }
+          Get-Job | Wait-Job | Remove-Job
+
       - name: Build unit tests
         working-directory: src-tauri
         run: cargo test --lib --no-run
