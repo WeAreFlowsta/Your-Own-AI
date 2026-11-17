@@ -4,12 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       llama_cpp_version:
-        description: 'llama.cpp git tag or commit (e.g., b8377, master)'
+        description: 'llama.cpp git tag or commit (e.g., b8377). Never master: the release is named after it and the app pins it.'
         required: true
-        default: 'master'
 
 jobs:
+  # The release is named llama-<version> and the app pins that name with the
+  # archives' fingerprints: a moving branch would make two different engines
+  # under one name.
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: A tag or a commit, not a branch
+        run: |
+          V="${{ github.event.inputs.llama_cpp_version }}"
+          case "$V" in
+            ""|master|main|HEAD) echo "llama_cpp_version must be a llama.cpp tag or commit, not '$V'"; exit 1;;
+          esac
+
   build-linux:
+    needs: check-version
     # 22.04, not ubuntu-latest: the runner's glibc becomes the engine's floor
     # (the "Verify binary" step holds it at 2.35).
     runs-on: ubuntu-22.04
@@ -38,7 +51,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       - name: Build binary with Vulkan GPU support
         run: |
@@ -100,13 +113,14 @@ jobs:
           retention-days: 7
 
   build-macos-arm64:
+    needs: check-version
     runs-on: macos-15  # Apple silicon; macos-14 was retired 2026-11-02 (the 11.0 target and the vtool check keep the floor)
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       - name: Build binary with Metal GPU support
         run: |
@@ -147,13 +161,14 @@ jobs:
           retention-days: 7
 
   build-macos-x64:
+    needs: check-version
     runs-on: macos-15  # Cross-compile for Intel from ARM runner
     steps:
       - name: Checkout llama.cpp
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       - name: Build binary for x86_64 (CPU only, no Metal on Intel Macs)
         run: |
@@ -208,6 +223,7 @@ jobs:
           retention-days: 7
 
   build-windows:
+    needs: check-version
     runs-on: windows-latest
     steps:
       - name: Setup MSVC
@@ -227,7 +243,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       # The LunarG Vulkan SDK doesn't ship a SPIRV-Headers cmake config where
       # llama.cpp's find_package(SPIRV-Headers) looks, so provide it from source
@@ -358,6 +374,7 @@ jobs:
   # via PTX JIT from the 89 target - their drivers are new enough.
   # Native sm_90+/sm_121 builds are a separate future CUDA-13 variant.
   build-linux-cuda:
+    needs: check-version
     runs-on: ubuntu-22.04
     steps:
       - name: Install CUDA toolkit 12.2 (NVIDIA apt repo)
@@ -372,7 +389,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       - name: Build binary with CUDA support
         run: |
@@ -423,6 +440,7 @@ jobs:
           retention-days: 7
 
   build-windows-cuda:
+    needs: check-version
     # windows-2022, NOT windows-latest: newer images ship a Visual Studio
     # that CUDA 12.x's nvcc rejects outright ("unsupported Microsoft Visual
     # Studio version", and -allow-unsupported-compiler doesn't reach CMake's
@@ -446,7 +464,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ggml-org/llama.cpp
-          ref: ${{ github.event.inputs.llama_cpp_version || 'master' }}
+          ref: ${{ github.event.inputs.llama_cpp_version }}
 
       - name: Build binary with CUDA support
         run: |
@@ -568,7 +586,7 @@ jobs:
           # Deterministic tag = llama-<version> (no timestamp) so the app build
           # can PIN to an exact release. Build a specific llama.cpp tag, not
           # 'master', so the bundled engine is reproducible until we bump.
-          LLAMA_VERSION="${{ github.event.inputs.llama_cpp_version || 'master' }}"
+          LLAMA_VERSION="${{ github.event.inputs.llama_cpp_version }}"
           TAG_NAME="llama-${LLAMA_VERSION}"
           echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
           echo "llama_version=${LLAMA_VERSION}" >> $GITHUB_OUTPUT

@@ -1,0 +1,43 @@
+name: Dependency audit
+
+# A report, never a gate: an advisory can appear for a dependency without any
+# commit here, so this runs weekly (and by hand) and writes what it finds to
+# the run's summary. A finding does not fail a pull request.
+on:
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+
+      - name: Rust dependencies (src-tauri/Cargo.lock)
+        run: |
+          {
+            echo "## Rust dependencies"
+            echo '```'
+            cargo audit --file src-tauri/Cargo.lock --color never 2>&1 | tail -n 200 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: JavaScript dependencies the installed app runs (npm audit --omit=dev)
+        run: |
+          {
+            echo "## JavaScript dependencies (not the build tools)"
+            echo '```'
+            npm audit --omit=dev 2>&1 | tail -n 120 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
