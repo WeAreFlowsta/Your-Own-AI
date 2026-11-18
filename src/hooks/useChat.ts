@@ -374,6 +374,12 @@ type PageThread = { conv: string | null; seq: number; done: Promise<void>; finis
 const pageThreads = new Map<string, PageThread>();
 const THREAD_WAIT_MS = 90_000;
 
+/** The rule a second ask is held to on this computer's engine after a reply
+ *  that came back empty: the reply's first character is not a control
+ *  character, a space or a digit; anything may follow. (The engine's grammar
+ *  format; an online service is sent no grammar.) */
+export const SECOND_ASK_GRAMMAR = "root ::= [^\\x00-\\x200-9] [^\\x00]*";
+
 /** The episode of a conversation being left: the first question and the
  *  latest answer, one row per conversation (a stable id revises it). */
 async function leaveEpisode(hash: string | null, messages: Message[], ai: SelectedAiModel): Promise<void> {
@@ -1985,6 +1991,10 @@ export function useChat(props: UseChatProps) {
         // list cut before it streamed, or a bare end-of-turn. Ask once more,
         // steered plainly to words; works for any model, no name checks. A
         // second empty run falls through to the honest message below.
+        // Set when the second ask itself did not go through (the engine
+        // stopped, the request was refused): that is not the model answering
+        // with nothing, and the message below must not say it is.
+        let retryDidNotRun = false;
         if (!fullResponse.trim() && !controller.signal.aborted) {
           console.warn("[Chat] empty reply - one retry with a plain-words steer");
           uiLog(`[chat] empty reply after ${updateCount} update(s) - one retry with a plain-words steer`);
@@ -1996,6 +2006,17 @@ export function useChat(props: UseChatProps) {
           const steer =
             systemPrompt +
             "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.";
+          // On this computer's engine the second ask may not end before it
+          // has begun: its first visible character must be something other
+          // than a space, a control character or a digit. Asked again the
+          // same way, a model that ended at once tends to do it again
+          // (measured 11-18 on a model whose template forces a thought: 12
+          // of 30 second asks empty; with the rule 0 of 65, but forced to
+          // say anything it gave a stray digit four times in ten; with no
+          // digit first, right answers 143 of 150). An answer that is a
+          // number still comes, after the model's own empty thought tags or
+          // in words. Online services take no such rule and get none.
+          const mustBegin = !isOnlineModel && !isExternalModel ? SECOND_ASK_GRAMMAR : undefined;
           try {
             for await (const chunk of llamaServerApi.chatCompletion(
               chatHistory,
@@ -2004,7 +2025,7 @@ export function useChat(props: UseChatProps) {
               maxTokens,
               captureThinking,
               preferredModel || undefined,
-              undefined,
+              mustBegin,
               reasoningEffort,
               state.cacheKey,
               sampling
@@ -2025,8 +2046,14 @@ export function useChat(props: UseChatProps) {
                   : m
               );
             }
+            // A stray control character or a lone closing thought tag before
+            // the words (seen twice in 150) is not part of the answer.
+            fullResponse = fullResponse.replace(/^[\u0000-\u001f]+/, "").replace(/^\s*<\/think>\s*/, "");
+            uiLog(`[chat] the second ask answered with ${fullResponse.trim().length} character(s)${mustBegin ? ", held to begin with a visible character" : ""}`);
           } catch (e) {
             console.warn("[Chat] plain-words retry failed:", e);
+            uiLog(`[chat] the second ask did not go through: ${String(e).slice(0, 160)}`);
+            retryDidNotRun = true;
           }
         }
 
@@ -2065,7 +2092,9 @@ export function useChat(props: UseChatProps) {
             ? "(The model's response was all internal reasoning. Try asking again or use a different model.)"
             : controller.signal.aborted
               ? ""
-              : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
+              : retryDidNotRun
+                ? "(No reply came back, and asking again did not go through. Try asking again.)"
+                : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
 
         // The same figures on the page's copy and the root's: a page that
         // folds this reply in later shows Tokens, Sources and Model alike.
