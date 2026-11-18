@@ -577,6 +577,12 @@ pub fn run() {
     // can be that helper, and a conductor is asked to shut down before it
     // is ended on Windows too.
     flowsta_hc_lines::process::interrupt_helper_or_continue();
+    // Started as a sidecar's watcher (`--watch-sidecar <app pid> <sidecar
+    // pid>`, macOS): wait for either to end, stop the sidecar if the app
+    // went first, and exit, before anything of the app starts. Otherwise
+    // this turns the watchers on: on a Mac nothing else ends the conductor
+    // and the key store when the app is force-quit or crashes.
+    flowsta_hc_lines::sidecar_watcher::run_as_sidecar_watcher_if_asked();
     // First, before anything starts a thread: on Linux with the NVIDIA driver
     // loaded, WebKitGTK 2.52 segfaults on a page change when NVIDIA's EGL
     // draws the window. The fix sets one or two environment variables for
