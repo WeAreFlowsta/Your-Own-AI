@@ -20,7 +20,12 @@ describe("routing battery (signed in, online models)", () => {
     // The environment line must say online was exercised, or the run proves nothing new.
     const env = lines.find((l) => l.includes("online catalog:")) ?? "";
     expect(env).toMatch(/online catalog: \d+ models/);
-    expect(env).toContain("entitled: yes");
+    // The report no longer prints the entitlement (its lines are scrubbed
+    // since 0.9.1); that online was exercised shows in the table: an
+    // ordinary question goes online at the frontier-first dial.
+    const general = lines.find((l) => /online-offline\s+evergreen_easy\s+frontier/.test(l)) ?? "";
+    const went = Number(general.match(/(\d+)\/\d+/)?.[1] ?? 0);
+    expect(went).toBeGreaterThan(0);
     const v = routingVerdict(lines);
     console.log(`e2e: ${v.decided} decisions, ${v.msPer?.toFixed(0)} ms each; ${v.failures.length} failure line(s)`);
     expect(v.decided).toBeGreaterThan(1000);
