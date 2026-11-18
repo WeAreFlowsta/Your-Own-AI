@@ -102,6 +102,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
 - Each online model says who serves it and where that company is based,
   and who made it when that is someone else, on its card and in the model
   pickers.
+- GPT-6.2 Astra and GPT-6.2 Sol (OpenAI) are in the catalog. GPT-6.2 Astra
+  takes hard questions, agent work and plans where an earlier OpenAI model
+  did.
 
 ### Updates
 - The update is checked twice before it installs: the release is listed
@@ -353,6 +356,15 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   and answered with empty replies. Only Your Own AI's own engine is ever
   restarted, and nothing is sent to any of the three ports while Your Own
   AI has no engine of its own running there.
+- **A long reply appears as it is written.** A reply written as one long
+  paragraph used to show nothing until the paragraph ended, which could be
+  minutes of waiting on a slow computer. It now reaches the page a few
+  words at a time.
+- **An empty reply is asked again in a way that gets an answer.** A few
+  models sometimes return nothing at all. Your Own AI already asked a
+  second time; the second ask now requires the answer to begin with real
+  text, and when it cannot be sent the page says so and suggests asking
+  again.
 
 ## [0.9.0] - 2026-10-22
 
