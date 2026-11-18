@@ -18,7 +18,9 @@ import { PROFILE, haveIdentity, setAiModel, setRoutingPrefs, signInAsTestIdentit
 const HELPER = resolve(homedir(), ".local/share/com.solar.yourowai/build/your-own-ai-build");
 const FOLDER = resolve(PROFILE, `helpers-project-${Date.now().toString(36)}`);
 const AGENT_MODEL = "online:gpt-6-luna";
-const PLAN_MODEL = "online:gpt-6.1-sol";
+// A model the catalog offers: a pick that is no longer offered falls back to
+// the default (GPT-6.1 Sol was retired from the catalog on 2026-11-18).
+const PLAN_MODEL = "online:gpt-6.2-sol";
 
 /** One TOML table's lines, as written (the app writes it, so it is simple). */
 function table(toml: string, header: string): string[] {
