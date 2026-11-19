@@ -293,6 +293,11 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   PDFs. Each release lists the fingerprints of the programs it ships.
 
 ### Fixed
+- **Older integrated graphics: the chat model loads on the processor.** On a computer
+  whose graphics driver the engine cannot use (seen on Intel HD Graphics 4600 on Linux),
+  Your Own AI said it was switching to the processor, but the engine still opened the
+  graphics device and failed the same way, so no chat model became available. The
+  processor path now leaves the graphics device alone.
 - A program that requires a tool call from a local model gets one more
   often. Some models write the call as plain text, which came back as an
   answer in words; it is now read as the call it is, and when there is
