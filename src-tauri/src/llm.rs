@@ -1208,6 +1208,16 @@ pub(crate) async fn only_integrated_gpu(app_handle: &AppHandle) -> bool {
     !devices.is_empty() && devices.iter().all(|d| d.integrated)
 }
 
+/// The engine arguments for a load that must not touch any graphics device.
+/// `--device none` as well as `-ngl 0`: with the layers at 0 alone the
+/// engine still opens the graphics device, so a driver it cannot use
+/// (field: Intel HD 4600, "does not support 16-bit storage") fails the
+/// load again and no chat model ever comes up, while the embed server,
+/// which has always passed `--device none`, loads.
+fn processor_only_args() -> Vec<String> {
+    ["-ngl", "0", "--device", "none"].iter().map(|s| s.to_string()).collect()
+}
+
 pub(crate) async fn select_gpu_device_args(app_handle: &AppHandle) -> Vec<String> {
     gpu_args_for(app_handle, None).await
 }
@@ -1218,15 +1228,15 @@ pub(crate) async fn gpu_args_for(app_handle: &AppHandle, plan: Option<&GpuPlan>)
     // system under GPU load; `-ngl 0` keeps every layer on the CPU. Slower, but
     // it takes the GPU out of the loop entirely (no Vulkan enumeration either).
     if std::env::var("FLOWSTA_CPU_ONLY").map(|v| v != "0").unwrap_or(false) {
-        log::info!("[LLM] FLOWSTA_CPU_ONLY set - forcing CPU inference (-ngl 0)");
-        return vec!["-ngl".to_string(), "0".to_string()];
+        log::info!("[LLM] FLOWSTA_CPU_ONLY set - forcing CPU inference (-ngl 0, --device none)");
+        return processor_only_args();
     }
 
     // GPU crash-loop safety net: if recent GPU runs hard-crashed the system
     // (e.g. an NVIDIA+Wayland Vulkan hang), fall back to CPU automatically.
     if !crate::gpu_safety::gpu_allowed(app_handle) {
-        log::warn!("[LLM] GPU safe mode active - running on CPU (-ngl 0)");
-        return vec!["-ngl".to_string(), "0".to_string()];
+        log::warn!("[LLM] GPU safe mode active - running on CPU (-ngl 0, --device none)");
+        return processor_only_args();
     }
 
     // The engine itself declared this GPU unusable (crippled Vulkan driver,
@@ -1234,8 +1244,8 @@ pub(crate) async fn gpu_args_for(app_handle: &AppHandle, plan: Option<&GpuPlan>)
     // reproduces the same crash, so go straight to CPU until the user
     // retries from Settings (e.g. after a driver update).
     if let Some(reason) = crate::gpu_safety::device_unsupported(app_handle) {
-        log::warn!("[LLM] GPU marked unsupported ({reason}) - running on CPU (-ngl 0)");
-        return vec!["-ngl".to_string(), "0".to_string()];
+        log::warn!("[LLM] GPU marked unsupported ({reason}) - running on CPU (-ngl 0, --device none)");
+        return processor_only_args();
     }
 
     let probe_dir = get_models_dir(app_handle).unwrap_or_else(|_| std::env::temp_dir());
@@ -1270,12 +1280,7 @@ pub(crate) async fn gpu_args_for(app_handle: &AppHandle, plan: Option<&GpuPlan>)
                  with GPU init skipped (--device none). A driver update may \
                  restore GPU use."
             );
-            return vec![
-                "-ngl".to_string(),
-                "0".to_string(),
-                "--device".to_string(),
-                "none".to_string(),
-            ];
+            return processor_only_args();
         }
     };
     let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -8065,6 +8070,19 @@ mod live_matrix {
         assert!(seen > 0, "no models in {}", dir.display());
     }
 
+    /// Field, 0.9.0 on Intel HD 4600: the driver lacks 16-bit storage, the
+    /// retry on the processor passed `-ngl 0` alone, the engine opened the
+    /// same device and failed again. Run on this box: with `-ngl 0` alone
+    /// the engine logs "using device Vulkan1" and sits on the card; with
+    /// `--device none` it does not.
+    #[test]
+    fn a_processor_fallback_keeps_the_engine_off_every_graphics_device() {
+        let a = super::processor_only_args();
+        assert!(a.windows(2).any(|w| w[0] == "--device" && w[1] == "none"));
+        // still read as a processor start by the crash ladder and the helpers
+        assert!(a.windows(2).any(|w| w[0] == "-ngl" && w[1] == "0"));
+        assert!(super::args_force_cpu(&a));
+    }
 
     #[test]
     fn a_helper_on_the_processor_is_read_into_memory_not_mapped() {
