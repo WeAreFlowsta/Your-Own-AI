@@ -659,6 +659,22 @@ pub async fn restart_to_update(app: tauri::AppHandle, without_backup: Option<boo
 mod tests {
     use super::*;
 
+    /// The updater compares versions by semver, where a pre-release part
+    /// that mixes letters and digits is compared as text: "beta10" sorts
+    /// below "beta9", and no install on beta9 takes it. A pre-release is
+    /// written as a word, a dot and a number ("beta.10", "rc.1").
+    #[test]
+    fn this_builds_pre_release_number_is_a_part_of_its_own() {
+        let version = env!("CARGO_PKG_VERSION");
+        if let Some((_, pre)) = version.split_once('-') {
+            let (word, number) = pre.split_once('.').unwrap_or((pre, ""));
+            assert!(
+                !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase()) && !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()),
+                "{version}: write the pre-release as a word, a dot and a number (beta.10), or installed copies will not see it as newer"
+            );
+        }
+    }
+
     #[test]
     fn the_download_is_heavy_work_on_battery_or_a_metered_connection() {
         use crate::machine::{Reading, Work};
