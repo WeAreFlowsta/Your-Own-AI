@@ -310,6 +310,8 @@ export default component$(() => {
   const checkUpdates = useSignal(true);
   // A newer release the app has seen whose download waits for the computer.
   const updateWaiting = useSignal<WaitingUpdate | null>(null);
+  // A newer version that is out while automatic updates are off.
+  const updateOutWhileOff = useSignal<string | null>(null);
   const updateAsked = useSignal(false);
   // Background work only when the computer is idle (src-tauri/src/machine.rs);
   // on unless the person turned it off.
@@ -440,6 +442,7 @@ export default component$(() => {
       .then((st) => {
         checkUpdates.value = st.auto;
         updateWaiting.value = st.waiting ?? null;
+        updateOutWhileOff.value = st.out_while_off ?? null;
       })
       .catch(() => {});
     import("@tauri-apps/api/event")
@@ -652,7 +655,9 @@ export default component$(() => {
   const toggleCheckUpdates = $(async () => {
     checkUpdates.value = !checkUpdates.value;
     try {
-      checkUpdates.value = (await setAutoUpdates(checkUpdates.value)).auto;
+      const st = await setAutoUpdates(checkUpdates.value);
+      checkUpdates.value = st.auto;
+      updateOutWhileOff.value = st.out_while_off ?? null;
     } catch {
       /* the updater is not in this build */
     }
@@ -1840,6 +1845,13 @@ export default component$(() => {
                     It installs when you choose Restart to update, or when you
                     quit on Windows and macOS. The check reads two public files
                     and carries nothing about you or this device.
+                    {updateOutWhileOff.value && !checkUpdates.value && (
+                      <span class="mt-2 block text-[var(--text-primary)]" data-testid="update-out-while-off">
+                        Your Own AI {updateOutWhileOff.value} is out. Automatic
+                        updates are off: switch them on to get it, or download
+                        it from yourownai.net.
+                      </span>
+                    )}
                     {updateWaiting.value && (
                       <span class="mt-2 block text-[var(--text-primary)]" data-testid="update-waiting">
                         Your Own AI {updateWaiting.value.version} is out. It has
