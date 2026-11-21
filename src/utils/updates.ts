@@ -18,6 +18,8 @@ export type UpdateStatus = {
   ready: ReadyUpdate | null;
   waiting: WaitingUpdate | null;
   notice: string | null;
+  /** A newer version that is out while automatic updates are off. */
+  out_while_off: string | null;
   updated: UpdatedFrom | null;
   can_update: boolean;
 };
