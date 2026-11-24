@@ -105,6 +105,15 @@ pub(crate) fn recorded(app: &AppHandle, t: &RecordedTurn, w: Waiting) {
     if !queues(t) {
         return;
     }
+    // Off means off: nothing waits while keeping is turned off, so nothing
+    // from that time is looked at when it is turned on again.
+    let off = app
+        .try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>()
+        .and_then(|hc| hc.get().ok().and_then(|m| m.data_key().ok()))
+        .is_some_and(|key| crate::memory_tidy::tidy_is_off(&crate::memory_rows::read_cache(app, &key, crate::memory_items::SCOPE)));
+    if off {
+        return;
+    }
     write_queue(app, &queued(read_queue(app), w));
     WAKE.notify_one();
 }

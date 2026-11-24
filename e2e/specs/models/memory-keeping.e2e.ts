@@ -99,8 +99,6 @@ describe("what an exchange settled is kept in idle time", () => {
     const report = await pass();
     console.log(`e2e: keeping pass while off: ${JSON.stringify({ ran: report.ran, whyNot: report.whyNot })}`);
     expect(report.ran).toBe(false);
-    // Either is true while it is off: the switch, or (because nothing
-    // is queued while it is off) that no exchange waits.
     expect(["keeping is turned off", "no new exchange waits"]).toContain(report.whyNot);
     expect((await items()).length).toBe(before);
     // The turn's records can land a few seconds after the reply shows;
