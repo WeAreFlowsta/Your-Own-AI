@@ -26,7 +26,7 @@ import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTu
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { loadMemoryBlock, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
+import { memoryForTurn, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
 import { indexTurn } from "../utils/transcriptMemory";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -749,12 +749,12 @@ export function useChat(props: UseChatProps) {
       // adding to them. Wasted work on the rare aborted turn (vision card,
       // consent) is fine: it's read-only.
       const aiModelSetting = selectedAi.aiConfig?.model || "";
-      const memoryBlockPromise = loadMemoryBlock(userInput, {
+      const memoryPromise = memoryForTurn(userInput, {
         aiId: selectedAi.id,
         foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
-      }).catch(() => "");
+      }).catch(() => null);
       void aiModelSetting;
 
       // Live information this AI could not look up: the reply carries the
@@ -1624,7 +1624,8 @@ export function useChat(props: UseChatProps) {
       try {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
-        const userMemory = await memoryBlockPromise;
+        const turnMemory = await memoryPromise;
+        const userMemory = turnMemory?.systemPart ?? "";
         // Report mode: a model that thinks by itself gets the ceremony-free
         // prompt (its thinking arrives as reasoning already): a local model
         // whose template thinks, and an online model the catalog says does.
@@ -2198,12 +2199,12 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine() ?? undefined }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined }
             : m,
         );
         // The root's copy too: a page that folds this reply in later (it
         // finished while the person was elsewhere) shows its Model details.
-        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine() ?? undefined } });
+        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined } });
 
         if (!holochainId) {
           console.warn("[Holochain] No agent pub key, skipping transcript");

@@ -102,6 +102,11 @@ pub struct AgentBridgeState {
 impl AgentBridgeState {
     /// Is a project session open (or stopped-but-open)? Used by the
     /// uninstaller to refuse pulling the binary from under a live session.
+    /// The open workspace folder, when there is one.
+    pub async fn open_folder(&self) -> Option<String> {
+        self.folder.lock().await.clone()
+    }
+
     pub async fn has_open_folder(&self) -> bool {
         self.folder.lock().await.is_some()
     }
