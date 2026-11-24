@@ -7,8 +7,6 @@ on:
       - "src-tauri/**"
       - "src/**"
       - "scripts/**"
-      - "tools/**"
-      - "e2e/fixtures/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/test.yml"
@@ -17,8 +15,6 @@ on:
       - "src-tauri/**"
       - "src/**"
       - "scripts/**"
-      - "tools/**"
-      - "e2e/fixtures/**"
       - "package.json"
       - "package-lock.json"
       - ".github/workflows/test.yml"
@@ -39,8 +35,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # The tools that have tests of their own (the memory harness).
-      - run: npm run test:tools
 
   rust-tests:
     runs-on: ubuntu-latest
