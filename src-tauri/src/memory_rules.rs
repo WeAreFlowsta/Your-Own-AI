@@ -247,7 +247,7 @@ mod tests {
         assert_eq!((item.scope.as_str(), meta_of(&item).unwrap().state), ("memory", ItemState::Current));
         // And the rule is given with every message in that project: it is one of the project's rule rows.
         let (text, counts) = crate::memory_prompt::block(&crate::memory_prompt::Held { facts: &[], rows: &[], project_rows: &[rule], recall: None, question_vector: None, conversation: None });
-        assert!(text.contains("Rules for this project:") && text.contains("- Deploy with: firebase deploy --only hosting"));
+        assert!(text.contains(crate::memory_prompt::PROJECT_HEADING) && text.contains("- Deploy with: firebase deploy --only hosting"));
         assert_eq!(counts.rules, 1);
     }
 }

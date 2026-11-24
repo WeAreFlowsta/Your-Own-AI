@@ -115,7 +115,7 @@ fn layer_text(rows: &[&MemoryRow]) -> String {
     lines.join("\n")
 }
 
-const PROJECT_HEADING: &str = "Rules for this project:";
+pub(crate) const PROJECT_HEADING: &str = "Rules for this project:";
 
 /// The rows of `all` that are among `kept`, in the order of `all`.
 fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a MemoryRow> {
