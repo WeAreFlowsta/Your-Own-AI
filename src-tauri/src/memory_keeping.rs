@@ -56,6 +56,9 @@ pub(crate) struct Waiting {
     pub seq: u32,
     /// The founding key of the AI that replied.
     pub ai: String,
+    /// Where that AI's conversations are recorded.
+    #[serde(default)]
+    pub agent: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
 }
@@ -237,7 +240,20 @@ async fn look(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::llm::LL
     report.ran = true;
     let scope = crate::memory_items::SCOPE;
     let private = crate::memory_use::conv_uses(&crate::memory_rows::read_cache(app, key, scope));
-    let cached = crate::transcript_search::cached_conversations(app)?;
+    let mut cached = crate::transcript_search::cached_conversations(app)?;
+    // A conversation begun since this device's text was last brought level
+    // is read in first (one read per AI).
+    let mut read: Vec<&str> = Vec::new();
+    for w in &queue {
+        let k = crate::transcript_search::row_key(app, &w.conversation)?;
+        if !w.agent.is_empty() && !read.contains(&w.agent.as_str()) && !cached.iter().any(|c| c.k == k) {
+            read.push(&w.agent);
+            let _ = crate::transcript_search::read_agent(app, &w.agent).await;
+        }
+    }
+    if !read.is_empty() {
+        cached = crate::transcript_search::cached_conversations(app)?;
+    }
     let mut waiting: Vec<Waiting> = Vec::new();
     for (at, w) in queue.iter().enumerate() {
         // The person is back: the rest waits.
@@ -431,7 +447,7 @@ mod tests {
 
     #[test]
     fn a_session_exchange_is_queued_with_its_project_and_once() {
-        let w = Waiting { conversation: "c1".into(), seq: 5, ai: "founding-a".into(), project: Some("proj-1".into()) };
+        let w = Waiting { conversation: "c1".into(), seq: 5, ai: "founding-a".into(), agent: "agent-a".into(), project: Some("proj-1".into()) };
         let q = queued(queued(Vec::new(), w.clone()), w.clone());
         assert_eq!(q, vec![w]);
         let json = serde_json::to_string(&q).unwrap();

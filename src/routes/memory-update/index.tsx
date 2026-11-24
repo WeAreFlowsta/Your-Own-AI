@@ -164,11 +164,11 @@ export default component$(() => {
 
           <div class="mt-6 flex items-center justify-end gap-3">
             {percent !== null && percent < 100 && (
-              <LiquidMetalButton onClick$={startReading} class="px-4 py-2 text-sm" data-testid="update-read-now">
+              <LiquidMetalButton onClick$={startReading} class="px-4 py-2 text-sm" testId="update-read-now">
                 {readNow.value ? "Reading now" : "Read my conversations now"}
               </LiquidMetalButton>
             )}
-            <LiquidMetalButton onClick$={() => nav("/your-memory/")} class="px-4 py-2 text-sm" data-testid="update-go-memory">
+            <LiquidMetalButton onClick$={() => nav("/your-memory/")} class="px-4 py-2 text-sm" testId="update-go-memory">
               Go to Memory
             </LiquidMetalButton>
           </div>

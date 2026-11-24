@@ -746,6 +746,7 @@ pub async fn record_transcript_entry(
             conversation: conversation_hash.clone(),
             seq: seq_for_search,
             ai: founding_key_for(&app, &agent_key),
+            agent: agent_key.clone(),
             project: folder_for_keeping.as_deref().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))),
         },
     );

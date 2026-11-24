@@ -155,6 +155,13 @@ describe("memory, asked a question set", () => {
       console.log(`e2e: the asked AI's index of earlier turns holds ${held.length} entr(ies)`);
     }
     console.log(`e2e: memory stores: ${JSON.stringify(stores)}`);
+    // The update's pass, when the run measures a profile after it: what
+    // an AI had guessed is set aside and the description of the person is
+    // given to no AI.
+    if (process.env.YOAI_MEMORY_UPDATE) {
+      const report = await invoke("memory_update_run", { learningWasPaused: false });
+      console.log(`e2e: the update's pass: ${JSON.stringify(report)}`);
+    }
     const kept = await dev("POST", "memory-stores", { do: "keep" });
     console.log(`e2e: ${kept.kept} store file(s) kept as the starting state`);
     ready = true;

@@ -560,7 +560,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 class="px-3 py-1 text-xs flex items-center"
                 title="Keep this exchange in memory, for your AIs to use later"
                 disabled={keepState.value === 'saving'}
-                data-testid="remember-reply"
+                testId="remember-reply"
               >
                 <BsBookmarkIcon />
                 <span class="hidden md:inline">{keepState.value === 'saving' ? 'Keeping...' : 'Remember'}</span>

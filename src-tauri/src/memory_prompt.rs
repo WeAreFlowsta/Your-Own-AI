@@ -460,7 +460,13 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     });
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
-    let (before_question, given, given_texts, after_question) = if beside && asked && !input.skip_search {
+    // "Remember that", said in fixed words (no model reads it). With no
+    // exchange before, there is nothing "that" could mean.
+    let remember = crate::memory_items::said_remember(&input.question).filter(|r| *r == crate::memory_items::SaidRemember::This || input.conversation.as_deref().is_some_and(|c| !c.is_empty()));
+    // A message that states something to keep is not a question about
+    // the past: nothing is searched for it.
+    let stated = remember == Some(crate::memory_items::SaidRemember::This);
+    let (before_question, given, given_texts, after_question) = if beside && asked && !input.skip_search && !stated {
         let (text, mut record, texts, note) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
         if let Some(r) = record.as_mut() {
             r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
@@ -469,9 +475,6 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     } else {
         (None, None, Vec::new(), None)
     };
-    // "Remember that", said in fixed words (no model reads it). With no
-    // exchange before, there is nothing "that" could mean.
-    let remember = crate::memory_items::said_remember(&input.question).filter(|r| *r == crate::memory_items::SaidRemember::This || input.conversation.as_deref().is_some_and(|c| !c.is_empty()));
     let after_question = match remember {
         None => after_question,
         Some(r) => {
@@ -688,7 +691,10 @@ async fn found_beside(
         &|name| crate::transcript_search::mentions(app, name).unwrap_or(true),
         &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
     );
-    let partial = (reading.total > 0 && reading.read < reading.total).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
+    // The turn in hand was recorded a moment ago and is read into the
+    // index within seconds: its own messages are not "the rest".
+    const IN_HAND: i64 = 2;
+    let partial = (reading.total > 0 && (reading.total as i64) - (reading.read as i64) > IN_HAND).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
     let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: !left_out.is_empty() };
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
