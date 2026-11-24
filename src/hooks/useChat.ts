@@ -8,6 +8,7 @@
  * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
+import { whereWords } from "../utils/givenLine";
 import { invoke } from "@tauri-apps/api/core";
 import { firstModelInFlight, setHeldTurn } from "../utils/firstModel";
 import { skillsPromptBlock } from "../utils/skills";
@@ -401,7 +402,7 @@ export function useChat(props: UseChatProps) {
       images: string[] = [],
       modelOverride?: string,
       consentGranted: boolean = false,
-      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string }; readAsText?: string[] },
+      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string }; readAsText?: string[]; keyAnswered?: boolean },
     ) => {
       if (!userInput.trim() || state.isLoading) return;
       // Pictures the document reader already read into text (`readAsText`:
@@ -1432,6 +1433,18 @@ export function useChat(props: UseChatProps) {
           }),
         );
         return;
+      }
+
+      // A message that looks like it holds a password or a key, on its
+      // way off this computer: asked first. This is the one question put
+      // before a message is sent, and it is put only then.
+      if ((isOnlineModel || isExternalModel) && !options?.keyAnswered) {
+        const masked = await invoke<{ text: string; hidden: number }>("mask_text", { text: userInput }).catch(() => null);
+        if (masked && masked.hidden > 0) {
+          state.pendingTurn = { userInput, chatAction, images, fileContext, visionModel: "" };
+          abortWith(JSON.stringify({ code: "key_ask", where: whereWords(preferredModel ?? ""), without: masked.text }));
+          return;
+        }
       }
 
       // Cancel any ongoing request

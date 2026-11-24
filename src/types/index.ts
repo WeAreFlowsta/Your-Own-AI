@@ -37,6 +37,8 @@ export interface UserDefinedAI {
   /** "Share memory with this AI", for an AI that runs online: what memory finds for a question
    *  goes with the message unless this is turned off. On unless turned off. */
   memoryOnline?: boolean;
+  /** The one line about memory and an online AI has been shown for this AI. */
+  memoryOnlineLineSeen?: boolean;
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   /** The AI's address on the person's network: the first agent key it ever had. Every device of the
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes

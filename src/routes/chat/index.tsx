@@ -2742,6 +2742,54 @@ export default component$(() => {
                     );
                   }
 
+                  if (online?.code === "key_ask") {
+                    const k = online as { where?: string; without?: string };
+                    const link = "text-sm text-yellow-700 dark:text-yellow-300 hover:underline";
+                    return (
+                      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4" data-testid="key-ask">
+                        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                          This message holds something that looks like a key. Send it to {k.where ?? "an online model"}?
+                        </p>
+                        <div class="flex items-center gap-3 flex-wrap">
+                          <LiquidMetalButton
+                            testId="key-ask-without"
+                            onClick$={async () => {
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t && k.without) await sendMessage(k.without, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Send without it
+                          </LiquidMetalButton>
+                          <button
+                            type="button"
+                            data-testid="key-ask-send"
+                            onClick$={async () => {
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
+                            }}
+                            class={link}
+                          >
+                            Send
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="key-ask-cancel"
+                            onClick$={() => {
+                              chatState.error = null;
+                              chatState.pendingTurn = null;
+                            }}
+                            class={link}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
                   if (online?.code === "auth_required") {
                     return (
                       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4">

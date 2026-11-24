@@ -633,7 +633,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
         return (
           <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={props.message.givenLine!.kind}>
             {(sent || switchedOff) && (
-              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} />
+              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
             )}
             {w.label && <div class="text-[var(--text-muted)]">{w.label}</div>}
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1">

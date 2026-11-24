@@ -81,11 +81,26 @@ export interface Sent {
   note: boolean;
 }
 
+/** Where a reply was made, from its recorded model. */
+export function whereWords(servedBy: string): string {
+  return servedBy.startsWith("external:") ? `your server (${servedBy.slice(9)})` : servedBy.startsWith("online:") ? `${servedBy.slice(7)}, online` : "an online model";
+}
+
+/** The line shown once, under the first reply for which memory went with
+ *  a message to an AI that answers elsewhere. `changed`: the AI was here
+ *  before memory was rebuilt, so what it is sent is different now. */
+export function firstSentWords(ai: string, servedBy: string, changed: boolean): string {
+  if (changed) {
+    return `What ${ai} is sent from memory has changed. It is now what memory finds for each question you ask. The list of facts and the short description of you are no longer sent.`;
+  }
+  return `${ai} runs online, so what memory found for your question was sent to ${whereWords(servedBy)} with your message. The line under each reply shows exactly what was sent.`;
+}
+
 /** The sentence that says what memory sent with a message to a model that
  *  runs elsewhere. `servedBy` is the reply's model as recorded
  *  ("online:<name>" or "external:<name>"). */
 export function sentWords(sent: Sent, servedBy: string): string {
-  const where = servedBy.startsWith("external:") ? `your server (${servedBy.slice(9)})` : servedBy.startsWith("online:") ? `${servedBy.slice(7)}, online` : "an online model";
+  const where = whereWords(servedBy);
   const n = sent.passages + sent.lines;
   if (n === 0 && !sent.note) {
     return `Nothing from memory was sent. Memory found nothing for this question. Only this conversation and your rules went to ${where}.`;
