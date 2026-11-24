@@ -21,6 +21,8 @@ export default component$(() => {
   const state = useSignal(''); // '' | 'saving' | 'saved' | 'error'
   const messageId = useSignal('');
   const role = useSignal<'user' | 'assistant'>('assistant');
+  /** The whole message the selection is in, when the page can read it: it is how the message is found among the records. */
+  const whole = useSignal('');
   const seq = useSignal<number | undefined>(undefined);
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -57,6 +59,7 @@ export default component$(() => {
         }
         aiId.value = host.getAttribute('data-remember-aiid') || '';
         role.value = host.getAttribute('data-remember-role') === 'user' ? 'user' : 'assistant';
+        whole.value = role.value === 'user' ? (host.querySelector('[data-testid="own-message-text"]')?.textContent ?? '') : '';
         text.value = selected;
         // Position centered above the selection, clamped to the viewport.
         x.value = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
@@ -91,7 +94,7 @@ export default component$(() => {
     state.value = 'saving';
     try {
       const { keepMessage, announceKept } = await import('../utils/memoryKeep');
-      const kept = await keepMessage({ aiId: aiId.value, role: role.value, text: text.value, selection: text.value, seq: seq.value });
+      const kept = await keepMessage({ aiId: aiId.value, role: role.value, text: whole.value || text.value, selection: text.value, seq: seq.value });
       announceKept({ messageId: messageId.value, kept, selection: true });
       state.value = 'saved';
     } catch {
