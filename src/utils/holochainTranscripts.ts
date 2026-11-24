@@ -101,6 +101,8 @@ export async function recordMessage(
     provider_fingerprint?: string;
     /** The user stopped the reply; content is as far as it got. */
     stopped?: boolean;
+    /** What memory gave the reply (the search's report, pointers). */
+    given?: Record<string, unknown>;
   },
   /** Agent turn extras: the working log (sanitized) + workspace folder.
    *  Client-side schema, encrypted before the zome sees it - no DNA change. */

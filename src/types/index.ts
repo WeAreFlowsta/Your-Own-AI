@@ -243,6 +243,8 @@ export interface Message {
   routingReason?: string;
   /** What memory the AI was given for this turn ("Memory: 3 rules, 12 facts"). */
   memoryLine?: string;
+  /** What memory gave this reply, as recorded with it. */
+  given?: Record<string, unknown>;
   /** The classified routing task at send time — reused when the user retries
    *  this turn online or on device. */
   routingTask?: string;
@@ -517,6 +519,9 @@ export interface HolochainTranscriptEntry {
   runtime?: { app_version: string; online: boolean; max_tokens?: number | null } | null;
   routing_reason?: string | null;
   routing_task?: string | null;
+  /** What memory gave the reply: the search's report and pointers to the
+   *  exchanges (never their text). Null on replies from before it was kept. */
+  given?: Record<string, unknown> | null;
   /** Agent turn: the working log ({ items, stats }) - restores the rail on
    *  resume. Client-side schema; old entries read back null. */
   agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats']; surface?: 'project' | 'tools' } | null;

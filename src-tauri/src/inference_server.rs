@@ -467,6 +467,7 @@ async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_pr
         room_tokens: None,
         previous_question: None,
         on_wire_from: None,
+        skip_search: false,
     })
     .await
 }
@@ -850,11 +851,9 @@ async fn memory_fixture_load_dev(
 }
 
 /// Dev builds only: put the profile's memory stores (the facts about the
-/// person, each AI's index of earlier turns) in a known state. `do=seed`
-/// writes a stores file (`path`); `do=build` builds the indexes from a
-/// history file (`path`) as the app does while conversations happen;
-/// `do=keep` keeps a copy of the stores as they are; `do=back` puts that
-/// copy back. `map` and `all` name AIs as for `memory-fixture-load`.
+/// person, each AI's older index of earlier turns) in a known state.
+/// `do=seed` writes a stores file (`path`); `do=keep` keeps a copy of the
+/// stores as they are; `do=back` puts that copy back. `map` and `all` name AIs as for `memory-fixture-load`.
 async fn memory_stores_dev(
     State(app): State<AppHandle>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -874,10 +873,9 @@ async fn memory_stores_dev(
     };
     let done = match (q.get("do").map(String::as_str), path) {
         (Some("seed"), Some(p)) => crate::memory_fixture::seed_stores(&app, p, &load_ais(&app), &names, all),
-        (Some("build"), Some(p)) => crate::memory_fixture::build_recall(&app, p, &load_ais(&app), &names, all).await,
         (Some("keep"), _) => crate::memory_fixture::keep_stores(&root).map(|n| json!({ "kept": n })),
         (Some("back"), _) => crate::memory_fixture::put_stores_back(&root).map(|n| json!({ "back": n })),
-        _ => Err("do=seed|build (with path=<file>) or do=keep|back".to_string()),
+        _ => Err("do=seed (with path=<file>) or do=keep|back".to_string()),
     };
     match done {
         Ok(v) => Json(v).into_response(),
@@ -960,6 +958,7 @@ async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Valu
             room_tokens: body["roomTokens"].as_u64().map(|w| w as u32),
             previous_question: body["previousQuestion"].as_str().map(str::to_string),
             on_wire_from: body["onWireFrom"].as_u64().map(|w| w as u32),
+            skip_search: false,
         })
         .await;
         return Json(json!({ "ai": ai.name, "path": "chat", "memory": memory })).into_response();
@@ -3258,14 +3257,6 @@ fn spawn_record(rec: RecordCtx, assistant: String) {
             let think = if thinking.trim().is_empty() { None } else { Some(thinking) };
             let _ = record("assistant", content, think, seq).await;
             seq += 1;
-        }
-
-        // Index the user turn into this AI's episodic recall (so it remembers
-        // this exchange next time). Skipped in agent mode — the "user" turn is
-        // often tool results / agent scaffolding, which would pollute recall.
-        if !rec.agent {
-            crate::inference_memory::index_turn(&rec.app, &rec.ai_id, &conv_hash, &rec.user_text)
-                .await;
         }
 
         // Remember the conversation + next sequence for follow-up turns.

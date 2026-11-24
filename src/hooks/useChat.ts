@@ -26,8 +26,8 @@ import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTu
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { memoryForTurn, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
-import { indexTurn } from "../utils/transcriptMemory";
+import { memoryForTurn, type TurnMemory, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
+import { assembleUserTurn } from "../utils/turnWire";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
 import {
@@ -525,6 +525,9 @@ export function useChat(props: UseChatProps) {
       const historyContent = fileContext
         ? `${fileContext}\n\n[User question]\n${userInput}`
         : userInput;
+      // Web pages read for this turn (set where they are read): the last
+      // message is put together once, below, from every part.
+      let webPagesBlock = "";
       chatHistory.push(
         images.length > 0
           ? {
@@ -703,6 +706,7 @@ export function useChat(props: UseChatProps) {
           const last = chatHistory[chatHistory.length - 1];
           if (last && last.role === "user") {
             const pages = blocks.join("\n\n");
+            webPagesBlock = pages;
             if (typeof last.content === "string") {
               last.content = `${pages}\n\n[User question]\n${userInput}`;
             } else if (Array.isArray(last.content)) {
@@ -1726,6 +1730,10 @@ export function useChat(props: UseChatProps) {
         // overrun (dev 2026-09-06: a 4K pin with five passages trimmed the
         // persona off the front).
         let docContext = "";
+        // What memory found beside the question, and the record of it that
+        // is stored with the reply.
+        let foundMemory: TurnMemory | null = null;
+        let givenRecord: Record<string, unknown> | undefined;
         // Which of the AI's documents had passages given to the model this turn
         // (shown under Sources; names and counts are recorded with the reply).
         let libraryGiven: LibraryDocGiven[] = [];
@@ -1739,8 +1747,26 @@ export function useChat(props: UseChatProps) {
             await growContextFor(base);
             room = roomCtx > 0 ? Math.max(0, roomCtx - base) : 0;
           }
-          // A follow-up is also searched together with the question before it.
           const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
+          // What memory finds for this question, sized to the room; the
+          // documents get the room it leaves.
+          foundMemory = await memoryForTurn(userInput, {
+            aiId: selectedAi.id,
+            foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
+            conversationHash: state.conversationHash,
+            queryVec: qvec,
+            room: {
+              windowTokens: roomCtx > 0 ? roomCtx : null,
+              roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
+              online: isOnlineModel || isExternalModel,
+              previousQuestion: before ?? null,
+            },
+          }).catch(() => null);
+          if (foundMemory?.beforeQuestion && Number.isFinite(room)) {
+            const used = await invoke<number>("count_tokens", { text: foundMemory.beforeQuestion }).catch(() => Math.ceil(foundMemory!.beforeQuestion!.length / 3));
+            room = Math.max(0, room - used);
+          }
+          // A follow-up is also searched together with the question before it.
           const followUp = followUpQuery(before, userInput);
           const followUpVec = followUp
             ? await import("../utils/embeddings").then(({ embedQueryBounded }) => embedQueryBounded(followUp)).catch(() => null)
@@ -1751,15 +1777,27 @@ export function useChat(props: UseChatProps) {
           );
           docContext = recalled.text;
           libraryGiven = recalled.used;
-          if (docContext) {
-            const last = chatHistory[chatHistory.length - 1];
-            const wire = (text: string) => `${docContext}\n\n[User question]\n${text}`;
-            if (typeof last.content === "string") last.content = wire(last.content);
-            else {
-              const t = last.content.find((p) => p.type === "text");
-              if (t && "text" in t) t.text = wire(t.text);
-            }
+        }
+        // The person's turn as sent, put together in one place: the file,
+        // the pages, the document passages, what memory found, the question
+        // as typed, memory's state note. For this turn only; the record and
+        // the bubble keep the question as typed.
+        {
+          const last = chatHistory[chatHistory.length - 1];
+          const wire = assembleUserTurn({
+            file: fileContext,
+            pages: webPagesBlock,
+            docs: docContext,
+            before: foundMemory?.beforeQuestion,
+            question: userInput,
+            after: foundMemory?.afterQuestion,
+          });
+          if (typeof last.content === "string") last.content = wire;
+          else {
+            const t = last.content.find((p) => p.type === "text");
+            if (t && "text" in t) t.text = wire;
           }
+          if (foundMemory?.given) givenRecord = { ...foundMemory.given, fingerprint: await sha256Hex(wire) };
         }
         if (!isOnlineModel && !isExternalModel) {
           const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt + "\n" + docContext);
@@ -2200,12 +2238,12 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord }
             : m,
         );
         // The root's copy too: a page that folds this reply in later (it
         // finished while the person was elsewhere) shows its Model details.
-        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined } });
+        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord } });
 
         if (!holochainId) {
           console.warn("[Holochain] No agent pub key, skipping transcript");
@@ -2326,6 +2364,10 @@ export function useChat(props: UseChatProps) {
                 // The provider's claim about the backend that answered - the
                 // online sibling of the offline model-file hash.
                 provider_fingerprint: tokenUsage?.provider_fingerprint || undefined,
+                // What memory gave this reply: the search's report and
+                // pointers to the exchanges, with the fingerprint of the
+                // turn as it was sent.
+                given: givenRecord,
               },
             );
             // Remember the assistant entry's hash so the on-demand "Verify
@@ -2341,21 +2383,6 @@ export function useChat(props: UseChatProps) {
               `[Holochain] Assistant message recorded (${grounded.length} grounded source${grounded.length === 1 ? "" : "s"})`,
             );
 
-            // Index this turn into the AI's episodic memory so it can recall
-            // this exchange in future conversations (fire-and-forget; no-ops
-            // without the embedding model). Uses the conversation hash so recall
-            // can exclude the current conversation.
-            // Skip turns answered online: those are freshness/ephemeral queries
-            // ("is it raining", "latest news"), so memorizing them just pollutes
-            // recall. The append-only transcript above still records them for audit.
-            if (!isOnlineModel) {
-              void indexTurn({
-                aiId: selectedAi.id,
-                conversationHash: turnConv!,
-                userText: userInput,
-                assistantText: displayContent,
-              });
-            }
           } catch (e) {
             console.warn("[Holochain] Transcript recording failed:", e);
             settleUserMsgHash(null); // write failed (e.g. mid user-message) → unlinked

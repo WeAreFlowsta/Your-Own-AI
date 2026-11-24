@@ -338,6 +338,20 @@ export interface TurnMemory {
   counts: MemoryCounts;
   bareNotes: boolean;
   bareKnowledge: boolean;
+  /** What the reply is given, recorded with it (the search's report and
+   *  pointers to the exchanges). Null when memory gave no block. */
+  given: Record<string, unknown> | null;
+}
+
+/** What the search block is sized by, known once the model is chosen. */
+export interface TurnRoom {
+  /** The local model's window, in tokens (absent: the smallest budget). */
+  windowTokens?: number | null;
+  /** Tokens left after the system prompt, the history and the reply. */
+  roomTokens?: number | null;
+  online: boolean;
+  /** The person's question before this one in the open conversation. */
+  previousQuestion?: string | null;
 }
 
 /**
@@ -355,6 +369,10 @@ export async function memoryForTurn(
      *  hands it to both the router and this retrieval). Absent = embedded
      *  where the memory is built. */
     queryVec?: Promise<number[] | null> | number[] | null;
+    /** Search their conversations for this question and size the block to
+     *  this room. Absent: only the system part is built (the early call of
+     *  a turn, before the model is chosen; the warm-up). */
+    room?: TurnRoom;
   },
 ): Promise<TurnMemory> {
   // Bound on the query embedding so a cold/slow/stuck embed server can
@@ -375,6 +393,13 @@ export async function memoryForTurn(
       question: query ?? "",
       questionVector: vec,
       embedHere: opts?.queryVec === undefined,
+      skipSearch: !opts?.room,
+      windowTokens: opts?.room?.windowTokens || null,
+      roomTokens: opts?.room?.roomTokens ?? null,
+      online: opts?.room?.online ?? false,
+      previousQuestion: opts?.room?.previousQuestion ?? null,
+      // The open conversation is sent whole with the turn.
+      onWireFrom: 0,
     },
   });
   // Notes and knowledge that arrived without a vector: embedded for the

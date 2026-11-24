@@ -290,6 +290,10 @@ pub(crate) struct TurnInput {
     /// this turn: messages from there on are not "found".
     #[serde(default)]
     pub on_wire_from: Option<u32>,
+    /// Build the system part only: no search (the early call of a turn,
+    /// made before the model and its window are known).
+    #[serde(default)]
+    pub skip_search: bool,
 }
 
 /// What memory adds to a turn.
@@ -432,7 +436,7 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     });
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
-    let (before_question, given) = if beside && asked {
+    let (before_question, given) = if beside && asked && !input.skip_search {
         let (text, mut record) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
         if let Some(r) = record.as_mut() {
             r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
