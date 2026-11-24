@@ -18,7 +18,7 @@ use tauri::{AppHandle, Manager};
 
 const JOB: &str = "keeping what was settled";
 /// Exchanges waiting to be looked at: pointers, never text.
-const QUEUE_FILE: &str = "memory-keep-queue.json";
+const QUEUE_FILE: &str = "memory-keep-queue.enc";
 /// Each message of an exchange is cut to this, and the whole to `SPAN_CHARS`.
 const MESSAGE_CHARS: usize = 1500;
 const SPAN_CHARS: usize = 6000;
@@ -90,13 +90,42 @@ fn queue_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(crate::profile::root(app)?.join(QUEUE_FILE))
 }
 
+fn queue_key(app: &AppHandle) -> Option<[u8; 32]> {
+    app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().and_then(|hc| hc.get().ok().and_then(|m| m.data_key().ok()))
+}
+
+/// The queue as its file holds it: sealed with the person's data key, the
+/// nonce first. It names conversations, so it is not left readable.
+pub(crate) fn seal_queue(key: &[u8; 32], queue: &[Waiting]) -> Result<Vec<u8>, String> {
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(key, &serde_json::to_vec(queue).map_err(|e| e.to_string())?)?;
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&cipher);
+    Ok(out)
+}
+
+pub(crate) fn open_queue(key: &[u8; 32], raw: &[u8]) -> Vec<Waiting> {
+    if raw.len() < 24 {
+        return Vec::new();
+    }
+    crate::transcript_crypto::decrypt(key, &raw[..24], &raw[24..]).ok().and_then(|p| serde_json::from_slice(&p).ok()).unwrap_or_default()
+}
+
+/// With the data locked nothing can be read, and nothing waits.
 fn read_queue(app: &AppHandle) -> Vec<Waiting> {
-    queue_path(app).ok().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let (Ok(path), Some(key)) = (queue_path(app), queue_key(app)) else { return Vec::new() };
+    std::fs::read(path).map(|raw| open_queue(&key, &raw)).unwrap_or_default()
 }
 
 fn write_queue(app: &AppHandle, queue: &[Waiting]) {
-    if let (Ok(p), Ok(json)) = (queue_path(app), serde_json::to_vec(queue)) {
-        let _ = std::fs::write(p, json);
+    let (Ok(path), Some(key)) = (queue_path(app), queue_key(app)) else { return };
+    if let Ok(sealed) = seal_queue(&key, queue) {
+        if std::fs::write(&path, sealed).is_ok() {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+        }
     }
 }
 
@@ -443,6 +472,18 @@ mod tests {
 
     fn turn<'a>(role: &'a str, stopped: bool, content: &'a str) -> RecordedTurn<'a> {
         RecordedTurn { role, stopped, own_write: false, content }
+    }
+
+    #[test]
+    fn the_queue_file_is_sealed_and_opens_only_with_the_persons_key() {
+        let key = [7u8; 32];
+        let queue = vec![Waiting { conversation: "uhCkk-a-conversation".into(), seq: 4, ai: "uhCAk-an-ai".into(), agent: String::new(), project: Some("recipe-book".into()) }];
+        let sealed = seal_queue(&key, &queue).unwrap();
+        let shown = String::from_utf8_lossy(&sealed);
+        assert!(!shown.contains("uhCkk-a-conversation") && !shown.contains("recipe-book"), "the file names no conversation and no project");
+        assert_eq!(open_queue(&key, &sealed), queue);
+        assert!(open_queue(&[8u8; 32], &sealed).is_empty(), "another key reads nothing");
+        assert!(open_queue(&key, b"[]").is_empty(), "a file from before the queue was sealed is not read");
     }
 
     #[test]

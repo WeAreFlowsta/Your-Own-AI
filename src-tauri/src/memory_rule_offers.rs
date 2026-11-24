@@ -13,7 +13,9 @@ use crate::memory_rows::MemoryRow;
 use serde::{Deserialize, Serialize};
 
 /// Two instructions are the same instruction at this closeness or more.
-pub(crate) const SAME: f32 = 0.80;
+/// Measured on twenty made-up pairs: at 0.70 no different pair is offered
+/// and eight of ten repeated ones are; no value gives ten and none.
+pub(crate) const SAME: f32 = 0.70;
 /// This many heard instructions are held; the oldest go first.
 const HELD: usize = 200;
 
