@@ -666,6 +666,10 @@ async fn found_beside(
     // the question, and the found exchanges it marks as replaced, which
     // are left out of what is given and recorded as left out.
     let stand = crate::memory_state::stand_for(app, &question, &memory_rows, &who);
+    // The subjects of what the note was made from came up, together.
+    if let Ok(k) = tauri::Manager::state::<std::sync::Arc<crate::commands_holochain::HolochainState>>(app).get().and_then(|m| m.data_key()) {
+        crate::memory_subjects::came_up(app, &k, &memory_rows, &stand.note_items);
+    }
     let (exchanges, left_out) = {
         let like: Vec<Vec<f32>> = stand.superseded.iter().map(|s| s.like.clone()).collect();
         let alike: std::collections::HashMap<(i64, u32), Vec<Option<f32>>> = hits

@@ -413,6 +413,7 @@ pub(crate) async fn keep_as_ai(
             o.insert("item".into(), serde_json::to_value(&meta).map_err(|e| e.to_string())?);
         }
     }
+    let row = crate::memory_subjects::settle(app, key, row).await;
     crate::memory_rows::save_and_cache(app, row).await?;
     crate::memory_items::log_change(app, key, change)?;
     crate::memory_tidying::kept(app, &id);

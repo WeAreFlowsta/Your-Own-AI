@@ -145,7 +145,7 @@ pub(crate) fn meta_of(row: &MemoryRow) -> Option<ItemMeta> {
 
 /// Write an item's fields back into its row, keeping every other key the
 /// row's `structured` holds.
-fn with_meta(mut row: MemoryRow, meta: &ItemMeta) -> MemoryRow {
+pub(crate) fn with_meta(mut row: MemoryRow, meta: &ItemMeta) -> MemoryRow {
     let mut structured = match row.structured.take() {
         Some(serde_json::Value::Object(o)) => o,
         _ => serde_json::Map::new(),
@@ -582,7 +582,7 @@ pub(crate) fn fold_changes(app: &tauri::AppHandle, key: &[u8; 32], raw: &[u8]) -
     new
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
@@ -608,6 +608,8 @@ fn view(row: &MemoryRow) -> Option<ItemView> {
 
 /// Save a changed item and note the change in the log.
 async fn save(app: &tauri::AppHandle, key: &[u8; 32], row: MemoryRow, change: Change) -> Result<ItemView, String> {
+    // An item with no subject yet is given the one its place tells.
+    let row = crate::memory_subjects::settle(app, key, row).await;
     let saved = crate::memory_rows::save_and_cache(app, row).await?;
     log_change(app, key, change)?;
     view(&saved).ok_or_else(|| "the saved row is not an item".to_string())
