@@ -880,6 +880,7 @@ pub fn run() {
             memory_reading::memory_read_now,
             memory_quotes::memory_check_quotes,
             memory_quotes::memory_reply_checked,
+            memory_reading::memory_given_texts,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,

@@ -213,6 +213,8 @@ pub(crate) struct Block {
     /// The text of each exchange shown, in order (one per `given`), then of
     /// each dated line: what the reply's quotations are checked against.
     pub texts: Vec<String>,
+    /// The dated lines that were shown.
+    pub lines: Vec<String>,
 }
 
 /// The block for a search that ran. `found` is in rank order. Whole
@@ -256,7 +258,8 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
         texts.push(l.clone());
         lines += 1;
     }
-    let n = given.len() + lines;
+    let given_len = given.len();
+    let n = given_len + lines;
     let mut report = String::new();
     if wording.today && !about.today.is_empty() {
         report.push_str(&about.today);
@@ -286,7 +289,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
     let text = format!("[From memory. {}\n\n{}]", report.trim_end(), body.trim_end());
     // With nothing to show, the report stands alone.
     let text = if n == 0 { format!("[From memory. {}]", report.trim_end()) } else { text };
-    Block { text, given, found: (found.len() + also_dated.len()) as u32, shown: n as u32, texts }
+    Block { text, given, found: (found.len() + also_dated.len()) as u32, shown: n as u32, lines: texts[given_len..].to_vec(), texts }
 }
 
 /// Why a search did not run.
@@ -358,6 +361,10 @@ pub struct SearchReport {
     /// The date line that was sent.
     #[serde(default)]
     pub today: String,
+    /// The percent of the history read, as the block said it, when it
+    /// said so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub partial_percent: Option<u8>,
 }
 
 /// What a reply was given by memory: recorded with the reply, as pointers.
@@ -378,6 +385,14 @@ pub struct GivenRecord {
     pub mask_version: String,
     #[serde(default)]
     pub cut_version: String,
+    /// Dated lines given after the exchanges (a saved note, knowledge given
+    /// to the AI), as text: they are not messages a pointer can name.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+    /// sha256 of memory's block as it was given: what a later rebuild from
+    /// the pointers is compared with.
+    #[serde(default)]
+    pub block: String,
     /// sha256 of the person's turn exactly as sent (set by the sender,
     /// which is the one that knows the final text).
     #[serde(default)]
@@ -403,6 +418,138 @@ pub(crate) fn did_not_run(why: WhyNot, today: &str, wording: Wording) -> String 
         "[From memory. {lead}No search of their conversations was run for this question: {}. If the question is about their past work, say that you could not look this time, and do not answer about their past from guesswork.]",
         why.said()
     )
+}
+
+/// What a pointer leads to now.
+pub(crate) enum Now {
+    /// The message, with its secrets hidden, and its conversation.
+    Here { by_person: bool, text: String, title: String, ai_name: Option<String>, project: Option<String>, conversation_id: String },
+    /// Its conversation was deleted.
+    Deleted,
+    /// Its conversation is not on this device (yet).
+    NotHere,
+}
+
+/// One passage of a rebuilt panel.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelPassage {
+    /// `shown`, `deleted` or `not-here`.
+    pub state: &'static str,
+    /// The day of the found message (from the pointer, so it is known even
+    /// when the message is not).
+    pub day: String,
+    pub title: String,
+    pub ai_name: Option<String>,
+    /// The conversation's id on this device and the found message's
+    /// sequence: where "Open this in the conversation" goes.
+    pub conversation_id: String,
+    pub seq: u32,
+    /// The lines as the AI saw them, each `[by the person, text]`.
+    pub lines: Vec<(bool, String)>,
+    pub quoted: bool,
+    pub score: f32,
+}
+
+/// How a rebuilt block compares with what was given.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Checked {
+    /// The rebuilt block is, to the character, what was given.
+    Exact,
+    /// A source was deleted or is not here: it cannot all be shown.
+    SomeGone,
+    /// Everything is here and the text differs from what was given.
+    Differs,
+    /// The record holds no fingerprint of the block to compare with.
+    NoRecord,
+}
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Panel {
+    pub checked: Checked,
+    pub passages: Vec<PanelPassage>,
+    pub deleted: u32,
+    pub not_here: u32,
+    /// The dated lines that rode along (a saved note, given knowledge).
+    pub lines: Vec<String>,
+    /// The report and the rule, exactly as given (when it could be rebuilt).
+    pub instruction: Option<String>,
+}
+
+/// Rebuild what a reply was given from its record: each pointer looked up
+/// as it reads now, the block put together again by the same rule, and its
+/// fingerprint compared with the one recorded.
+pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: Wording) -> Panel {
+    let said = |p: &Option<Ptr>| -> Option<Option<Said>> {
+        // None: there was no such neighbor. Some(None): it cannot be read now.
+        p.as_ref().map(|p| match at(p) {
+            Now::Here { by_person, text, .. } => Some(Said { by_person, text, seq: p.s, at: p.t }),
+            _ => None,
+        })
+    };
+    let mut passages = Vec::new();
+    let mut exchanges: Vec<Exchange> = Vec::new();
+    let (mut deleted, mut not_here) = (0u32, 0u32);
+    for g in &record.exchanges {
+        let gone = |state: &'static str| PanelPassage { state, day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, lines: Vec::new(), quoted: g.quoted, score: g.score };
+        match at(&g.hit) {
+            Now::Deleted => {
+                deleted += 1;
+                passages.push(gone("deleted"));
+            }
+            Now::NotHere => {
+                not_here += 1;
+                passages.push(gone("not-here"));
+            }
+            Now::Here { by_person, text, title, ai_name, project, conversation_id } => {
+                let (before, after) = (said(&g.before), said(&g.after));
+                let e = Exchange {
+                    conversation: g.hit.c,
+                    title: title.clone(),
+                    ai_name: ai_name.clone(),
+                    project,
+                    before: before.clone().flatten(),
+                    hit: Said { by_person, text, seq: g.hit.s, at: g.hit.t },
+                    after: after.clone().flatten(),
+                    score: g.score,
+                };
+                let mut lines = Vec::new();
+                if let Some(m) = &e.before {
+                    lines.push((m.by_person, line(m, true).0));
+                }
+                lines.push((e.hit.by_person, line(&e.hit, false).0));
+                if let Some(m) = &e.after {
+                    lines.push((m.by_person, line(m, false).0));
+                }
+                // A neighbor that was given and cannot be read now.
+                if before == Some(None) || after == Some(None) {
+                    not_here += 1;
+                }
+                let lines = lines.into_iter().map(|(p, t)| (p, t.trim_start_matches(if p { "They said: " } else { "AI: " }).to_string())).collect();
+                passages.push(PanelPassage { state: "shown", day: day(g.hit.t), title, ai_name, conversation_id, seq: g.hit.s, lines, quoted: g.quoted, score: g.score });
+                exchanges.push(e);
+            }
+        }
+    }
+    let s = &record.search;
+    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: false };
+    // Everything that was given is here: put it together again, as given
+    // (no budget: what was given already fit).
+    let whole = deleted == 0 && not_here == 0;
+    let rebuilt = whole.then(|| block_with(&exchanges, &record.lines, &about, usize::MAX, usize::MAX, None, wording));
+    let checked = match (&rebuilt, record.block.is_empty()) {
+        (None, _) => Checked::SomeGone,
+        (Some(_), true) => Checked::NoRecord,
+        (Some(b), false) if fingerprint(&b.text) == record.block && s.found == s.given => Checked::Exact,
+        // More was found than fit: the report's first sentence said so in
+        // words this rebuild does not have; compare what was shown instead.
+        (Some(b), false) if s.found != s.given && b.texts.len() as u32 == s.given => Checked::NoRecord,
+        (Some(_), false) => Checked::Differs,
+    };
+    let instruction = rebuilt.as_ref().map(|b| b.text.split("\n\n[").next().unwrap_or("").trim_start_matches("[From memory. ").trim_end_matches(']').to_string());
+    Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction }
 }
 
 /// The person's turn as it is sent: the block, the question exactly as
@@ -739,6 +886,64 @@ mod tests {
         // An exchange with no neighbors stores none.
         let alone = exchange_text(&Exchange { before: None, after: None, ..mill() }, Wording::shipped()).1;
         assert!(!serde_json::to_string(&alone).unwrap().contains("before"));
+    }
+
+    fn recorded(found: &[Exchange], lines: &[String]) -> GivenRecord {
+        let b = block_with(found, lines, &About::default(), 12, 42_000, None, Wording::shipped());
+        GivenRecord { v: 1, search: SearchReport { ran: true, found: b.found, given: b.shown, read_share: 1.0, ..Default::default() }, exchanges: b.given, lines: b.lines, block: fingerprint(&b.text), cut_version: CUT_VERSION.into(), ..Default::default() }
+    }
+
+    /// The made-up conversation the pointers of `mill()` lead into.
+    fn mill_now(p: &Ptr, changed: Option<(u32, &str)>) -> Now {
+        let e = mill();
+        let m = [e.before.unwrap(), e.hit, e.after.unwrap()].into_iter().find(|m| m.seq == p.s).unwrap();
+        let text = match changed {
+            Some((seq, text)) if seq == p.s => text.to_string(),
+            _ => m.text,
+        };
+        Now::Here { by_person: m.by_person, text, title: "Flour supplier".into(), ai_name: Some("Juno".into()), project: Some("Bakery site".into()), conversation_id: "uhCkk-made-up".into() }
+    }
+
+    #[test]
+    fn a_rebuilt_panel_is_exactly_what_was_given() {
+        let note = dated_line(T, "a note they saved", "The oven runs 10 degrees hot.");
+        let rec = recorded(&[mill()], &[note.clone()]);
+        let panel = rebuild(&rec, &|p| mill_now(p, None), Wording::shipped());
+        assert_eq!(panel.checked, Checked::Exact);
+        assert_eq!((panel.deleted, panel.not_here), (0, 0));
+        let p = &panel.passages[0];
+        assert_eq!((p.state, p.day.as_str(), p.title.as_str(), p.ai_name.as_deref(), p.seq), ("shown", "2026-01-20", "Flour supplier", Some("Juno"), 2));
+        assert_eq!(p.lines, vec![(false, "Dunmore Grain is the cheaper one, but their delivery is weekly.".to_string()), (true, "Then we go with Hartwell Mills. They deliver twice a week.".to_string()), (false, "Noted: Hartwell Mills from now on.".to_string())]);
+        assert_eq!(panel.lines, vec![note]);
+        let instruction = panel.instruction.unwrap();
+        assert!(instruction.starts_with("A search of all their conversations was run for this question. It returned the 2 dated exchange(s) below.") && instruction.ends_with("general."), "{instruction}");
+        // The passage the reply quoted keeps its mark.
+        let mut quoted = rec.clone();
+        quoted.exchanges[0].quoted = true;
+        assert!(rebuild(&quoted, &|p| mill_now(p, None), Wording::shipped()).passages[0].quoted);
+    }
+
+    #[test]
+    fn a_deleted_source_cannot_be_shown_and_a_changed_one_is_said_to_differ() {
+        let rec = recorded(&[mill()], &[]);
+        let panel = rebuild(&rec, &|_| Now::Deleted, Wording::shipped());
+        assert_eq!((panel.checked, panel.deleted, panel.passages[0].state), (Checked::SomeGone, 1, "deleted"));
+        assert_eq!(panel.passages[0].day, "2026-01-20", "the date is known from the pointer");
+        assert!(panel.passages[0].lines.is_empty() && panel.instruction.is_none());
+        let panel = rebuild(&rec, &|_| Now::NotHere, Wording::shipped());
+        assert_eq!((panel.checked, panel.not_here, panel.passages[0].state), (Checked::SomeGone, 1, "not-here"));
+        // The found message is here and a neighbor is not.
+        let panel = rebuild(&rec, &|p| if p.s == 3 { Now::NotHere } else { mill_now(p, None) }, Wording::shipped());
+        assert_eq!((panel.checked, panel.passages[0].state, panel.passages[0].lines.len()), (Checked::SomeGone, "shown", 2));
+        // Read again since, and one word no longer matches.
+        let panel = rebuild(&rec, &|p| mill_now(p, Some((2, "Then we go with Hartwell Mills. They deliver three times a week."))), Wording::shipped());
+        assert_eq!(panel.checked, Checked::Differs);
+        assert_eq!(panel.passages[0].lines[1].1, "Then we go with Hartwell Mills. They deliver three times a week.", "it is shown as it reads now");
+        // A record from before the block's fingerprint was kept.
+        let mut old = rec.clone();
+        old.block = String::new();
+        assert_eq!(rebuild(&old, &|p| mill_now(p, None), Wording::shipped()).checked, Checked::NoRecord);
+        assert_eq!(serde_json::to_value(Checked::SomeGone).unwrap(), "some-gone");
     }
 
     #[test]

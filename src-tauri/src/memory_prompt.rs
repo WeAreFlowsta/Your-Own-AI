@@ -574,8 +574,10 @@ async fn found_beside(
     let room = input.room_tokens.map(|t| t as usize * 3);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
-    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string() });
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string(), partial_percent: partial });
     rec.exchanges = b.given;
+    rec.lines = b.lines;
+    rec.block = mb::fingerprint(&b.text);
     rec.masked = hidden;
     (Some(b.text), Some(rec), b.texts)
 }
