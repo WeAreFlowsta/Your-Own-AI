@@ -192,7 +192,20 @@ pub async fn memory_rule_heard(app: tauri::AppHandle, input: HeardInput) -> Resu
         return Ok(HeardAnswer { why: "not_measured", ..Default::default() });
     }
     let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()?;
-    let Some(vec) = crate::inference_memory::embed_question(&app, &text).await else {
+    // The turn does not wait for this, so it can wait for the part that
+    // measures text: just after launch that part may still be starting.
+    let mut vec = None;
+    for attempt in 0..4 {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+        }
+        vec = crate::inference_memory::embed_question(&app, &text).await;
+        if vec.is_some() {
+            break;
+        }
+    }
+    let Some(vec) = vec else {
+        log::info!("[rules] an instruction could not be measured; nothing noted");
         return Ok(HeardAnswer { why: "not_measured", ..Default::default() });
     };
     let rows = crate::memory_rows::read_cache(&app, &key, crate::memory_items::SCOPE);
@@ -207,6 +220,7 @@ pub async fn memory_rule_heard(app: tauri::AppHandle, input: HeardInput) -> Resu
             let _ = crate::memory_rows::save_and_cache(&app, gone).await;
         }
     }
+    log::info!("[rules] an instruction heard: {}, nearest before {}", match &verdict { Verdict::First => "first time", Verdict::Offer { .. } => "given before, offered", Verdict::Answered => "an offer was answered before", Verdict::IsARule => "a rule already" }, near.map_or("none".to_string(), |n| format!("{n:.3}")));
     Ok(match verdict {
         Verdict::First => HeardAnswer { why: "first", closest: near, ..Default::default() },
         Verdict::Offer { earlier } => HeardAnswer { offer: true, earlier: Some(earlier), why: "offer", closest: near },

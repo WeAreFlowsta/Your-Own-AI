@@ -243,7 +243,7 @@ describe("projects: the agent in a project", () => {
     console.log(`e2e: reply "${reply.text.slice(0, 200)}"`);
     await shot("projects-agent-reply");
     // What the session's last call carried: is the rule in it, and where.
-    const { request } = (await (await fetch("http://127.0.0.1:11435/internal/last-chat-request")).json()) as { request: { messages?: { role: string; content: unknown }[] } | null };
+    const { agent: request } = (await (await fetch("http://127.0.0.1:11435/internal/last-chat-request")).json()) as { agent: { messages?: { role: string; content: unknown }[] } | null };
     const text = (c: unknown) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p: { text?: string }) => p.text ?? "").join("\n") : "");
     const shape = (request?.messages ?? []).map((m) => `${m.role}:${text(m.content).length}${text(m.content).includes(DEPLOY) ? "*" : ""}`);
     console.log(`e2e: the session's last call (role:characters, * holds the rule): ${shape.join(" ")}`);

@@ -1183,7 +1183,7 @@ async fn last_chat_request_dev() -> Response {
     if !cfg!(debug_assertions) {
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
-    Json(json!({ "request": crate::llm::last_chat_request() })).into_response()
+    Json(json!({ "request": crate::llm::last_chat_request(), "agent": crate::llm::last_agent_request() })).into_response()
 }
 
 /// Dev builds only: conversations whose chain record was written at or
@@ -1970,6 +1970,9 @@ async fn chat_completions(
     // Some chat templates (Mistral/Ministral) accept only ONE system message —
     // coalesce any system messages into a single leading one (order-preserving).
     body["messages"] = Value::Array(fold_same_roles(coalesce_system(messages)));
+    if agent_mode && own_harness && !crate::memory_session::is_helper_call(&model) {
+        crate::llm::note_agent_request(&body);
+    }
     // A model without a projector must not receive image parts: llama-server
     // refuses the whole request ("image input is not supported") and the
     // agent's turn dies with it. Replace each image with a note the model can

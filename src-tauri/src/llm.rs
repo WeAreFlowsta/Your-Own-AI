@@ -6531,6 +6531,20 @@ pub(crate) fn last_chat_request() -> Option<serde_json::Value> {
     LAST_CHAT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+static LAST_AGENT_REQUEST: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// The last call of the app's own session as it left for the model (dev
+/// builds only keep it), so a test can read what a session's step carried.
+pub(crate) fn note_agent_request(body: &serde_json::Value) {
+    if cfg!(debug_assertions) {
+        *LAST_AGENT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(body.clone());
+    }
+}
+
+pub(crate) fn last_agent_request() -> Option<serde_json::Value> {
+    LAST_AGENT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// One chat turn on the loaded local model, not streamed, with the settings
 /// an ordinary chat turn uses (no thinking, the chat sampling, the chat
 /// stops). Answers with the request as sent and the model's message. For
