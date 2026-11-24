@@ -1001,19 +1001,6 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     window.addEventListener(KEPT_EVENT, onKept);
     cleanup(() => window.removeEventListener(KEPT_EVENT, onKept));
   });
-  const rememberOwn = $(async () => {
-    if (captureState.value === 'saving') return;
-    captureState.value = 'saving';
-    const { keepMessage, keepError } = await import('../utils/memoryKeep');
-    try {
-      keptOwn.value = await keepMessage({ aiId: props.turnAiId ?? '', role: 'user', text: props.message.content, seq: props.message.sequence });
-      captureState.value = 'saved-note';
-    } catch (e) {
-      keepFailed.value = keepError(e);
-      captureState.value = 'error';
-      setTimeout(() => (captureState.value = ''), 4000);
-    }
-  });
   const finalText = useSignal('');
   const displayedLineCount = useSignal(0);
   const thinkingPreviewRef = useSignal<HTMLDivElement>();
@@ -1433,9 +1420,9 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           <span class="whitespace-pre-wrap">{props.message.content}</span>
         </div>
       </div>
-      {/* One line, never a modal: the offer for an instruction, a quiet
-          Remember for anything else; gone once answered. */}
-      {props.message.content && captureState.value !== 'dismissed' && (
+      {/* One line, never a modal: the offer for an instruction, or what was
+          kept when the person said "remember that"; gone once answered. */}
+      {props.message.content && captureState.value !== 'dismissed' && (captureState.value || offeredRule.value) && (
         <div class="mt-1 pr-1 text-[11px] text-[var(--text-muted)] flex items-center gap-2" data-testid="own-message-capture">
           {captureState.value === 'saved-rule' ? (
             <span data-testid="rule-kept" data-for={ruleFor.value}>{ruleKeptWords(ruleFor.value, props.turnAiName || '')}</span>
@@ -1463,11 +1450,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
                 No
               </button>
             </>
-          ) : (
-            <button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[var(--text-primary)] transition-opacity" title="Keep this exchange in memory, for your AIs to use later" onClick$={rememberOwn} disabled={captureState.value === 'saving'} data-testid="remember-own">
-              Remember
-            </button>
-          )}
+          ) : null}
         </div>
       )}
       </div>

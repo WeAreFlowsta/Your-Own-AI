@@ -57,20 +57,22 @@ describe("Remember keeps the exchange", () => {
     await shot("remember-already-kept");
   });
 
-  it("on the person's own message, and Undo takes it back", async () => {
+  it("Remember on a later reply keeps that exchange, and Undo takes it back", async () => {
     await ask("The oven service is booked for the first Monday of each month. Reply with one short sentence.");
     await waitForReplyDone();
-    await press(await within("user", "remember-own"));
-    const line = await within("user", "kept-line");
+    // The person's own message carries no Remember of its own: the one under
+    // the reply keeps the exchange, their words and the answer together.
+    expect(await (await $('[data-testid="remember-own"]')).isExisting()).toBe(false);
+    await press(await within("assistant", "remember-reply"));
+    const line = await within("assistant", "kept-line");
     await line.waitForExist({ timeout: 60_000 });
     expect(await textOf(line)).toContain("Kept.");
     const kept = await current();
     expect(kept.length).toBe(2);
     expect(kept.some((i) => i.text.includes("oven service"))).toBe(true);
-    await shot("remember-own-message");
-    await press(await within("user", "kept-undo"));
+    await shot("remember-later-reply");
+    await press(await within("assistant", "kept-undo"));
     await browser.waitUntil(async () => (await current()).length === 1, { timeout: 60_000, timeoutMsg: "Undo did not take the item back" });
-    await (await within("user", "kept-line")).waitForExist({ reverse: true, timeout: 20_000 });
   });
 
   it("on selected words: the selection is the item's words", async () => {
