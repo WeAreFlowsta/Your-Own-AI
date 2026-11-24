@@ -13,11 +13,11 @@ const warmed = new Set<string>();
 export async function warmSystemPrompt(ai: SelectedAiModel, model: string | null): Promise<void> {
   if (!model || model.startsWith("online:") || model.startsWith("external:")) return;
   try {
-    const [{ buildSystemPrompt }, { loadMemoryBlock }] = await Promise.all([
+    const [{ buildSystemPrompt }, { memoryForTurn }] = await Promise.all([
       import("../hooks/useChat"),
       import("../utils/memory"),
     ]);
-    const memory = await loadMemoryBlock("", { aiId: ai.id, foundingKey: ai.aiConfig.foundingKey ?? ai.aiConfig.agentPubKey ?? null, conversationHash: null, queryVec: Promise.resolve(null) }).catch(() => "");
+    const memory = await memoryForTurn("", { aiId: ai.id, foundingKey: ai.aiConfig.foundingKey ?? ai.aiConfig.agentPubKey ?? null, conversationHash: null, queryVec: Promise.resolve(null) }).then((m) => m.systemPart).catch(() => "");
     const disposition = ai.aiConfig.lengthDisposition || "conversational";
     const system = buildSystemPrompt(ai, disposition, ai.aiConfig.defaultMode || "chat", memory, false);
     const key = `${model}|${ai.id}|${system.length}`;

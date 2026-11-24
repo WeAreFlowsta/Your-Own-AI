@@ -448,11 +448,28 @@ fn build_persona_prompt(ai: &ResolvedAi, user_memory: &str) -> String {
 
 // ── handlers ────────────────────────────────────────────────────────────────
 
+/// The memory part of a turn through this port, for an AI.
+async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_prompt::Surface, project: Option<String>, query: &str) -> String {
+    let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
+    crate::memory_prompt::for_turn(app, crate::memory_prompt::TurnInput {
+        ai_id: Some(ai.id.clone()),
+        founding_key: founding,
+        surface,
+        project,
+        conversation: None,
+        question: query.to_string(),
+        question_vector: None,
+        embed_here: true,
+    })
+    .await
+    .system_part
+}
+
 /// Persona mode's messages: this server owns the system prompt (the persona,
-/// with the memory block in its slot), followed by the caller's messages.
+/// with the memory part in its slot), followed by the caller's messages.
 async fn persona_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], query: &str, with_memory: bool) -> Vec<Value> {
     let user_memory = if with_memory {
-        crate::inference_memory::build_memory_block(app, query, &ai.id, None).await
+        turn_memory(app, ai, crate::memory_prompt::Surface::ApiPersona, None, query).await
     } else {
         MEMORY_OFF_LINE.to_string()
     };
@@ -460,6 +477,108 @@ async fn persona_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], 
     let mut msgs = vec![json!({ "role": "system", "content": persona })];
     msgs.extend(incoming.iter().cloned());
     msgs
+}
+
+/// The project a call from the app's own session helper is in: the open
+/// folder's identity. A tools session, and any other caller, has none.
+async fn session_project(app: &AppHandle, own_harness: bool) -> Option<String> {
+    if !own_harness {
+        return None;
+    }
+    let bridge = app.state::<crate::agent_bridge::AgentBridgeState>();
+    if bridge.is_tools_session().await {
+        return None;
+    }
+    let folder = bridge.open_folder().await?;
+    // Asked on every step of a session: the folder's identity is worked
+    // out once per folder.
+    static KNOWN: std::sync::Mutex<Option<(String, String)>> = std::sync::Mutex::new(None);
+    if let Some((f, id)) = KNOWN.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if *f == folder {
+            return Some(id.clone()).filter(|p| !p.is_empty());
+        }
+    }
+    let id = crate::project_identity::project_identity_for(folder.clone());
+    *KNOWN.lock().unwrap_or_else(|e| e.into_inner()) = Some((folder, id.clone()));
+    Some(id).filter(|p| !p.is_empty())
+}
+
+/// Who an agent-mode call is from, as far as memory needs to know.
+enum AgentCaller {
+    /// The app's own session helper: the open folder says which project.
+    OwnSession,
+    /// Any other program on the port: no project.
+    Other,
+    /// A stated project (dev builds measure with it).
+    #[allow(dead_code)]
+    InProject(Option<String>),
+}
+
+impl From<bool> for AgentCaller {
+    fn from(own_harness: bool) -> Self {
+        if own_harness { AgentCaller::OwnSession } else { AgentCaller::Other }
+    }
+}
+
+/// Agent mode's memory: the caller owns the system prompt, and memory rides
+/// in one supplementary system message placed after it. An agent calls once
+/// per step, so the part is kept briefly per AI, project and rules.
+async fn agent_memory_message(app: &AppHandle, ai: &ResolvedAi, caller: AgentCaller, query: &str) -> Option<Value> {
+    static KEPT: crate::memory_prompt::KeptPart = crate::memory_prompt::KeptPart::new(120);
+    let tools = app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await;
+    let (surface, project) = match caller {
+        AgentCaller::OwnSession if tools => (crate::memory_prompt::Surface::ToolsSession, None),
+        AgentCaller::OwnSession => (crate::memory_prompt::Surface::Session, session_project(app, true).await),
+        AgentCaller::Other => (crate::memory_prompt::Surface::ApiAgent, None),
+        AgentCaller::InProject(p) => (crate::memory_prompt::Surface::Session, p),
+    };
+    let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
+    let key = crate::memory_prompt::KeptPart::key(&ai.id, project.as_deref(), &crate::memory_prompt::rules_revision(app, founding.as_deref(), project.as_deref()));
+    let part = match KEPT.get(&key) {
+        Some(part) => part,
+        None => {
+            let part = turn_memory(app, ai, surface, project, query).await;
+            KEPT.put(&key, &part);
+            part
+        }
+    };
+    (!part.trim().is_empty()).then(|| agent_memory_system_message(&part))
+}
+
+/// Agent mode's messages: the caller's own, with their system prompt first
+/// and authoritative, then the app's notes for this kind of session and
+/// memory's system message, unless the caller switched memory off.
+async fn agent_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], query: &str, with_memory: bool, caller: AgentCaller) -> Vec<Value> {
+    let mut msgs = incoming.to_vec();
+    let after_their_system = |msgs: &[Value]| usize::from(msgs.first().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("system"));
+    // A tools session is an ordinary chat with a few tools available,
+    // not a project: the trimmed baseline keeps the model from
+    // exploring the scratch workspace or planning like a coding agent
+    // for a plain question ("why is the sky blue" read the projects
+    // directory when Blender was carried - beta.11 field report).
+    if app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await {
+        let note = json!({
+            "role": "system",
+            "content": "This is an ordinary conversation in which a few tools happen to be available. Answer questions directly, in your own voice, as you would without tools. Do not explore, list or read the workspace, and do not plan or narrate steps, unless a tool is genuinely needed for what was asked.",
+        });
+        let pos = after_their_system(&msgs);
+        msgs.insert(pos, note);
+    }
+    if with_memory {
+        if let Some(ctx) = agent_memory_message(app, ai, caller, query).await {
+            let pos = after_their_system(&msgs);
+            msgs.insert(pos, ctx);
+        }
+    }
+    with_agent_floor(msgs)
+}
+
+/// The supplementary system message that carries memory in agent mode.
+fn agent_memory_system_message(part: &str) -> Value {
+    json!({
+        "role": "system",
+        "content": format!("Context about the person you're assisting (use naturally where relevant; do not recite this):\n{part}"),
+    })
 }
 
 /// The memory task a call names in `X-Your-Own-AI-Task`, when it names one
@@ -754,7 +873,7 @@ async fn memory_search_dev(
         Ok(a) => json!(a),
         Err(e) => json!({ "error": e }),
     };
-    let block = crate::inference_memory::build_memory_block(&app, &question, &ai.id, None).await;
+    let block = turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await;
     Json(json!({ "ai": ai.name, "question": question, "keyword": keyword, "block": block })).into_response()
 }
 
@@ -770,7 +889,9 @@ fn memory_turn_of(app: &AppHandle, body: &Value) -> Result<(ResolvedAi, String, 
 
 /// Dev builds only: the exact messages a turn through this port would send
 /// for a question, with no model call. Body: `{"ai", "question", "messages"?,
-/// "memory"?: false}`.
+/// "memory"?: false}`. With `"surface": "chat"` (and `"conversation"`, the
+/// open one) it answers with what memory gives a turn typed into the chat
+/// page, whose persona text the page writes.
 async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
     if !cfg!(debug_assertions) {
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
@@ -779,7 +900,29 @@ async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Valu
         Ok(t) => t,
         Err(e) => return Json(json!({ "error": e })).into_response(),
     };
+    if body["surface"].as_str() == Some("chat") {
+        let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(&app, &ai.agent_pub_key));
+        let memory = crate::memory_prompt::for_turn(&app, crate::memory_prompt::TurnInput {
+            ai_id: Some(ai.id.clone()),
+            founding_key: founding,
+            surface: crate::memory_prompt::Surface::Chat,
+            project: None,
+            conversation: body["conversation"].as_str().map(str::to_string),
+            question,
+            question_vector: None,
+            embed_here: true,
+        })
+        .await;
+        return Json(json!({ "ai": ai.name, "path": "chat", "memory": memory })).into_response();
+    }
     let with_memory = body["memory"].as_bool().unwrap_or(true);
+    // `"mode": "agent"`: what an agent's call would be sent as, the caller's
+    // own system prompt first; `"project"` names the project it is in.
+    if body["mode"].as_str() == Some("agent") {
+        let caller = AgentCaller::InProject(body["project"].as_str().map(str::to_string));
+        let messages = fold_same_roles(coalesce_system(agent_messages(&app, &ai, &incoming, &question, with_memory, caller).await));
+        return Json(json!({ "ai": ai.name, "path": "port-agent", "messages": messages })).into_response();
+    }
     let messages = fold_same_roles(coalesce_system(persona_messages(&app, &ai, &incoming, &question, with_memory).await));
     Json(json!({ "ai": ai.name, "path": "port", "messages": messages })).into_response()
 }
@@ -1580,68 +1723,7 @@ async fn chat_completions(
     let record_exchange = record_exchange && !own_harness;
 
     let messages = if agent_mode {
-        // Caller owns the system prompt (no persona). Memory is injected as a
-        // bounded supplementary system message AFTER the caller's own system
-        // prompt (so theirs stays authoritative), unless opted out.
-        let mut msgs = incoming.clone();
-        // A tools session is an ordinary chat with a few tools available,
-        // not a project: the trimmed baseline keeps the model from
-        // exploring the scratch workspace or planning like a coding agent
-        // for a plain question ("why is the sky blue" read the projects
-        // directory when Blender was carried - beta.11 field report). The
-        // caller's own system prompt stays first and authoritative.
-        if app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await {
-            let note = json!({
-                "role": "system",
-                "content": "This is an ordinary conversation in which a few tools happen to be available. Answer questions directly, in your own voice, as you would without tools. Do not explore, list or read the workspace, and do not plan or narrate steps, unless a tool is genuinely needed for what was asked.",
-            });
-            let pos = usize::from(
-                msgs.first().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("system"),
-            );
-            msgs.insert(pos, note);
-        }
-        if with_memory {
-            // Agent sessions call per STEP; the user-memory block barely
-            // changes within one, but rebuilding it costs a CPU embedding
-            // query every time (measured ~0.7s/step on modest hardware).
-            // Cache per AI briefly - identical injection, one rebuild per
-            // couple of minutes instead of per step.
-            let user_memory = {
-                use std::sync::Mutex;
-                use std::time::{Duration, Instant};
-                static AGENT_MEM_CACHE: Mutex<Option<(String, String, Instant)>> = Mutex::new(None);
-                let cached = AGENT_MEM_CACHE
-                    .lock()
-                    .unwrap()
-                    .as_ref()
-                    .filter(|(id, _, at)| *id == ai.id && at.elapsed() < Duration::from_secs(120))
-                    .map(|(_, block, _)| block.clone());
-                match cached {
-                    Some(block) => block,
-                    None => {
-                        let block =
-                            crate::inference_memory::build_memory_block(&app, &query, &ai.id, None)
-                                .await;
-                        *AGENT_MEM_CACHE.lock().unwrap() =
-                            Some((ai.id.clone(), block.clone(), Instant::now()));
-                        block
-                    }
-                }
-            };
-            if !user_memory.trim().is_empty() {
-                let ctx = json!({
-                    "role": "system",
-                    "content": format!(
-                        "Context about the person you're assisting (use naturally where relevant; do not recite this):\n{user_memory}"
-                    ),
-                });
-                let pos = usize::from(
-                    msgs.first().and_then(|m| m.get("role")).and_then(Value::as_str) == Some("system"),
-                );
-                msgs.insert(pos, ctx);
-            }
-        }
-        with_agent_floor(msgs)
+        agent_messages(&app, &ai, &incoming, &query, with_memory, AgentCaller::from(own_harness)).await
     } else {
         persona_messages(&app, &ai, &incoming, &query, with_memory).await
     };

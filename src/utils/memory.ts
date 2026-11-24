@@ -9,36 +9,20 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   embedDocuments,
-  embedQuery,
-  cosineSimilarity,
   isEmbeddingModelReady,
 } from "./embeddings";
-import { recallPerAi } from "./transcriptMemory";
-import { listMemoryRows, listMemoryRowsCached, personScope, aiScope, type MemoryRow } from "./memoryRows";
+import { embedBareKnowledge } from "./transcriptMemory";
 
-/** Layer 1 of memory (the memory design §4): the person's rules, commands
- *  and locations for the scopes in play - the person's words verbatim,
- *  first, re-stated on every turn, never summarised. Read from the local
- *  per-scope cache (instant); the cache is refreshed in the background so
- *  a rule saved on another device lands within a turn or two. */
-const rulesRefreshedAt = new Map<string, number>();
-
-/** What the last memory block carried - the rail line under a reply reads
- *  it ("Memory: 3 rules, 12 facts"). Set by `loadMemoryBlock`. */
-export interface MemorySummary {
+/** What a turn's memory carried - the rail line under a reply reads it
+ *  ("Memory: 3 rules, 12 facts"). */
+export interface MemoryCounts {
   rules: number;
   commands: number;
   locations: number;
   facts: number;
-  at: number;
-}
-let lastSummary: MemorySummary | null = null;
-export function lastMemorySummary(): MemorySummary | null {
-  return lastSummary;
 }
 /** One short line for the rail, or null when nothing was loaded. */
-export function memoryLine(): string | null {
-  const s = lastSummary;
+export function memoryLine(s: MemoryCounts | null | undefined): string | null {
   if (!s) return null;
   const parts: string[] = [];
   const n = (k: number, w: string) => (k > 0 ? parts.push(`${k} ${w}${k === 1 ? "" : "s"}`) : 0);
@@ -95,42 +79,6 @@ export function normalizeRuleText(text: string): string {
 /** The always-loaded facts block is capped by BYTES, not lines (the
  *  survey's 2-3 KB figure): about 25 short rows. */
 export const MEMORY_FACTS_BUDGET_BYTES = 2048;
-
-export async function loadRulesLayer(scopes: string[]): Promise<string> {
-  return (await loadRulesLayerCounted(scopes)).text;
-}
-export async function loadRulesLayerCounted(scopes: string[]): Promise<{ text: string; rules: number; commands: number; locations: number }> {
-  const rows: MemoryRow[] = [];
-  for (const scope of scopes) {
-    try {
-      rows.push(...(await listMemoryRowsCached(scope)));
-    } catch { /* older backend */ }
-    const last = rulesRefreshedAt.get(scope) ?? 0;
-    if (Date.now() - last > 60_000) {
-      rulesRefreshedAt.set(scope, Date.now());
-      void listMemoryRows(scope).catch(() => undefined);
-    }
-  }
-  const rules = rows.filter((r) => r.kind === "rule");
-  const commands = rows.filter((r) => r.kind === "command");
-  const locations = rows.filter((r) => r.kind === "location");
-  const counts = { rules: rules.length, commands: commands.length, locations: locations.length };
-  if (rules.length === 0 && commands.length === 0 && locations.length === 0) return { text: "", ...counts };
-  const lines: string[] = [];
-  if (rules.length) {
-    lines.push("Rules from them, in their words - follow them in every answer:");
-    for (const r of rules) lines.push(`- ${r.text}`);
-  }
-  if (commands.length) {
-    lines.push("Commands they use here:");
-    for (const r of commands) lines.push(`- ${r.text}`);
-  }
-  if (locations.length) {
-    lines.push("Where things are:");
-    for (const r of locations) lines.push(`- ${r.text}`);
-  }
-  return { text: lines.join("\n"), ...counts };
-}
 
 export interface Fact {
   id: string;
@@ -380,13 +328,23 @@ export function isSingleValuedPredicate(predicate: string): boolean {
   return isNamePredicate(predicate) || SINGLE_VALUED.has(norm(predicate));
 }
 
+/** What memory adds to one turn (built in the backend, `memory_prompt`,
+ *  the one place that turns memory into prompt text for every path). */
+export interface TurnMemory {
+  /** Fills the `{{userNameInfo}}` slot of the system prompt. */
+  systemPart: string;
+  beforeQuestion: string | null;
+  afterQuestion: string | null;
+  counts: MemoryCounts;
+  bareNotes: boolean;
+  bareKnowledge: boolean;
+}
+
 /**
- * Format the active profile into the `{{userNameInfo}}` slot of the system
- * prompt (which sits in the prompt's "User Information" block). Name-aware,
- * ranked by confidence then recency, budgeted. With no facts it returns the
- * original name-unknown line, so behaviour is unchanged until memory exists.
+ * The memory of a turn through the chat page. `query` is what the person
+ * asked (absent or empty: nothing is retrieved, as for the warm-up).
  */
-export async function loadMemoryBlock(
+export async function memoryForTurn(
   query?: string,
   opts?: {
     aiId?: string;
@@ -394,138 +352,37 @@ export async function loadMemoryBlock(
     foundingKey?: string | null;
     conversationHash?: string | null;
     /** A shared embedding of `query` (the send path embeds the turn once and
-     *  hands it to both the router and this retrieval). Absent = embed here. */
+     *  hands it to both the router and this retrieval). Absent = embedded
+     *  where the memory is built. */
     queryVec?: Promise<number[] | null> | number[] | null;
-    /** Document passages to pull from the library: 8 for an online model,
-     *  fewer for a small local window (the reading-room check counts them). */
-    docPassages?: number;
   },
-): Promise<string> {
-  const all = (await getFacts()).filter(
-    (f) => f.valid_to == null || f.valid_to === undefined,
-  );
-  if (all.some((f) => f.entry_kind === "note" && !(f.embedding && f.embedding.length))) {
-    void embedBareNotes(); // for the next turn; this one goes on
-  }
-
-  // Always-injected = facts only. Notes are free-text and retrieved on
-  // relevance (below); the synthesis paragraph injects separately.
-  const ranked = all
-    .filter((f) => f.entry_kind !== "note" && f.entry_kind !== "synthesis" && f.entry_kind !== "library")
-    .sort((a, b) => b.confidence - a.confidence || b.updated_at - a.updated_at);
-  // By bytes: the strongest facts until the block would pass the budget.
-  const factItems: Fact[] = [];
-  let bytes = 0;
-  for (const f of ranked) {
-    const line = `- ${f.predicate.replace(/_/g, " ")}: ${f.value}\n`.length;
-    if (factItems.length > 0 && bytes + line > MEMORY_FACTS_BUDGET_BYTES) break;
-    factItems.push(f);
-    bytes += line;
-  }
-  const synthesis = all.find((f) => f.entry_kind === "synthesis");
-
-  const name = factItems.find((f) => isNamePredicate(f.predicate));
-  const others = factItems.filter((f) => f !== name);
-
-  const nameLine = name
-    ? `Their name is ${name.value}.`
-    : "Their name is unknown. Do not assume or allude to it.";
-
-  // Layer 1 first: the person's rules for the person and this AI.
-  const layer1 = await loadRulesLayerCounted(
-    opts?.foundingKey ? [personScope, aiScope(opts.foundingKey)] : [personScope],
-  ).catch(() => ({ text: "", rules: 0, commands: 0, locations: 0 }));
-  lastSummary = { rules: layer1.rules, commands: layer1.commands, locations: layer1.locations, facts: others.length, at: Date.now() };
-  let block = layer1.text ? `${layer1.text}\n${nameLine}` : nameLine;
-  // The consolidated portrait first (the 2026 lesson: a coherent summary
-  // outperforms a bare fact list), the ground-truth facts after it.
-  if (synthesis) {
-    block += `\nAbout them, from what they've shared over time (use naturally; never recite): ${synthesis.value}`;
-  }
-  const library = all.find((f) => f.entry_kind === "library");
-  if (library) {
-    block += `\nFrom the documents they write and keep in their library (use naturally; never recite): ${library.value}`;
-  }
-  if (others.length > 0) {
-    // Include the relation so a bare value isn't ambiguous to the model
-    // ("- Melbourne" vs "- lives in: Melbourne").
-    const facts = others
-      .map((f) => `- ${f.predicate.replace(/_/g, " ")}: ${f.value}`)
-      .join("\n");
-    block += `\nThings you've learned about them from past conversations (use naturally where relevant; do not recite this list or claim certainty):\n${facts}`;
-  }
-
-  // Retrieval: saved notes (user-level) + this AI's relevant past
-  // conversations (per-AI), both scored against THIS turn. The query is
-  // embedded ONCE and reused for both. Skips entirely (Phase-A behaviour)
-  // without a query or the embedding model.
-  if (query && query.trim()) {
-    try {
-      const notes = all.filter(
-        (f) => f.entry_kind === "note" && f.embedding && f.embedding.length > 0,
-      );
-      const wantPerAi = !!opts?.aiId;
-      if ((notes.length > 0 || wantPerAi) && (await isEmbeddingModelReady())) {
-        // Bound on the query embedding so a cold/slow/stuck embed server can
-        // never hang the reply (first call after launch may lose the race; fine).
-        const qvec = await Promise.race([
-          opts?.queryVec !== undefined
-            ? Promise.resolve(opts.queryVec)
-            : embedQuery(query),
+): Promise<TurnMemory> {
+  // Bound on the query embedding so a cold/slow/stuck embed server can
+  // never hang the reply (first call after launch may lose the race; fine).
+  const vec =
+    opts?.queryVec === undefined
+      ? null
+      : await Promise.race([
+          Promise.resolve(opts.queryVec).catch(() => null),
           new Promise<null>((r) => setTimeout(() => r(null), 8000)),
         ]);
-        if (qvec) {
-          // Relevant saved notes (shared across all AIs).
-          if (notes.length > 0) {
-            const relevant = notes
-              .map((n) => ({ n, score: cosineSimilarity(qvec, n.embedding as number[]) }))
-              .filter((x) => x.score >= NOTE_RELEVANCE_THRESHOLD)
-              .sort((a, b) => b.score - a.score)
-              .slice(0, MAX_RETRIEVED_NOTES);
-            if (relevant.length > 0) {
-              const noteLines = relevant.map((x) => `- ${x.n.value}`).join("\n");
-              block += `\nRelevant notes they've saved (use naturally if helpful):\n${noteLines}`;
-            }
-          }
-          // This AI's own relevant memory: authored knowledge (packs/lore the
-          // user gave it) + past conversation turns (excluding the current one).
-          if (wantPerAi) {
-            const { episodic, authored } = await recallPerAi(
-              opts!.aiId!,
-              qvec,
-              opts?.conversationHash ?? undefined,
-            );
-            if (authored.length > 0) {
-              const lines = authored.map((t) => `- ${t}`).join("\n");
-              block += `\nKnowledge this AI has been given (use if relevant):\n${lines}`;
-            }
-            // Documents from the library ride next to the question on the
-            // wire instead (loadDocumentContext) - sized to the model's window.
-            if (episodic.length > 0) {
-              const lines = episodic.map((t) => `- ${t}`).join("\n");
-              block += `\nFrom earlier conversations with this person (use naturally if relevant):\n${lines}`;
-            }
-          }
-        }
-      }
-    } catch (e) {
-      console.warn("[Memory] Retrieval failed (skipped):", e);
-    }
-  }
-
-  return block;
+  const memory = await invokeWhenReady<TurnMemory>("memory_for_turn", {
+    input: {
+      aiId: opts?.aiId ?? null,
+      foundingKey: opts?.foundingKey ?? null,
+      surface: "chat",
+      conversation: opts?.conversationHash ?? null,
+      question: query ?? "",
+      questionVector: vec,
+      embedHere: opts?.queryVec === undefined,
+    },
+  });
+  // Notes and knowledge that arrived without a vector: embedded for the
+  // next turn; this one goes on.
+  if (memory.bareNotes) void embedBareNotes();
+  if (memory.bareKnowledge && opts?.aiId) void embedBareKnowledge(opts.aiId);
+  return memory;
 }
-
-/** Cosine floor for a note to count as relevant. Calibrated for bge-small-en-v1.5
- *  against a real note (2026-06-21): unrelated queries score ≤0.431, a clean
- *  match 0.662, but a typo'd ("trianing") or vaguely-phrased ("any tips for me?")
- *  match lands 0.475–0.493 — just above the unrelated ceiling. 0.45 sits in that
- *  gap: it keeps fuzzy/typo'd real queries while still rejecting unrelated ones.
- *  Bias is toward recall (a stray note is injected as "use if helpful" and
- *  ignored; a miss reads as broken). Revisit if the model changes. */
-const NOTE_RELEVANCE_THRESHOLD = 0.25; // EmbeddingGemma scale (2026-10-12 matrix); bge sat at 0.45
-/** Cap retrieved notes per turn, to bound prompt growth. */
-const MAX_RETRIEVED_NOTES = 3;
 
 const PAUSED_KEY = "yoai-memory-paused";
 

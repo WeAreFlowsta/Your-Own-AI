@@ -407,7 +407,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** The project's AGENTS.md text, read at session start (empty when none). */
   const agentsMd = useSignal("");
   /** The project's memory rows as layer-1 text (rules/commands/locations). */
-  const projectRules = useSignal("");
   /** The open project's id (`project_identity_for`), empty until known. */
   const projectId = useSignal("");
   const memoryPending = useSignal(false);
@@ -845,11 +844,6 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // leads all of it: the person's own rules for working here.
       const block = memoryPromptBlock(workspaceMemory.value);
       if (block) wire = block + wire;
-      // Project rows stack over the AI's and the person's (loaded with the
-      // chat's own memory block): rules first, then commands and locations.
-      if (projectRules.value) {
-        wire = `For this project:\n${projectRules.value}\n\n` + wire;
-      }
       // AGENTS.md itself is read by the harness (repo root down to the
       // working folder, deeper files first, CLAUDE.md and rules folders too)
       // and put at the start of its context; the app's own copy only feeds
@@ -1664,16 +1658,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // rules file and not a manual.
         agentsMd.value = "";
         state.rulesFile = null;
-        projectRules.value = "";
         // The project's own memory rows (rules, commands, locations) by its
         // id - the same project on every machine (the memory design §13.1).
         projectId.value = "";
         invoke<string>("project_identity_for", { folder })
           .then(async (pid) => {
             projectId.value = pid;
-            const { loadRulesLayer } = await import("../utils/memory");
-            const { projectScope } = await import("../utils/memoryRows");
-            projectRules.value = await loadRulesLayer([projectScope(pid)]);
           })
           .catch(() => { /* older backend */ });
         invoke<{ content?: string }>("read_file_for_context", { filePath: `${folder.replace(/[\\/]+$/, "")}/AGENTS.md` })

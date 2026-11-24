@@ -12,7 +12,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import {
   embedDocuments,
-  cosineSimilarity,
   isEmbeddingModelReady,
 } from "./embeddings";
 import { waitForCalm, machineDone } from "./machine";
@@ -75,18 +74,6 @@ export interface KnowledgeDocument {
 const MAX_PER_AI = 1000;
 /** Cap stored/injected text length, to bound both the store and the prompt. */
 const MAX_TEXT = 600;
-/** Absolute cosine floor. EmbeddingGemma (2026-10-12 matrix): right passages
- *  0.21-0.75, the best wrong one <= 0.32 - the floor only drops noise, the
- *  margin below does the separating. (bge-small sat at 0.45.) */
-const RECALL_THRESHOLD = 0.25;
-/** Relative margin: also drop any match much weaker than the BEST one. First-
- *  person turns ("my dog…", "I'm allergic…") cluster ~0.47–0.49, so without
- *  this a strong hit (0.69) drags in an unrelated second (0.47). Keeping only
- *  scores within this margin of the top removes that noise. (Pre-flight tested.) */
-const RECALL_MARGIN = 0.12;
-/** Max recalled turns injected per message. */
-const MAX_RECALL = 3;
-
 async function getEmb(aiId: string): Promise<TranscriptEmbedding[]> {
   try {
     return await invoke<TranscriptEmbedding[]>("get_transcript_embeddings", { aiId });
@@ -265,58 +252,6 @@ export async function indexTurn(input: {
   console.log(
     `[Memory] Indexed turn for AI ${aiId.slice(0, 8)} (${episodic.length} memories, ${authored.length} knowledge entries)`,
   );
-}
-
-/** Top relevant entries: absolute floor + a relative margin off the best match
- *  (drops weak seconds). Shared by episodic + authored recall. */
-function topMatches(
-  entries: TranscriptEmbedding[],
-  queryVec: number[],
-): TranscriptEmbedding[] {
-  const scored = entries
-    .map((e) => ({ e, score: cosineSimilarity(queryVec, e.vector) }))
-    .filter((x) => x.score >= RECALL_THRESHOLD)
-    .sort((a, b) => b.score - a.score);
-  if (scored.length === 0) return [];
-  const floor = Math.max(RECALL_THRESHOLD, scored[0].score - RECALL_MARGIN);
-  return scored
-    .filter((x) => x.score >= floor)
-    .slice(0, MAX_RECALL)
-    .map((x) => x.e);
-}
-
-/**
- * Recall relevant entries for this AI, split by kind: `episodic` (past
- * conversation turns, excluding the current one) and `authored` (knowledge the
- * user gave this AI — packs/lore). Each kind gets its own top-K so authored
- * knowledge isn't crowded out by chatter. Takes a pre-computed query vector.
- */
-export async function recallPerAi(
-  aiId: string,
-  queryVec: number[] | null,
-  excludeConversationHash?: string,
-): Promise<{ episodic: string[]; authored: string[] }> {
-  const empty = { episodic: [], authored: [] };
-  if (!aiId || !queryVec) return empty;
-  const all = await getEmb(aiId);
-  if (all.length === 0) return empty;
-
-  const episodicPool = all.filter(
-    (e) =>
-      e.kind !== "authored" &&
-      (!excludeConversationHash || e.conversation_hash !== excludeConversationHash),
-  );
-  // Knowledge that arrived from another device without a vector cannot
-  // match yet: embed it for the next turn and leave it out of this one.
-  if (all.some((e) => e.kind === "authored" && !e.source && !(e.vector && e.vector.length))) {
-    void embedBareKnowledge(aiId);
-  }
-  const authoredPool = all.filter((e) => e.kind === "authored" && e.vector && e.vector.length);
-
-  return {
-    episodic: topMatches(episodicPool, queryVec).map((e) => e.text),
-    authored: topMatches(authoredPool, queryVec).map((e) => e.text),
-  };
 }
 
 /** This AI's remembered conversation turns (most recent first) — Remembers tab. */

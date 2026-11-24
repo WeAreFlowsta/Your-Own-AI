@@ -18,6 +18,7 @@ mod model_hash;
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records
+mod memory_prompt;        // everything memory adds to a request, built in one place
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
@@ -868,6 +869,7 @@ pub fn run() {
             commands_holochain::purge_ai_app,
             commands_holochain::save_text_download,
             memory::get_memory_facts,
+            memory_prompt::memory_for_turn,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
