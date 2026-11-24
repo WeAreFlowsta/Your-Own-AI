@@ -26,6 +26,7 @@ mod memory_block;         // the search results placed ahead of the question: ex
 mod memory_quotes;        // the quote check, and which line shows under a reply
 mod memory_items;         // the memory item: what was kept, its state, who may use it, and the log of changes
 mod memory_tidy;          // tidying's rules: which pairs are judged, what a verdict changes, undo, the pause
+mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
