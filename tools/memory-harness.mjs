@@ -23,6 +23,11 @@
  *   node tools/memory-harness.mjs stores --out STORES.json [--facts FACTS.json] [--recall Name=INDEX.json,...]
  *       Joins a facts list and per-AI indexes of earlier turns into the
  *       stores file a dev build's /internal/memory-stores?do=seed takes.
+ *   node tools/memory-harness.mjs find --questions Q.md --history HISTORY.json --out FOUND.json [--wording W.json --field NAME] [--only N,...] [--near 2]
+ *       Asks a RUNNING DEV BUILD what memory finds for each question (no
+ *       chat model) and counts the questions whose answer's place is among
+ *       the first 3 and the first 12 messages found. A place is found when
+ *       a message of that conversation within `near` messages of it is.
  *
  * Env: YOAI_URL (default http://127.0.0.1:11435).
  *
@@ -260,6 +265,42 @@ export function askList(questions, { wording = null, field = "", only = null } =
     });
 }
 
+/** A date as the loader reads it: microseconds, or a date string. */
+function micros(when) {
+  if (typeof when === "number") return when;
+  const ms = Date.parse(when);
+  return Number.isNaN(ms) ? null : ms * 1000;
+}
+
+/** Where each question's answer is, as the index names places: the
+ *  conversation's start time and a range of sequences. */
+export function answerPlaces(questions, history) {
+  const starts = new Map(history.conversations.map((c) => [c.id, micros(c.started_at)]));
+  return new Map(
+    questions.map((q) => [
+      q.n,
+      q.where.map((w) => {
+        if (!starts.has(w.conversation)) throw new Error(`question ${q.n} names ${w.conversation}, which the history does not hold`);
+        return { started_at: starts.get(w.conversation), from: w.from, to: w.to };
+      }),
+    ]),
+  );
+}
+
+/** The rank (1 = first) at which a found message is at one of the places,
+ *  or null. `found` is in rank order: [{ started_at, seq }]. */
+export function rankOfPlace(found, places, near = 2) {
+  const i = found.findIndex((f) => places.some((p) => f.started_at === p.started_at && f.seq >= p.from - near && f.seq <= p.to + near));
+  return i < 0 ? null : i + 1;
+}
+
+/** How many answerable questions had their place in the first 3 and the
+ *  first 12 found. `ranks`: [{ n, rank }] for answerable questions. */
+export function findCounts(ranks) {
+  const within = (k) => ranks.filter((r) => r.rank !== null && r.rank <= k).length;
+  return { questions: ranks.length, first3: within(3), first12: within(12), missed: ranks.filter((r) => r.rank === null || r.rank > 12).map((r) => r.n) };
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const a = args(rest);
@@ -287,6 +328,37 @@ async function main() {
       process.exit(1);
     }
     console.log(`${body.conversations} conversation(s), ${body.messages} message(s) written; ${body.skipped} already there`);
+  } else if (command === "find") {
+    need(a, ["questions", "history", "out"]);
+    if (!outsideRepo(a.out)) {
+      console.error("the output file must be outside this repository");
+      process.exit(2);
+    }
+    const questions = parseQuestions(readFileSync(a.questions, "utf8"));
+    const asked = askList(questions, {
+      wording: typeof a.wording === "string" ? JSON.parse(readFileSync(a.wording, "utf8")) : null,
+      field: typeof a.field === "string" ? a.field : "",
+      only: typeof a.only === "string" ? a.only.split(",").map((n) => n.trim()).filter(Boolean) : null,
+    });
+    const places = answerPlaces(questions, JSON.parse(readFileSync(a.history, "utf8")));
+    const near = Number(a.near ?? 2);
+    const base = process.env.YOAI_URL || "http://127.0.0.1:11435";
+    const rows = [];
+    for (const { n, question } of asked) {
+      const res = await fetch(`${base}/internal/memory-search?${new URLSearchParams({ q: question, limit: "12" })}`);
+      const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+      if (!res.ok || body.error) {
+        console.error(`question ${n}: ${body.error?.message ?? body.error ?? res.status}`);
+        process.exit(1);
+      }
+      const trap = questions.find((q) => q.n === n).trap;
+      rows.push({ n, question, trap, rank: trap ? null : rankOfPlace(body.found, places.get(n), near), read: body.read, total: body.total, found: body.found });
+    }
+    const counts = findCounts(rows.filter((r) => !r.trap));
+    writeFileSync(a.out, JSON.stringify({ counts, rows }, null, 1));
+    const last = rows[rows.length - 1];
+    console.log(`${counts.first3} of ${counts.questions} in the first 3, ${counts.first12} in the first 12; missed: ${counts.missed.join(", ") || "none"}`);
+    console.log(`the index had read ${last?.read ?? 0} of ${last?.total ?? 0} messages; details in ${a.out}`);
   } else if (command === "ask-list") {
     need(a, ["questions", "out"]);
     if (!outsideRepo(a.out)) {
@@ -337,7 +409,7 @@ async function main() {
       for (const [setup, c] of Object.entries(group)) console.log(`  ${setup.padEnd(20)} ${line(c)}`);
     }
   } else {
-    console.error("usage: memory-harness.mjs sheets|count|convert|load|ask-list|stores ... (see the top of this file)");
+    console.error("usage: memory-harness.mjs sheets|count|convert|load|ask-list|stores|find ... (see the top of this file)");
     process.exit(2);
   }
 }

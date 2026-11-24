@@ -711,6 +711,10 @@ pub async fn record_transcript_entry(
     crate::conversation_cache::touch(&app, &conversation_hash, at);
     // Search sees the turn now, without a rebuild.
     crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at);
+    // Memory's index reads it on its next pass, which this starts.
+    if !is_memory_write {
+        crate::memory_reading::note_recorded();
+    }
     Ok(id)
 }
 
@@ -1776,6 +1780,7 @@ pub async fn delete_conversation(
         log::info!("[transcripts] deleted conversation {}… (0.7 line)", &conversation_hash[..12.min(conversation_hash.len())]);
         crate::conversation_cache::record_deleted(&app, &agent_key, &conversation_hash);
         crate::conversation_cache::remove_from_cache(&app, &agent_key, &conversation_hash);
+        crate::memory_reading::forget_conversation(&app, &conversation_hash);
         crate::transcript_search::forget_conversation(&app, &conversation_hash);
         crate::vault_escrow::schedule_full_backup(&app);
         return Ok(0);
@@ -1814,6 +1819,7 @@ pub async fn delete_conversation(
     );
     crate::conversation_cache::record_deleted(&app, &agent_key, &conversation_hash);
     crate::conversation_cache::remove_from_cache(&app, &agent_key, &conversation_hash);
+    crate::memory_reading::forget_conversation(&app, &conversation_hash);
     crate::transcript_search::forget_conversation(&app, &conversation_hash);
     // The 0.7 line too: this device's parts removed, the tombstone written.
     if let Ok(key) = manager.data_key() {

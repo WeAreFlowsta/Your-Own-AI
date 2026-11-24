@@ -154,7 +154,6 @@ pub(crate) struct Candidate<'a> {
     pub k: &'a str,
     pub meta: &'a ConvMeta,
     pub seq: u32,
-    pub role: u8,
     pub flags: u8,
 }
 
@@ -225,7 +224,7 @@ impl Cache {
         let q = unit(question);
         let mut best: HashMap<(u32, u32), (f32, usize)> = HashMap::new();
         for (i, r) in self.rows.iter().enumerate() {
-            let c = Candidate { k: &self.keys[r.conv as usize], meta: &self.metas[r.conv as usize], seq: r.seq, role: r.role, flags: r.flags };
+            let c = Candidate { k: &self.keys[r.conv as usize], meta: &self.metas[r.conv as usize], seq: r.seq, flags: r.flags };
             if !keep(&c) {
                 continue;
             }
@@ -275,7 +274,6 @@ pub(crate) struct Made {
 
 pub(crate) struct Store {
     conn: Connection,
-    path: PathBuf,
 }
 
 /// How a store came to be open.
@@ -394,11 +392,7 @@ impl Store {
                 conn.execute("INSERT INTO meta (k, v) VALUES (?1, ?2)", params![k, v.as_bytes()]).map_err(|e| e.to_string())?;
             }
         }
-        Ok((Store { conn, path: path.to_path_buf() }, as_left))
-    }
-
-    pub(crate) fn path(&self) -> &Path {
-        &self.path
+        Ok((Store { conn }, as_left))
     }
 
     /// Store a batch of one conversation's messages and move its resume
