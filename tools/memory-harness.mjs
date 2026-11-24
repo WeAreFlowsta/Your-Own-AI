@@ -23,7 +23,7 @@
  *   node tools/memory-harness.mjs stores --out STORES.json [--facts FACTS.json] [--recall Name=INDEX.json,...]
  *       Joins a facts list and per-AI indexes of earlier turns into the
  *       stores file a dev build's /internal/memory-stores?do=seed takes.
- *   node tools/memory-harness.mjs find --questions Q.md --history HISTORY.json --out FOUND.json [--wording W.json --field NAME] [--only N,...] [--near 2]
+ *   node tools/memory-harness.mjs find --questions Q.md --history HISTORY.json --out FOUND.json [--rows SAVED.json] [--wording W.json --field NAME] [--only N,...] [--near 2]
  *       Asks a RUNNING DEV BUILD what memory finds for each question (no
  *       chat model) and counts the questions whose answer's place is among
  *       the first 3 and the first 12 messages found. A place is found when
@@ -343,13 +343,18 @@ async function main() {
     const places = answerPlaces(questions, JSON.parse(readFileSync(a.history, "utf8")));
     const near = Number(a.near ?? 2);
     const base = process.env.YOAI_URL || "http://127.0.0.1:11435";
+    // --rows: count what a run already saved, with no app running.
+    const saved = typeof a.rows === "string" ? new Map(JSON.parse(readFileSync(a.rows, "utf8")).map((r) => [Number(r.n), r])) : null;
     const rows = [];
-    for (const { n, question } of asked) {
-      const res = await fetch(`${base}/internal/memory-search?${new URLSearchParams({ q: question, limit: "12" })}`);
-      const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      if (!res.ok || body.error) {
-        console.error(`question ${n}: ${body.error?.message ?? body.error ?? res.status}`);
-        process.exit(1);
+    for (const { n, question } of saved ? asked.filter((q) => saved.has(q.n)) : asked) {
+      let body = saved?.get(n);
+      if (!body) {
+        const res = await fetch(`${base}/internal/memory-search?${new URLSearchParams({ q: question, limit: "12" })}`);
+        body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        if (!res.ok || body.error) {
+          console.error(`question ${n}: ${body.error?.message ?? body.error ?? res.status}`);
+          process.exit(1);
+        }
       }
       const trap = questions.find((q) => q.n === n).trap;
       rows.push({ n, question, trap, rank: trap ? null : rankOfPlace(body.found, places.get(n), near), read: body.read, total: body.total, found: body.found });

@@ -169,7 +169,9 @@ export const config: WebdriverIO.Config = {
   // A spec's own this.timeout() does not reach this runner: the limit is set
   // here. LONG_SPECS (above) need more than five minutes by their nature
   // (queue: a reply of thousands of words, then a model switch).
-  mochaOpts: { ui: "bdd", timeout: CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000 },
+  // YOAI_E2E_TIMEOUT_MS: a measuring run's own limit (reading a whole
+  // history into an index takes hours).
+  mochaOpts: { ui: "bdd", timeout: Number(process.env.YOAI_E2E_TIMEOUT_MS) || (CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000) },
   reporters: ["spec"],
   logLevel: "warn",
   waitforTimeout: 30_000,

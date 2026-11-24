@@ -16,6 +16,9 @@
 //   YOAI_MEMORY_STORES    a stores file to seed (the facts, an older index)
 //   YOAI_MEMORY_PATHS     "chat,port" (default), or one of them
 //   YOAI_MEMORY_SETUP     the setup name the replies carry (default "today")
+//   YOAI_MEMORY_READ      1: have the history read into memory's index and
+//                         save what is found per question, before asking
+//   YOAI_MEMORY_READ_MINUTES  how long the reading may take (default 30)
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -32,6 +35,11 @@ const STORES = process.env.YOAI_MEMORY_STORES ?? "";
 const PATHS = (process.env.YOAI_MEMORY_PATHS ?? "chat,port").split(",").map((p) => p.trim()).filter(Boolean);
 const SETUP = process.env.YOAI_MEMORY_SETUP ?? "today";
 const REPLIES = path.join(OUT, "replies.jsonl");
+// Have the history read into memory's index, and save what is found for
+// each question, before asking (builds that have the index).
+const READ = !!process.env.YOAI_MEMORY_READ;
+const READ_MINUTES = Number(process.env.YOAI_MEMORY_READ_MINUTES ?? 30);
+const LOAD_AT_A_TIME = 40;
 
 type Asked = { n: number; question: string };
 
@@ -99,13 +107,59 @@ describe("memory, asked a question set", () => {
     if (HISTORY !== "none") {
       const model = (await invoke<string | null>("get_current_model")) ?? "fixture";
       const started = Date.now();
-      const loaded = await dev("POST", "memory-fixture-load", { path: path.resolve(HISTORY), all: ai.id, model });
-      console.log(`e2e: history: ${loaded.conversations} conversation(s), ${loaded.messages} message(s) written, ${loaded.skipped} already there, ${Math.round((Date.now() - started) / 1000)} s`);
+      // A long history is written a part at a time, so no one request
+      // waits longer than a request may; a part already there is skipped.
+      const all = JSON.parse(fs.readFileSync(path.resolve(HISTORY), "utf8")) as { conversations: unknown[] };
+      const total = { conversations: 0, messages: 0, skipped: 0 };
+      const part = path.join(OUT, "history-part.json");
+      for (let i = 0; i < all.conversations.length; i += LOAD_AT_A_TIME) {
+        fs.writeFileSync(part, JSON.stringify({ ...all, conversations: all.conversations.slice(i, i + LOAD_AT_A_TIME) }));
+        const loaded = await dev("POST", "memory-fixture-load", { path: part, all: ai.id, model });
+        total.conversations += loaded.conversations;
+        total.messages += loaded.messages;
+        total.skipped += loaded.skipped;
+        if (i > 0 && (i / LOAD_AT_A_TIME) % 5 === 0) console.log(`e2e: history: ${i} of ${all.conversations.length} conversation(s) written, ${Math.round((Date.now() - started) / 1000)} s`);
+      }
+      fs.rmSync(part, { force: true });
+      console.log(`e2e: history: ${total.conversations} conversation(s), ${total.messages} message(s) written, ${total.skipped} already there, ${Math.round((Date.now() - started) / 1000)} s`);
     }
     const stores = STORES ? await dev("POST", "memory-stores", { do: "seed", path: path.resolve(STORES), all: ai.id }) : {};
     console.log(`e2e: memory stores: ${JSON.stringify(stores)}`);
     const kept = await dev("POST", "memory-stores", { do: "keep" });
     console.log(`e2e: ${kept.kept} store file(s) kept as the starting state`);
+  });
+
+  it("has the history read into memory's index", async function () {
+    if (!READ) return this.skip();
+    await invoke("memory_read_now", { on: true });
+    let status: any = {};
+    let said = 0;
+    const started = Date.now();
+    await browser.waitUntil(async () => {
+      status = await invoke("memory_reading_status");
+      if (Date.now() - said > 300_000) {
+        said = Date.now();
+        console.log(`e2e: reading: ${status.read} of ${status.total} message(s), ${status.passages} passage(s), ${Math.round((Date.now() - started) / 60_000)} min${status.waiting ? `, waiting: ${status.why}` : ""}`);
+      }
+      return status.total > 0 && status.read >= status.total;
+    }, { timeout: READ_MINUTES * 60_000, interval: 15_000, timeoutMsg: `the history was not read within ${READ_MINUTES} minutes` });
+    const root = await invoke<string>("profile_store_path", { name: "memory-index.sqlite" });
+    const size = fs.existsSync(root) ? fs.statSync(root).size : 0;
+    const line = { read: status.read, total: status.total, passages: status.passages, shortened: status.shortened, seconds: Math.round((Date.now() - started) / 1000), index_bytes: size };
+    console.log(`e2e: read: ${JSON.stringify(line)}`);
+    fs.writeFileSync(path.join(OUT, "reading.json"), JSON.stringify(line, null, 1));
+  });
+
+  it("what memory finds for each question, with no model", async function () {
+    if (!READ) return this.skip();
+    const rows = [];
+    for (const q of QUESTIONS) {
+      const started = Date.now();
+      const r = await dev("GET", "memory-search", { q: q.question });
+      rows.push({ n: q.n, question: q.question, ms: Date.now() - started, read: r.read, total: r.total, found: r.found });
+    }
+    fs.writeFileSync(path.join(OUT, "found.json"), JSON.stringify(rows));
+    console.log(`e2e: found for ${rows.length} question(s); the slowest search took ${Math.max(...rows.map((r) => r.ms))} ms`);
   });
 
   for (const q of QUESTIONS) {
