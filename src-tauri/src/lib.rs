@@ -20,6 +20,8 @@ mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records
 mod memory_prompt;        // everything memory adds to a request, built in one place
 mod secret_mask;          // passwords and keys are hidden before text leaves its conversation
+mod memory_index;         // memory's search index: vectors and pointers for every conversation, never text
+mod memory_reading;       // the background job that keeps the index level with the conversations
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
@@ -872,6 +874,8 @@ pub fn run() {
             memory::get_memory_facts,
             memory_prompt::memory_for_turn,
             secret_mask::mask_text,
+            memory_reading::memory_reading_status,
+            memory_reading::memory_read_now,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
@@ -1134,6 +1138,7 @@ pub fn run() {
                 machine::start(&link_app_handle);
                 llm::start_idle_unload(&link_app_handle);
                 dreaming::start_dreaming(&link_app_handle);
+                memory_reading::start(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);

@@ -41,6 +41,11 @@ pub enum Work {
     Light,
     /// Minutes of processor, graphics or disk: runs only on a calm machine.
     Heavy,
+    /// Heavy work taken a little at a time (the caller paces itself, a
+    /// unit every ten seconds): on mains power, with memory not short and
+    /// other programs under the same bar, even while the person is at the
+    /// computer.
+    HeavySlowly,
 }
 
 /// One reading of the machine.
@@ -80,6 +85,9 @@ pub fn decide(work: Work, r: &Reading, only_when_idle: bool, own_idle_secs: i64)
     }
     if r.on_battery {
         return Verdict::Wait("on battery");
+    }
+    if work == Work::HeavySlowly {
+        return if r.others_cpu_pct.is_some_and(|p| p >= HEAVY_OTHERS_CPU_PCT) { Verdict::Wait("other programs are busy") } else { Verdict::Go };
     }
     if !only_when_idle {
         return if own_idle_secs >= OWN_IDLE_SECS { Verdict::Go } else { Verdict::Wait("in use") };
@@ -544,6 +552,17 @@ mod tests {
         let r = Reading { memory_short: true, ..calm() };
         assert_eq!(decide(Work::Light, &r, true, 3600), Verdict::Wait("memory is short"));
         assert_eq!(decide(Work::Heavy, &r, false, 3600), Verdict::Wait("memory is short"));
+    }
+
+    #[test]
+    fn heavy_work_taken_slowly_runs_while_the_person_works_on_mains() {
+        let at_the_computer = Reading { away_secs: Some(5), ..calm() };
+        assert_eq!(decide(Work::Heavy, &at_the_computer, true, 0), Verdict::Wait("the computer is in use"));
+        assert_eq!(decide(Work::HeavySlowly, &at_the_computer, true, 0), Verdict::Go);
+        assert_eq!(decide(Work::HeavySlowly, &at_the_computer, false, 0), Verdict::Go);
+        assert_eq!(decide(Work::HeavySlowly, &Reading { on_battery: true, ..at_the_computer.clone() }, true, 0), Verdict::Wait("on battery"));
+        assert_eq!(decide(Work::HeavySlowly, &Reading { memory_short: true, ..at_the_computer.clone() }, true, 0), Verdict::Wait("memory is short"));
+        assert_eq!(decide(Work::HeavySlowly, &Reading { others_cpu_pct: Some(55.0), ..at_the_computer }, true, 0), Verdict::Wait("other programs are busy"));
     }
 
     #[test]

@@ -853,10 +853,11 @@ async fn memory_stores_dev(
 }
 
 /// Dev builds only: what memory finds for a question, with no chat model.
-/// `ai` names the AI, `q` is the question, `limit` caps the keyword hits.
-/// Answers with both of the searches the app has: the keyword search over
-/// the AI's conversations, and the lines of the memory block built for the
-/// question (the block is what reaches the model).
+/// `q` is the question; `limit` the number of messages (12 unless given).
+/// Answers with the messages memory's index ranks first, each with its
+/// place (the conversation's start, the sequence, the time), and how much
+/// of the history has been read into the index. With `ai`, the keyword
+/// search over that AI's conversations and its memory block ride along.
 async fn memory_search_dev(
     State(app): State<AppHandle>,
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
@@ -864,17 +865,27 @@ async fn memory_search_dev(
     if !cfg!(debug_assertions) {
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
-    let Some(ai) = q.get("ai").and_then(|name| resolve_ai(&app, name)) else {
-        return Json(json!({ "error": "ai=<id or name> must name an AI of this profile" })).into_response();
-    };
     let question = q.get("q").cloned().unwrap_or_default();
-    let limit = q.get("limit").and_then(|l| l.parse::<u32>().ok());
-    let keyword = match crate::transcript_search::transcript_search(app.clone(), ai.id.clone(), ai.agent_pub_key.clone(), question.clone(), limit) {
-        Ok(a) => json!(a),
+    let limit = q.get("limit").and_then(|l| l.parse::<usize>().ok()).unwrap_or(crate::memory_index::FOUND_AT_MOST);
+    let found = match crate::inference_memory::embed_question(&app, &question).await {
+        Some(v) => crate::memory_reading::search(&app, &v, limit, &crate::memory_index::searched_by_default)
+            .and_then(|f| Ok(json!({ "found": crate::memory_reading::places(&app, &f.hits)?, "read": f.read, "total": f.total }))),
+        None => Err("the question could not be embedded (is the memory model installed and running?)".to_string()),
+    };
+    let mut answer = match found {
+        Ok(v) => v,
         Err(e) => json!({ "error": e }),
     };
-    let block = turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await;
-    Json(json!({ "ai": ai.name, "question": question, "keyword": keyword, "block": block })).into_response()
+    answer["question"] = json!(question);
+    answer["reading"] = json!(crate::memory_reading::memory_reading_status());
+    if let Some(ai) = q.get("ai").and_then(|name| resolve_ai(&app, name)) {
+        answer["keyword"] = match crate::transcript_search::transcript_search(app.clone(), ai.id.clone(), ai.agent_pub_key.clone(), question.clone(), Some(limit as u32)) {
+            Ok(a) => json!(a),
+            Err(e) => json!({ "error": e }),
+        };
+        answer["block"] = json!(turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await);
+    }
+    Json(answer).into_response()
 }
 
 /// What the memory routes below are asked: an AI, a question, and the

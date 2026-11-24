@@ -13,6 +13,9 @@ import {
   outsideRepo,
   convertBackup,
   askList,
+  answerPlaces,
+  rankOfPlace,
+  findCounts,
   CODES,
 } from "./memory-harness.mjs";
 
@@ -224,4 +227,30 @@ test("an ask list keeps the set's order, takes other wordings, and refuses a mis
   ]);
   assert.throws(() => askList(questions, { wording, field: "loose" }), /question 2/);
   assert.throws(() => askList(questions, { only: [9] }), /no question 9/);
+});
+
+test("a found message counts when it is at the answer's place, give or take two messages", () => {
+  const history = {
+    conversations: [
+      { id: "conv-b02", started_at: "2026-01-20T09:00:00Z", messages: [] },
+      { id: "conv-b06", started_at: 1767960000000000, messages: [] },
+    ],
+  };
+  const places = answerPlaces(questions, history);
+  assert.deepEqual(places.get(1), [{ started_at: Date.parse("2026-01-20T09:00:00Z") * 1000, from: 2, to: 3 }]);
+  assert.deepEqual(places.get(2), [{ started_at: 1767960000000000, from: 0, to: 0 }]);
+  assert.deepEqual(places.get(3), [], "a trap has no place");
+  const b02 = places.get(1)[0].started_at;
+  const found = [
+    { started_at: 1767960000000000, seq: 7 },
+    { started_at: b02, seq: 6 },
+    { started_at: b02, seq: 5 },
+    { started_at: b02, seq: 2 },
+  ];
+  assert.equal(rankOfPlace(found, places.get(1)), 3, "seq 5 is within two of 2-3");
+  assert.equal(rankOfPlace(found, places.get(1), 0), 4);
+  assert.equal(rankOfPlace(found, places.get(2)), null, "seq 7 of the right conversation is too far from seq 0");
+  assert.equal(rankOfPlace([], places.get(1)), null);
+  assert.throws(() => answerPlaces(questions, { conversations: [] }), /conv-b02/);
+  assert.deepEqual(findCounts([{ n: 1, rank: 3 }, { n: 2, rank: null }, { n: 4, rank: 12 }, { n: 5, rank: 13 }]), { questions: 4, first3: 1, first12: 2, missed: [2, 5] });
 });

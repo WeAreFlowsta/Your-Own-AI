@@ -4563,12 +4563,23 @@ async fn embed_request(model: &str, texts: &[String]) -> Result<Vec<Vec<f32>>, E
     Ok(parsed.data.into_iter().map(|d| d.embedding).collect())
 }
 
+/// How many texts were embedded from a shortened form since launch. A job
+/// that must know whether its own text was shortened reads it before and
+/// after embedding that one text.
+pub(crate) static EMBEDS_SHORTENED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Embed one text, halving it on each refusal down to a floor.
 async fn embed_one_shrinking(model: &str, text: String) -> Result<Vec<f32>, String> {
+    let whole = text.chars().count();
     let mut t = text;
     loop {
         match embed_request(model, std::slice::from_ref(&t)).await {
-            Ok(mut v) => return v.pop().ok_or_else(|| "Embedding server returned no vector".to_string()),
+            Ok(mut v) => {
+                if t.chars().count() < whole {
+                    EMBEDS_SHORTENED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
+                return v.pop().ok_or_else(|| "Embedding server returned no vector".to_string());
+            }
             Err(EmbedError::TooLarge(msg)) | Err(EmbedError::Server(msg)) => {
                 let n = t.chars().count();
                 if n <= 64 {

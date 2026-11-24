@@ -306,6 +306,80 @@ async fn build(app: &AppHandle, agent_key: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A conversation as the text cache holds it, for memory's index (which
+/// keeps vectors under the same row key and reads the words from here).
+pub(crate) struct CachedConv {
+    pub k: String,
+    /// The highest sequence held, or -1 when no message is.
+    pub last_seq: i64,
+    pub touched: i64,
+    pub hash: String,
+    pub agent_key: String,
+    pub source: Option<String>,
+    pub started_at: i64,
+    pub title: Option<String>,
+}
+
+/// One message of a cached conversation.
+pub(crate) struct CachedEntry {
+    pub seq: u32,
+    pub role: String,
+    pub at: i64,
+    pub content: String,
+}
+
+/// Every conversation the text cache holds.
+pub(crate) fn cached_conversations(app: &AppHandle) -> Result<Vec<CachedConv>, String> {
+    let key = data_key(app)?;
+    let cache = open_cache(app)?;
+    let mut last: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    {
+        let mut st = cache.prepare("SELECT k, max(seq) FROM entries GROUP BY k").map_err(|e| e.to_string())?;
+        for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))).map_err(|e| e.to_string())?.flatten() {
+            last.insert(row.0, row.1);
+        }
+    }
+    let mut st = cache.prepare("SELECT k, meta_enc, touched FROM convs").map_err(|e| e.to_string())?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, i64>(2)?))).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (k, blob, touched) in rows.flatten() {
+        let Ok(m) = dec(&key, &blob).and_then(|p| serde_json::from_slice::<ConvMeta>(&p).map_err(|e| e.to_string())) else { continue };
+        out.push(CachedConv { last_seq: last.get(&k).copied().unwrap_or(-1), k, touched, hash: m.hash, agent_key: m.agent_key, source: m.source, started_at: m.started_at, title: m.title });
+    }
+    Ok(out)
+}
+
+/// A cached conversation's messages from sequence `from` on, in order.
+pub(crate) fn cached_entries(app: &AppHandle, k: &str, from: i64) -> Result<Vec<CachedEntry>, String> {
+    let key = data_key(app)?;
+    let cache = open_cache(app)?;
+    let mut st = cache.prepare("SELECT seq, blob_enc FROM entries WHERE k = ?1 AND seq >= ?2 ORDER BY seq").map_err(|e| e.to_string())?;
+    let rows = st.query_map(params![k, from], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (seq, blob) in rows.flatten() {
+        let e: EntryText = serde_json::from_slice(&dec(&key, &blob)?).map_err(|e| e.to_string())?;
+        out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content });
+    }
+    Ok(out)
+}
+
+/// The row key of a conversation, from its record id.
+pub(crate) fn row_key(app: &AppHandle, hash: &str) -> Result<String, String> {
+    Ok(keyed(&data_key(app)?, hash))
+}
+
+/// Read one agent's conversations into the cache now and wait for it. One
+/// read at a time: `false` when another is running (ask again later).
+pub(crate) async fn read_agent(app: &AppHandle, agent_key: &str) -> Result<bool, String> {
+    if BUILDING.swap(true, Ordering::SeqCst) {
+        return Ok(false);
+    }
+    CANCEL.store(false, Ordering::SeqCst);
+    let r = build(app, agent_key).await;
+    BUILDING.store(false, Ordering::SeqCst);
+    r.map(|_| true)
+}
+
 /// When the cache last read this conversation (the records' last-active
 /// stamp at that moment); 0 when unknown. `k` = the keyed row key.
 fn cached_touch(app: &AppHandle, k: &str) -> i64 {
