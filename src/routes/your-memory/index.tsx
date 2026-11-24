@@ -15,6 +15,7 @@ import ProfileMemory from "../../components/ProfileMemory";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
 import MemoryOwners from "../../components/MemoryOwners";
 import { RecentlyBoard } from "../../components/memory/RecentlyBoard";
+import { MemoryMapBoard } from "../../components/memory/MemoryMapBoard";
 import { NotUsedList } from "../../components/memory/NotUsedList";
 import { DeclinedOffers } from "../../components/memory/DeclinedOffers";
 import { SetAsideList } from "../../components/memory/SetAsideList";
@@ -64,6 +65,10 @@ export default component$(() => {
           </div>
 
           <MemoryOwners selected="you" />
+
+          <div class="mb-8">
+            <MemoryMapBoard />
+          </div>
 
           <div class="mb-6">
             <RecentlyBoard />

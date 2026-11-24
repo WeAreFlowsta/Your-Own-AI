@@ -41,6 +41,7 @@
     "@tauri-apps/plugin-shell": "^2.3.1",
     "@tauri-apps/plugin-store": "^2.4.0",
     "cropperjs": "^2.1.1",
+    "force-graph": "1.52.0",
     "highlight.js": "^11.11.1",
     "jdenticon": "^3.3.0",
     "lottie-web": "^5.13.0",
