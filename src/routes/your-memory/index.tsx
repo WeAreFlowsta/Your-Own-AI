@@ -79,6 +79,10 @@ export default component$(() => {
             <button type="button" data-testid="open-memory-update" onClick$={() => nav("/memory-update/")} class="underline hover:text-[var(--text-secondary)]">
               What changed in the update
             </button>
+            {" · "}
+            <button type="button" data-testid="open-memory-sent" onClick$={() => nav("/memory-sent/")} class="underline hover:text-[var(--text-secondary)]">
+              What an online AI is sent
+            </button>
           </p>
         </div>
       </div>

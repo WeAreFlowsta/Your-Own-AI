@@ -298,6 +298,11 @@ pub(crate) struct TurnInput {
     /// session's turn, whose block is added at the port).
     #[serde(default)]
     pub beside: bool,
+    /// The person's switch for an online AI, "Share memory with this AI".
+    /// Absent or true: shared. It means nothing for a local AI, whose
+    /// turns never leave the computer.
+    #[serde(default)]
+    pub memory_shared: Option<bool>,
 }
 
 /// What memory adds to a turn.
@@ -434,7 +439,7 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     // given as they kept it.
     let updated = crate::memory_migrate::update_done(app);
     let (facts, recall) = if updated { (after_update(facts), None) } else { (facts, recall) };
-    let about_you = match (&key, updated) {
+    let about_you = match (&key, updated && shares_memory(input.online, input.memory_shared)) {
         (Some(k), true) => kept_about_them(&crate::memory_items::items(&crate::memory_rows::read_cache(app, k, crate::memory_items::SCOPE)), input.founding_key.as_deref().unwrap_or(""), input.project.as_deref(), input.online),
         _ => Vec::new(),
     };
@@ -499,6 +504,12 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         given,
         given_texts,
     }
+}
+
+/// Is what memory holds given to this turn's AI? Always for a local AI.
+/// For an online one, unless the person turned sharing off for it.
+pub(crate) fn shares_memory(online: bool, memory_shared: Option<bool>) -> bool {
+    !online || memory_shared != Some(false)
 }
 
 /// The facts file after the update: only the person's name is still read
@@ -579,6 +590,11 @@ async fn found_beside(
     let wording = Wording::shipped();
     let record = |search: SearchReport| GivenRecord { v: 1, search, mask_version: crate::secret_mask::MASK_VERSION.to_string(), cut_version: mb::CUT_VERSION.to_string(), ..Default::default() };
     let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new(), None);
+    // The person turned sharing off for this online AI: nothing memory
+    // holds goes with the turn (their rules still do, in the system part).
+    if !shares_memory(input.online, input.memory_shared) {
+        return not_run(WhyNot::SwitchedOffForThisAi);
+    }
     if !stores_open {
         return not_run(WhyNot::VaultLocked);
     }
@@ -714,6 +730,10 @@ async fn found_beside(
         // A reply that quotes the note quotes what it was given.
         texts.push(note.clone());
     }
+    if input.online {
+        // What left the computer with this turn, for the line under the reply.
+        rec.more.insert("sent".into(), serde_json::json!({ "passages": rec.exchanges.len(), "lines": rec.lines.len(), "note": stand.note.is_some() }));
+    }
     (Some(b.text), Some(rec), texts, stand.note)
 }
 
@@ -768,6 +788,14 @@ mod tests {
             "owner_scope": "personal", "key_scope": "personal", "entry_kind": kind, "provenance": "extracted", "created_at": 1, "updated_at": 2,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn the_sharing_switch_is_for_online_ais_only_and_is_on_unless_turned_off() {
+        assert!(shares_memory(true, None));
+        assert!(shares_memory(true, Some(true)));
+        assert!(!shares_memory(true, Some(false)));
+        assert!(shares_memory(false, Some(false)), "a local AI's turns never leave the computer");
     }
 
     #[test]

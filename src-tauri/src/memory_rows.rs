@@ -331,6 +331,27 @@ fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[M
 /// changed), its person-scope rows into the siblings file and the cache.
 /// Returns (facts adopted, rows adopted). The facts write does not mirror
 /// (the other device already wrote those rows).
+/// The scopes a backup carries beside the person's and each AI's: memory's
+/// own, and the scope of every project this device knows (a project a
+/// kept item is for, and each folder that had a project memory).
+pub(crate) fn backup_scopes(app: &tauri::AppHandle) -> Vec<String> {
+    let mut scopes = vec![crate::memory_items::SCOPE.to_string()];
+    let mut projects: Vec<String> = crate::commands_holochain::project_memory_folders(app).iter().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))).collect();
+    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
+        if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
+            for item in crate::memory_items::items(&read_cache(app, &key, crate::memory_items::SCOPE)) {
+                if let crate::memory_items::Audience::Project { project } = item.meta.audience {
+                    projects.push(project);
+                }
+            }
+        }
+    }
+    projects.sort();
+    projects.dedup();
+    scopes.extend(projects.into_iter().filter(|p| !p.is_empty()).map(|p| format!("project:{p}")));
+    scopes
+}
+
 pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32], manifest: &serde_json::Value) -> (usize, usize) {
     use base64::Engine;
     let mut facts_adopted = 0usize;

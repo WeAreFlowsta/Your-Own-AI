@@ -34,6 +34,9 @@ export interface UserDefinedAI {
   /** May this AI reach the web (read pages on this computer; search on a plan with online models)?
    *  On unless turned off - "offline only" is about which models answer, not about the web. */
   webAccess?: boolean;
+  /** "Share memory with this AI", for an AI that runs online: what memory finds for a question
+   *  goes with the message unless this is turned off. On unless turned off. */
+  memoryOnline?: boolean;
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   /** The AI's address on the person's network: the first agent key it ever had. Every device of the
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes

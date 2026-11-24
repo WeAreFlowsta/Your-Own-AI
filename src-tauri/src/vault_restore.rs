@@ -1209,6 +1209,14 @@ async fn restore_backup(
     // Your Memory profile facts + AI thumbnails + per-AI authored knowledge -
     // local files the backup carries alongside the Holochain records.
     let memory_facts_restored = restore_memory_facts(&app, &key, &backup);
+    // Memory rows the backup carries (what was kept, its states, subjects,
+    // rules, the person's switches): folded in beside what the records
+    // hold, newest revision of each row winning.
+    let (_, memory_rows_restored) = crate::memory_rows::fold_sibling_person_memory(&app, &key, &backup);
+    if memory_rows_restored > 0 {
+        log::info!("[restore] {memory_rows_restored} memory row(s) restored");
+        crate::memory_tidying::words_changed(&app);
+    }
     let thumbnails_restored = restore_thumbnails(&app, &merged, &backup);
     let knowledge_restored = restore_ai_knowledge(&app, &key, &merged, &backup);
     let corpus_restored = restore_corpus(&app, &key, &merged, &backup);

@@ -1,3 +1,4 @@
+import { canAnswerOnline } from '../utils/memorySent';
 import { DEFAULT_DESCRIPTION_TEMPLATE, DESCRIPTION_PLACEHOLDERS, isLegacyDefaultDescription, renderAiDescription } from '../utils/aiDescription';
 import {
   component$,
@@ -97,6 +98,8 @@ const AiFormModal = component$<AiFormModalProps>(
       useEmojis: false,
       // Web access (Edit only): on unless the person turns it off for this AI.
       webAccess: true,
+      // Share memory with an AI that runs online: on unless turned off.
+      memoryOnline: true,
       advancedOpen: false,
       sTemperature: null as number | null,
       sTopP: null as number | null,
@@ -432,6 +435,7 @@ const AiFormModal = component$<AiFormModalProps>(
           store.askBlurb = editingAi.askBlurb || '';
           store.useEmojis = editingAi.useEmojis ?? false;
           store.webAccess = editingAi.webAccess ?? true;
+          store.memoryOnline = editingAi.memoryOnline ?? true;
           store.sTemperature = editingAi.sampling?.temperature ?? null;
           store.sTopP = editingAi.sampling?.topP ?? null;
           store.sMinP = editingAi.sampling?.minP ?? null;
@@ -637,6 +641,7 @@ const AiFormModal = component$<AiFormModalProps>(
           askBlurb: store.askBlurb.trim(),
           useEmojis: store.useEmojis,
           webAccess: store.webAccess,
+          memoryOnline: store.memoryOnline,
           skills: store.skills,
           mcp: store.mcp,
           sampling: (() => {
@@ -934,6 +939,64 @@ const AiFormModal = component$<AiFormModalProps>(
                     </button>
                   </div>
                 </LiquidMetalBorder>
+              </div>
+              {/* Memory and an AI that can answer online. Memory is kept,
+                  searched and tidied on this computer whatever the model;
+                  this switch is about what goes with a message. */}
+              <div>
+                <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">
+                  Share memory with {store.name.trim() || 'this AI'}
+                </label>
+                {canAnswerOnline(store.model) ? (
+                  <>
+                    <p class="text-xs text-[var(--text-muted)] mb-2">
+                      On: when this AI answers online, what memory found for your question goes with your message. The line
+                      under each reply shows what was sent. Off: nothing from memory goes online. Your rules still do.
+                    </p>
+                    <LiquidMetalBorder borderRadius="9999px">
+                      <div class="flex rounded-full overflow-hidden bg-[var(--bg-card)]" data-testid="ai-memory-online">
+                        <button
+                          type="button"
+                          onClick$={() => {
+                            store.memoryOnline = false;
+                          }}
+                          disabled={store.isSubmitting}
+                          data-testid="ai-memory-online-off"
+                          class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                            ${
+                              !store.memoryOnline
+                                ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                            }
+                          `}
+                        >
+                          Off
+                        </button>
+                        <button
+                          type="button"
+                          onClick$={() => {
+                            store.memoryOnline = true;
+                          }}
+                          disabled={store.isSubmitting}
+                          data-testid="ai-memory-online-on"
+                          class={`flex-1 px-4 py-2.5 font-medium focus:outline-none transition-colors disabled:opacity-70
+                            ${
+                              store.memoryOnline
+                                ? 'bg-[var(--bg-main)] text-[var(--text-primary)] font-semibold'
+                                : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]'
+                            }
+                          `}
+                        >
+                          On
+                        </button>
+                      </div>
+                    </LiquidMetalBorder>
+                  </>
+                ) : (
+                  <p class="text-xs text-[var(--text-muted)]" data-testid="ai-memory-local">
+                    {store.name.trim() || 'This AI'} runs on this computer. Nothing it is given leaves it.
+                  </p>
+                )}
               </div>
               <div>
                 <label class="block text-sm font-medium text-[var(--text-secondary)] mb-1">

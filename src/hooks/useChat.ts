@@ -1727,6 +1727,7 @@ export function useChat(props: UseChatProps) {
               windowTokens: roomCtx > 0 ? roomCtx : null,
               roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
               online: isOnlineModel || isExternalModel,
+              memoryShared: selectedAi.aiConfig?.memoryOnline !== false,
               previousQuestion: before ?? null,
             },
           }).catch(() => null);

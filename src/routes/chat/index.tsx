@@ -1,3 +1,4 @@
+import { MEMORY_SHARED_EVENT, type MemorySharedDetail } from "../../components/memory/SentLine";
 import { lastKnownEntitled } from "../../utils/entitlement";
 import { toggleAgentView } from "../../utils/agentView";
 /**
@@ -269,7 +270,18 @@ export default component$(() => {
       await resendAgentLast$();
     };
     window.addEventListener("yoai-go-online", onGoOnline);
-    cleanup(() => window.removeEventListener("yoai-go-online", onGoOnline));
+    // The memory switch, changed from the line under a reply: the open
+    // chat uses it with the next message.
+    const onMemoryShared = (e: Event) => {
+      const d = (e as CustomEvent<MemorySharedDetail>).detail;
+      const ai = selectedAi.value;
+      if (d && ai?.aiConfig?.id === d.aiId) selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, memoryOnline: d.on } };
+    };
+    window.addEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
+    cleanup(() => {
+      window.removeEventListener("yoai-go-online", onGoOnline);
+      window.removeEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
+    });
   });
 
   // The permission the agent waits on right now, from the turn's own

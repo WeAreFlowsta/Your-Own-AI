@@ -65,10 +65,33 @@ export function givenLineWords(line: ReplyLine, ai: string): LineWords {
       return { label: searched, text: `No conversation ${ai} can use mentions ${list}.`, show: true, readRest: false };
     }
     case "did-not-look":
+      if (line.why === "switched_off_for_this_ai") {
+        return { label: null, text: `Memory is not shared with ${ai}. ${ai} answered from this conversation only, without looking at your earlier conversations. Your rules were still sent.`, show: false, readRest: false };
+      }
       return { label: null, text: `${ai} answered without looking at your earlier conversations: ${whyNotWords(line.why)}.`, show: false, readRest: false };
     case "withheld":
       return { label: searched, text: `${ai} cannot use ${line.conversations} ${line.conversations === 1 ? "conversation" : "conversations"} you had with another AI that ${line.conversations === 1 ? "mentions" : "mention"} this.`, show: true, readRest: false };
   }
+}
+
+/** What went with a message that left this computer, as its reply's record holds it. */
+export interface Sent {
+  passages: number;
+  lines: number;
+  note: boolean;
+}
+
+/** The sentence that says what memory sent with a message to a model that
+ *  runs elsewhere. `servedBy` is the reply's model as recorded
+ *  ("online:<name>" or "external:<name>"). */
+export function sentWords(sent: Sent, servedBy: string): string {
+  const where = servedBy.startsWith("external:") ? `your server (${servedBy.slice(9)})` : servedBy.startsWith("online:") ? `${servedBy.slice(7)}, online` : "an online model";
+  const n = sent.passages + sent.lines;
+  if (n === 0 && !sent.note) {
+    return `Nothing from memory was sent. Memory found nothing for this question. Only this conversation and your rules went to ${where}.`;
+  }
+  const what = [n > 0 ? `${passages(n)} from your conversations` : "", sent.note ? "what memory holds now" : ""].filter(Boolean).join(" and ");
+  return `Sent to ${where}. With your question: ${what}.`;
 }
 
 /** "March 3" from "2026-03-03" (the year too when it is not this one). */

@@ -154,7 +154,7 @@ export const RecentlyBoard = component$(() => {
         <p class="text-sm text-[var(--text-muted)]">Loading…</p>
       ) : log.length === 0 ? (
         <p class="text-sm text-[var(--text-muted)]" data-testid="recently-empty">
-          Nothing has changed yet. What you keep with Remember shows here.
+          Nothing has changed yet. Say "remember that" in any chat, or press Remember under a reply.
         </p>
       ) : (
         <>

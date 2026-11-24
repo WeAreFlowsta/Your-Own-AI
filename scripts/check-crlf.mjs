@@ -24,9 +24,9 @@ const CHECKS = [
 ];
 // Every check script must be listed here or named as skipped.
 // check-no-e2e-feature reads Cargo.toml and the workflows, not source with line endings to normalise.
-// check-dev-routes, check-harness-private, check-one-builder and check-mask-exits read files this copy does not carry (the backend, tools/, e2e/fixtures/)
+// check-dev-routes, check-harness-private, check-one-builder, check-mask-exits and check-memory-online read files this copy does not carry (the backend, tools/, e2e/fixtures/)
 // and normalise line endings as they read.
-const SKIPPED = ["check-webview-floor.mjs", "check-crlf.mjs", "check-catalog-urls.mjs", "check-online-catalog.mjs", "check-no-e2e-feature.mjs", "check-dev-routes.mjs", "check-harness-private.mjs", "check-one-builder.mjs", "check-mask-exits.mjs"];
+const SKIPPED = ["check-webview-floor.mjs", "check-crlf.mjs", "check-catalog-urls.mjs", "check-online-catalog.mjs", "check-no-e2e-feature.mjs", "check-dev-routes.mjs", "check-harness-private.mjs", "check-one-builder.mjs", "check-mask-exits.mjs", "check-memory-online.mjs"];
 const all = readdirSync("scripts").filter((f) => /^check-.*\.mjs$/.test(f));
 const unlisted = all.filter((f) => !CHECKS.includes(f) && !SKIPPED.includes(f));
 if (unlisted.length) {

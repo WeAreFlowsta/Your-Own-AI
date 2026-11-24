@@ -69,6 +69,8 @@ struct ResolvedAi {
     model: String,
     /// This AI's web switch (Edit AI > Web access): on unless turned off.
     web_access: bool,
+    /// "Share memory with this AI", for an online AI: on unless turned off.
+    memory_online: bool,
     system_prompt: String,
     use_emojis: bool,
     /// Holochain agent pub key (hex), set on first provisioning. Empty if the
@@ -420,6 +422,7 @@ fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
         name: pick.get("name").and_then(Value::as_str).unwrap_or("AI").to_string(),
         model: pick.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
         web_access: pick.get("webAccess").and_then(Value::as_bool).unwrap_or(true),
+        memory_online: pick.get("memoryOnline").and_then(Value::as_bool).unwrap_or(true),
         system_prompt: pick
             .get("systemPrompt")
             .and_then(Value::as_str)
@@ -481,6 +484,7 @@ async fn turn_memory_as(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory
         on_wire_from: None,
         skip_search: system_only,
         beside,
+        memory_shared: Some(ai.memory_online),
     })
     .await
 }
@@ -1023,6 +1027,7 @@ async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Valu
             on_wire_from: body["onWireFrom"].as_u64().map(|w| w as u32),
             skip_search: false,
             beside: false,
+            memory_shared: body["memoryShared"].as_bool(),
         })
         .await;
         return Json(json!({ "ai": ai.name, "path": "chat", "memory": memory })).into_response();
@@ -4162,6 +4167,7 @@ mod memory_stays_home_tests {
             name: "Reeves".into(),
             model: "auto:offline".into(),
             web_access: true,
+            memory_online: true,
             system_prompt: "CORE. You are {{aiName}}. {{userNameInfo}}".into(),
             use_emojis: false,
             agent_pub_key: String::new(),

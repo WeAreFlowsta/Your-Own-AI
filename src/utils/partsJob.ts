@@ -6,7 +6,10 @@
  * One job with one set of rules, run at start, when a model download ends,
  * when a project's agent ends, and every few hours:
  *   - nothing is fetched before the person has a model (a new install's
- *     first download is theirs to start);
+ *     first download is theirs to start), with one exception: a person
+ *     whose AIs all answer online has no model to wait for, and gets the
+ *     memory part by itself, unless the connection is metered (then the
+ *     offer on the Memory page asks first);
  *   - a part the person removed is not fetched again until they ask;
  *   - a part in use is replaced at a later check, when it is free;
  *   - a fetch that fails says nothing and is tried again at the next check
@@ -104,6 +107,25 @@ async function ensureProjectsHelper(): Promise<string> {
   return outcome;
 }
 
+/** What the job does for a person with no model on this computer. Pure,
+ *  for the tests. */
+export function onlineOnlyStep(s: { aiModels: string[]; metered: boolean }): "no-ais-yet" | "ask-first" | "fetch" {
+  const online = s.aiModels.some((m) => m.startsWith("online:") || m === "auto:online" || m === "auto:online-offline");
+  if (!online) return "no-ais-yet";
+  return s.metered ? "ask-first" : "fetch";
+}
+
+async function onlineOnlyPersonMayFetch(): Promise<boolean> {
+  try {
+    const { getLocalCustomAis } = await import("./localAiStorage");
+    const ais = await getLocalCustomAis();
+    const status = await invoke<{ reading?: { metered?: boolean } }>("machine_status").catch(() => null);
+    return onlineOnlyStep({ aiModels: ais.map((a) => a.model ?? ""), metered: status?.reading?.metered === true }) === "fetch";
+  } catch {
+    return false;
+  }
+}
+
 let running = false;
 
 /** Run the check once. Safe to call often: one run at a time. */
@@ -112,7 +134,15 @@ export async function runPartsJob(reason: string): Promise<void> {
   running = true;
   try {
     const models = await modelManager.listModels();
-    if (models.length === 0) return; // nothing chosen yet
+    if (models.length === 0) {
+      // No model on this computer. A person who chose online AIs still
+      // gets memory's search: it runs here whatever answers.
+      if (await onlineOnlyPersonMayFetch()) {
+        const outcome = await ensureMemoryModel().catch(() => "put off");
+        console.log(`[parts] ${reason}: memory model ${outcome} (online AIs only)`);
+      }
+      return; // nothing else is fetched before a model is chosen
+    }
     const [memory, helper] = await Promise.allSettled([ensureMemoryModel(), ensureProjectsHelper()]);
     const say = (r: PromiseSettledResult<string>) => (r.status === "fulfilled" ? r.value : "put off");
     console.log(`[parts] ${reason}: memory model ${say(memory)}, Projects helper ${say(helper)}`);

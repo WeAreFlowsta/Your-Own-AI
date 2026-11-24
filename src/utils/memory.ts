@@ -360,6 +360,8 @@ export interface TurnRoom {
   online: boolean;
   /** The person's question before this one in the open conversation. */
   previousQuestion?: string | null;
+  /** "Share memory with this AI" (an online AI's switch). Absent: shared. */
+  memoryShared?: boolean;
 }
 
 /**
@@ -406,6 +408,7 @@ export async function memoryForTurn(
       roomTokens: opts?.room?.roomTokens ?? null,
       online: opts?.room?.online ?? false,
       previousQuestion: opts?.room?.previousQuestion ?? null,
+      memoryShared: opts?.room?.memoryShared ?? null,
       // The open conversation is sent whole with the turn.
       onWireFrom: 0,
     },

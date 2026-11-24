@@ -742,7 +742,12 @@ export default component$(() => {
                 )}
               </div>
 
-              <p class="mt-6 text-sm text-[var(--text-muted)] max-w-2xl">
+              <p class="mt-6 text-sm text-[var(--text-secondary)] max-w-2xl" data-testid="welcome-memory-sentence">
+                Your AIs can look through your past conversations. All of that happens on this computer. An online AI is
+                shown only what was found for the question you ask it, and you can turn that off.
+              </p>
+
+              <p class="mt-3 text-sm text-[var(--text-muted)] max-w-2xl">
                 Click Edit on the Your AIs page to change these and other options later.
               </p>
 

@@ -20,7 +20,8 @@ import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
-import { givenLineWords } from '../utils/givenLine';
+import { givenLineWords, type Sent } from '../utils/givenLine';
+import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
 import { KEPT_EVENT, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
 import { looksLikeInstruction } from '../utils/memory';
@@ -625,8 +626,15 @@ const ActionBar = component$<ActionBarProps>((props) => {
           with the passages one step away. */}
       {props.message.givenLine && !props.message.isLoading && (() => {
         const w = givenLineWords(props.message.givenLine!, props.message.aiLabel || 'This AI');
+        // A reply made elsewhere: what memory sent with the question.
+        const sent = (props.message.given as { sent?: Sent } | undefined)?.sent;
+        const line = props.message.givenLine!;
+        const switchedOff = line.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
         return (
           <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={props.message.givenLine!.kind}>
+            {(sent || switchedOff) && (
+              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} />
+            )}
             {w.label && <div class="text-[var(--text-muted)]">{w.label}</div>}
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
               <span>{w.text}</span>
