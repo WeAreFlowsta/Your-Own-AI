@@ -907,7 +907,7 @@ export default component$(() => {
 
                             {entry.content && entry.content.trim() && (
                               <div class="pl-8 mt-1">
-                                <RememberEntryButton aiId={aiId.value} text={entry.content} />
+                                <RememberEntryButton aiId={aiId.value} conversation={conv.hash} role={entry.role} seq={entry.sequence} text={entry.content} />
                               </div>
                             )}
 

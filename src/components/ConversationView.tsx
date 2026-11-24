@@ -93,6 +93,8 @@ export default component$<ConversationViewProps>(({
           onGround$={message.groundingSource && message.id ? $(() => onGround$?.(message.id!)) : undefined}
           onScrollNeeded$={scrollToBottom$}
           aiLabel={message.aiLabel}
+          turnAiId={message.role === 'user' ? (messages[index + 1]?.role === 'assistant' ? messages[index + 1].model : messages.slice(0, index).reverse().find((m) => m.role === 'assistant')?.model) : message.model}
+          turnAiName={message.role === 'user' ? (messages[index + 1]?.role === 'assistant' ? messages[index + 1].aiLabel : undefined) : message.aiLabel}
           aiImageUrl={message.aiImageUrl}
           setSidePanelContent$={setSidePanelContent$}
           isDesktop={isDesktop}

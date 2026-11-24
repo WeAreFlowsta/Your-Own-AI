@@ -21,7 +21,9 @@ import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { givenLineWords } from '../utils/givenLine';
-import type { RememberHandle } from '../utils/rememberText';
+import { KeptLine } from './KeptLine';
+import { KEPT_SELECTION_EVENT } from './SelectionRemember';
+import type { Kept } from '../utils/memoryKeep';
 import { looksLikeInstruction } from '../utils/memory';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
@@ -129,6 +131,10 @@ interface ChatMessageProps {
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
   aiLabel?: string;
+  /** The AI of this message's turn (a person's own message names the AI
+   *  that answered it), for Remember. */
+  turnAiId?: string;
+  turnAiName?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
   /** Answer a permission ask inside this message's agent working log. */
@@ -316,103 +322,37 @@ const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
   const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | 'given' | null>(null);
-  /** '' | 'saving' | 'saved' | 'error' - the Remember button's state. Saved is
-   *  a TOGGLE: clicking again forgets the save (via the kept handle). */
-  const rememberState = useSignal('');
-  const rememberHandle = useSignal<RememberHandle | null>(null);
-
-  // Reflect an already-saved reply across reloads (cheap: one index per store,
-  // shared by every button on the page).
+  /** Remember on this reply: '' | 'saving' | what went wrong. The Kept line
+   *  below the bar shows what was kept, with its audience and Undo. */
+  const keepState = useSignal('');
+  const kept = useSignal<Kept | null>(null);
+  /** The words kept were selected in the reply. */
+  const keptSelection = useSignal(false);
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track }) => {
-    track(() => props.isLoading);
-    if (props.isLoading || props.message.role !== 'assistant' || !props.message.content) return;
-    try {
-      const { findRememberedCached } = await import('../utils/rememberText');
-      const h = await findRememberedCached(props.message.model, props.message.content, 'reply');
-      if (h) {
-        rememberHandle.value = h;
-        rememberState.value = 'saved';
+  useVisibleTask$(({ cleanup }) => {
+    if (props.message.role !== 'assistant') return;
+    const onKept = (e: Event) => {
+      const d = (e as CustomEvent<{ messageId: string; kept: Kept }>).detail;
+      if (d?.messageId && d.messageId === props.message.id) {
+        keptSelection.value = true;
+        kept.value = d.kept;
       }
-    } catch {
-      /* display-only check */
-    }
+    };
+    window.addEventListener(KEPT_SELECTION_EVENT, onKept);
+    cleanup(() => window.removeEventListener(KEPT_SELECTION_EVENT, onKept));
   });
-
-  const rememberReply = $(async () => {
-    if (rememberState.value === 'saving') return;
-    if (rememberState.value === 'saved' && rememberHandle.value) {
-      rememberState.value = 'saving';
-      try {
-        const { forgetRemembered } = await import('../utils/rememberText');
-        await forgetRemembered(props.message.model, rememberHandle.value);
-        rememberHandle.value = null;
-        rememberState.value = '';
-      } catch {
-        rememberState.value = 'saved';
-      }
-      return;
-    }
-    rememberState.value = 'saving';
+  const keepReply = $(async () => {
+    if (keepState.value === 'saving') return;
+    keepState.value = 'saving';
+    const { keepMessage, keepError } = await import('../utils/memoryKeep');
     try {
-      const { rememberText } = await import('../utils/rememberText');
-      const handle = await rememberText(props.message.model, props.message.content, 'reply');
-      rememberHandle.value = handle;
-      rememberState.value = handle ? 'saved' : 'error';
-    } catch {
-      rememberState.value = 'error';
+      keptSelection.value = false;
+      kept.value = await keepMessage({ aiId: props.message.model, role: 'assistant', text: props.message.content, seq: props.message.sequence });
+      keepState.value = '';
+    } catch (e) {
+      keepState.value = keepError(e);
+      setTimeout(() => (keepState.value = ''), 4000);
     }
-    if (rememberState.value === 'error') {
-      setTimeout(() => (rememberState.value = ''), 2500);
-    }
-  });
-
-  // Folder sessions have TWO honest destinations for a remembered reply:
-  // the folder's shared memory (likelier mid-work) or this AI's own memory.
-  // The little menu makes the choice explicit - never a silent default.
-  const rememberMenuOpen = useSignal(false);
-  const rememberFolder = useSignal<string | null>(null);
-
-  const rememberClick = $(async () => {
-    if (rememberState.value === 'saving') return;
-    // Saved-toggle (per-AI) keeps its forget-on-click behavior.
-    if (rememberState.value === 'saved' && rememberHandle.value) {
-      await rememberReply();
-      return;
-    }
-    if (props.message.agentTurn) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const status = await invoke<{ folder: string | null; tools?: boolean }>('build_agent_status');
-        if (status.folder && !status.tools) {
-          rememberFolder.value = status.folder;
-          rememberMenuOpen.value = true;
-          return;
-        }
-      } catch {
-        /* no bridge - plain per-AI save */
-      }
-    }
-    await rememberReply();
-  });
-
-  const rememberToFolder = $(async () => {
-    const folder = rememberFolder.value;
-    rememberMenuOpen.value = false;
-    if (!folder) return;
-    rememberState.value = 'saving';
-    try {
-      const { appendWorkspaceNote } = await import('../utils/workspaceMemory');
-      const ok = await appendWorkspaceNote(folder, props.message.content);
-      rememberState.value = ok ? 'saved-folder' : 'error';
-    } catch {
-      rememberState.value = 'error';
-    }
-    setTimeout(() => {
-      if (rememberState.value === 'saved-folder' || rememberState.value === 'error') {
-        rememberState.value = '';
-      }
-    }, 2500);
   });
 
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
@@ -616,62 +556,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 </LiquidMetalButton>
               )}
             {props.message.role === 'assistant' && !!props.message.content && (
-              <span class="relative inline-flex">
-                <LiquidMetalButton
-                  onClick$={rememberClick}
-                  class="px-3 py-1 text-xs flex items-center"
-                  title={
-                    rememberState.value === 'error'
-                      ? 'Could not save - remembering needs the small helper download (Settings - Components)'
-                      : rememberState.value === 'saved'
-                        ? 'Remembered - click to forget it again'
-                        : rememberState.value === 'saved-folder'
-                          ? 'Saved to this project’s memory'
-                          : 'Remember this reply - your AI will draw on it in future conversations'
-                  }
-                  disabled={rememberState.value === 'saving'}
-                >
-                  <BsBookmarkIcon />
-                  <span class="hidden md:inline">
-                    {rememberState.value === 'saved'
-                      ? 'Remembered'
-                      : rememberState.value === 'saved-folder'
-                        ? 'Saved to project'
-                        : rememberState.value === 'saving'
-                          ? 'Saving...'
-                          : rememberState.value === 'error'
-                            ? 'Try again'
-                            : 'Remember'}
-                  </span>
-                </LiquidMetalButton>
-                {rememberMenuOpen.value && (
-                  <>
-                    <span
-                      class="fixed inset-0 z-[45]"
-                      onClick$={() => (rememberMenuOpen.value = false)}
-                    />
-                    <span class="absolute left-0 bottom-full mb-2 w-56 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
-                      <button
-                        type="button"
-                        onClick$={rememberToFolder}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
-                      >
-                        Remember for this project
-                      </button>
-                      <button
-                        type="button"
-                        onClick$={() => {
-                          rememberMenuOpen.value = false;
-                          rememberReply();
-                        }}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
-                      >
-                        Remember for {props.message.aiLabel || 'this AI'}
-                      </button>
-                    </span>
-                  </>
-                )}
-              </span>
+              <LiquidMetalButton
+                onClick$={keepReply}
+                class="px-3 py-1 text-xs flex items-center"
+                title="Keep this exchange in memory, for your AIs to use later"
+                disabled={keepState.value === 'saving'}
+                data-testid="remember-reply"
+              >
+                <BsBookmarkIcon />
+                <span class="hidden md:inline">{keepState.value === 'saving' ? 'Keeping...' : 'Remember'}</span>
+              </LiquidMetalButton>
             )}
             {hasModelInfo && (
               <LiquidMetalButton
@@ -751,6 +645,15 @@ const ActionBar = component$<ActionBarProps>((props) => {
           </div>
         );
       })()}
+      {(kept.value || (keepState.value && keepState.value !== 'saving')) && (
+        <div class="px-4 pb-2">
+          {kept.value ? (
+            <KeptLine kept={kept} aiId={props.message.model} aiName={props.message.aiLabel || props.aiName} selection={keptSelection.value} />
+          ) : (
+            <span class="text-[11px] text-[var(--text-muted)]" data-testid="keep-failed">{keepState.value}</span>
+          )}
+        </div>
+      )}
       {openSection.value === 'given' && !!props.message.given && (
         <GivenPanel given={props.message.given} ai={props.message.aiLabel || 'This AI'} />
       )}
@@ -1048,17 +951,19 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       setTimeout(() => (captureState.value = ''), 2500);
     }
   });
+  const keptOwn = useSignal<Kept | null>(null);
+  const keepFailed = useSignal('');
   const rememberOwn = $(async () => {
     if (captureState.value === 'saving') return;
     captureState.value = 'saving';
+    const { keepMessage, keepError } = await import('../utils/memoryKeep');
     try {
-      const { addAuthoredNote } = await import('../utils/memory');
-      await addAuthoredNote(props.message.content.trim());
+      keptOwn.value = await keepMessage({ aiId: props.turnAiId ?? '', role: 'user', text: props.message.content, seq: props.message.sequence });
       captureState.value = 'saved-note';
     } catch (e) {
-      console.warn('[ChatMessage] remembering the message failed:', e);
+      keepFailed.value = keepError(e);
       captureState.value = 'error';
-      setTimeout(() => (captureState.value = ''), 2500);
+      setTimeout(() => (captureState.value = ''), 4000);
     }
   });
   const finalText = useSignal('');
@@ -1486,10 +1391,10 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
         <div class="mt-1 pr-1 text-[11px] text-[var(--text-muted)] flex items-center gap-2" data-testid="own-message-capture">
           {captureState.value === 'saved-rule' ? (
             <span data-testid="rule-kept">Kept as a rule - every AI follows it.</span>
-          ) : captureState.value === 'saved-note' ? (
-            <span>Remembered.</span>
+          ) : captureState.value === 'saved-note' && keptOwn.value ? (
+            <KeptLine kept={keptOwn} aiId={props.turnAiId ?? ''} aiName={props.turnAiName || ''} own />
           ) : captureState.value === 'error' ? (
-            <span>Could not save it just now.</span>
+            <span>{keepFailed.value || 'Could not save it just now.'}</span>
           ) : looksLikeInstruction(props.message.content) || offeredRule.value ? (
             <>
               <span data-testid="rule-offer">
@@ -1503,7 +1408,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
               </button>
             </>
           ) : (
-            <button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[var(--text-primary)] transition-opacity" title="Remember this for your AIs" onClick$={rememberOwn} disabled={captureState.value === 'saving'} data-testid="remember-own">
+            <button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[var(--text-primary)] transition-opacity" title="Keep this exchange in memory, for your AIs to use later" onClick$={rememberOwn} disabled={captureState.value === 'saving'} data-testid="remember-own">
               Remember
             </button>
           )}
@@ -1571,7 +1476,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-served={props.message.servedBy ?? ""}
       data-stopped={props.message.stopped ? "1" : undefined}
       {...(props.message.role === 'assistant' && props.message.content
-        ? { 'data-remember-aiid': props.message.model }
+        ? { 'data-remember-aiid': props.message.model, 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
         : {})}
     >
       {renderAvatarContent()}

@@ -24,12 +24,6 @@ import ExternalAccess from "../../components/ExternalAccess";
 import ConfirmModal from "../../components/ConfirmModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { helpTipsEnabled, setHelpTipsEnabled, resetHelpDismissals } from "../../utils/helpPrefs";
-import {
-  getRememberScope,
-  setRememberScope,
-  type RememberScope,
-  type RememberSurface,
-} from "../../utils/rememberText";
 import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import { downloadUpdateNow, setAutoUpdates, updateStatus, type WaitingUpdate } from "../../utils/updates";
 import {
@@ -219,60 +213,6 @@ const SettingToggle = component$<{
   );
 });
 
-/** Where one "Remember this" surface saves to: that AI only, or the shared
- *  notes every AI can draw on. Same two-option grid as the Routing pickers. */
-const RememberDestinationPicker = component$<{
-  title: string;
-  hint: string;
-  surface: RememberSurface;
-  scope: Signal<RememberScope>;
-}>((props) => {
-  const options: { id: RememberScope; label: string; hint: string }[] = [
-    {
-      id: "per-ai",
-      label: "That AI only",
-      hint: "Stays with the AI you were talking to - never surfaces anywhere else",
-    },
-    {
-      id: "global",
-      label: "All your AIs",
-      hint: "Saved to your shared notes - any AI can draw on it",
-    },
-  ];
-  return (
-    <div>
-      <h4 class="text-base font-semibold text-[var(--text-primary)]">{props.title}</h4>
-      <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">{props.hint}</p>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {options.map((opt) => (
-          <button
-            key={opt.id}
-            onClick$={() => {
-              props.scope.value = opt.id;
-              setRememberScope(props.surface, opt.id);
-            }}
-            class={`text-left rounded-xl p-3 border transition-colors ${
-              props.scope.value === opt.id
-                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
-                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
-            }`}
-            aria-pressed={props.scope.value === opt.id}
-          >
-            <div class="font-semibold text-sm">{opt.label}</div>
-            <div
-              class={`text-xs mt-1 ${
-                props.scope.value === opt.id ? "" : "text-[var(--text-secondary)]"
-              }`}
-            >
-              {opt.hint}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-});
-
 export default component$(() => {
   const nav = useNavigate();
   // Where the person came from (Add-ons > Components -> Engines, etc.): one
@@ -351,8 +291,6 @@ export default component$(() => {
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
   const terminalRunImmediately = useSignal(false);
   const currentModel = useSignal<string | null>(null);
-  const rememberScopeSelection = useSignal<RememberScope>("per-ai");
-  const rememberScopeReply = useSignal<RememberScope>("per-ai");
   // "Automatic learning" = NOT paused (the toggle reads positively; the
   // stored flag is the pause, shared with the Your Memory page).
   const memoryLearning = useSignal(true);
@@ -492,8 +430,6 @@ export default component$(() => {
       )
       .then((present) => (buildInstalled.value = present))
       .catch(() => (buildInstalled.value = false));
-    rememberScopeSelection.value = getRememberScope("selection");
-    rememberScopeReply.value = getRememberScope("reply");
     memoryLearning.value = !isMemoryPaused();
     loadedModelNow().then((m) => { currentModel.value = m; });
     const savedShare = localStorage.getItem("routingOnlineShare");
@@ -1075,7 +1011,7 @@ export default component$(() => {
                 </div>
               </section>
 
-              {/* Memory — what your AIs remember and where saves go. */}
+              {/* Memory - what your AIs remember. */}
               <section
                 id="settings-memory"
                 class="scroll-mt-4 bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]"
@@ -1084,30 +1020,12 @@ export default component$(() => {
                   Memory
                 </h2>
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
-                  Your AIs remember in two places: each AI's own memory (what it
-                  learned and what you gave it), and the shared notes on{" "}
-                  <a href="/your-memory/" class="text-[var(--text-link)] hover:underline">
-                    Your Memory
-                  </a>{" "}
-                  that every AI can draw on. These settings choose where each
-                  "Remember this" action saves to.
+                  What you keep with "Remember" is for all your AIs unless you
+                  choose otherwise on the line that appears when you keep it.
                 </p>
 
                 <div class="space-y-5">
-                  <RememberDestinationPicker
-                    title="Remembering highlighted text"
-                    hint='The "Remember" button that appears when you highlight part of a reply.'
-                    surface="selection"
-                    scope={rememberScopeSelection}
-                  />
-                  <RememberDestinationPicker
-                    title="Remembering whole replies"
-                    hint='The "Remember" button under a reply, and on transcript entries on the memory page.'
-                    surface="reply"
-                    scope={rememberScopeReply}
-                  />
-
-                  <div class="border-t border-[var(--border-subtle)] pt-4">
+                  <div>
                     <SettingToggle
                       title="Automatic learning"
                       checked={memoryLearning}
