@@ -19,6 +19,7 @@ import { MemoryMapBoard } from "../../components/memory/MemoryMapBoard";
 import { NotUsedList } from "../../components/memory/NotUsedList";
 import { RulesBoard } from "../../components/memory/RulesBoard";
 import { OpenBoard, openItems } from "../../components/memory/OpenBoard";
+import { chosenProject, chooseProject, MEMORY_PROJECT_EVENT, type MemoryProject } from "../../utils/memoryProject";
 import { SetAsideList } from "../../components/memory/SetAsideList";
 
 const TABS = [
@@ -38,6 +39,8 @@ export default component$(() => {
   /** The board that is open. The address can name one: `#recently`, `#open`, `#rules`. */
   const tab = useSignal<Tab>("map");
   const openCount = useSignal(0);
+  /** The project Memory is opened on, from the project's own menu. */
+  const project = useSignal<MemoryProject | null>(null);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
@@ -46,12 +49,16 @@ export default component$(() => {
       tab.value = TABS.some((t) => t.id === named) ? (named as Tab) : "map";
     };
     fromAddress();
+    const fromProject = () => (project.value = chosenProject());
+    fromProject();
+    window.addEventListener(MEMORY_PROJECT_EVENT, fromProject);
     const count = () => void openItems().then((list) => (openCount.value = list.length));
     count();
     window.addEventListener("hashchange", fromAddress);
     window.addEventListener("yoai-memory-changed", count);
     cleanup(() => {
       window.removeEventListener("hashchange", fromAddress);
+      window.removeEventListener(MEMORY_PROJECT_EVENT, fromProject);
       window.removeEventListener("yoai-memory-changed", count);
     });
   });
@@ -125,6 +132,15 @@ export default component$(() => {
             </p>
           )}
 
+          {project.value && (
+            <p class="mb-4 text-sm text-[var(--text-secondary)]" data-testid="memory-project-line">
+              Showing the project <span class="font-semibold text-[var(--text-primary)]">{project.value.name}</span>.{" "}
+              <button type="button" data-testid="memory-project-clear" class="text-[var(--text-link)] hover:underline" onClick$={() => chooseProject(null)}>
+                Show everywhere
+              </button>
+            </p>
+          )}
+
           {/* The four boards. */}
           <div class="flex flex-wrap gap-6 border-b border-[var(--border-subtle)] mb-6" role="tablist" data-testid="memory-tabs">
             {TABS.map((t) => (
@@ -154,7 +170,13 @@ export default component$(() => {
           {tab.value === "map" && (
             <>
               <div class="mb-8">
-                <MemoryMapBoard aiId={viewAi.value} />
+                <MemoryMapBoard
+                  aiId={viewAi.value}
+                  project={project.value ? { id: project.value.id, name: project.value.name } : null}
+                  onProject$={(id) => {
+                    if (!id && project.value) chooseProject(null);
+                  }}
+                />
               </div>
               <ProfileMemory readOnly={false} rules={false} />
               <div class="mt-6">
@@ -172,7 +194,7 @@ export default component$(() => {
             </>
           )}
           {tab.value === "open" && <OpenBoard />}
-          {tab.value === "rules" && <RulesBoard />}
+          {tab.value === "rules" && <RulesBoard project={project.value} />}
 
           <p class="mt-6 text-xs text-[var(--text-muted)]">
             <button type="button" data-testid="open-memory-update" onClick$={() => nav("/memory-update/")} class="underline hover:text-[var(--text-secondary)]">

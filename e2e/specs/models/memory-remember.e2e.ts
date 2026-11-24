@@ -173,8 +173,9 @@ describe("Remember keeps the exchange", () => {
     await browser.waitUntil(async () => (await $$('[data-testid="recently-row"]').length) >= 4, { timeout: 60_000, timeoutMsg: "Recently did not list the changes" });
     const rows = (await browser.execute(() => Array.from(document.querySelectorAll('[data-testid="recently-row"]')).map((r) => `${r.getAttribute("data-what")}: ${(r as HTMLElement).innerText.split(/\s+/).join(" ")}`))) as string[];
     console.log(`e2e: recently: ${JSON.stringify(rows)}`);
-    // Kept: the reply, the own message (undone), the selection, and the two said in the chat.
-    expect(rows.filter((r) => r.startsWith("kept:")).length).toBe(5);
+    // Kept: the reply, the later reply (undone), the selection in a reply, the
+    // selection in the person's own message, and the two said in the chat.
+    expect(rows.filter((r) => r.startsWith("kept:")).length).toBe(6);
     expect(rows.some((r) => r.startsWith("undone:"))).toBe(true);
     expect(rows.some((r) => r.includes("Kept by you"))).toBe(true);
     const line = await $('[data-testid="tidying-line"]');

@@ -17,7 +17,7 @@ import { UpdateNotices } from "../components/UpdateNotices";
 import { useProvideTurns } from "../contexts/TurnsContext";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
-import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
+import { openProjectMemory } from "../utils/memoryProject";
 import ConfirmModal from "../components/ConfirmModal";
 import LiquidMetalButton from "../components/LiquidMetalButton";
 import { Callout } from "../components/Callout";
@@ -304,6 +304,15 @@ export default component$(() => {
 
   const projectMemoryFolder = useSignal<string | null>(null);
   useContextProvider(ProjectMemoryContext, projectMemoryFolder);
+  // "Project memory" opens Memory with that project chosen.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const folder = track(() => projectMemoryFolder.value);
+    if (!folder) return;
+    projectMemoryFolder.value = null;
+    await openProjectMemory(folder);
+    await nav("/your-memory/");
+  });
 
   // UI-stall watchdog. CSS spinners animate on the compositor thread, so
   // the app can look alive while the main thread - which handles every
@@ -460,7 +469,6 @@ export default component$(() => {
           <UpdateNotices />
           <FirstModelIndicator />
           {/* Root-level so no route stacking context can bury it. */}
-          <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
           <ConfirmModal
             isOpen={identitySwitched.value && !identityCardDismissed.value}
             title="Your Flowsta Vault changed identity"

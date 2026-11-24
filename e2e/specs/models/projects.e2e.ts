@@ -186,25 +186,34 @@ describe("projects: the agent in a project", () => {
     });
   }
 
-  it("opens the project and shows its memory in the dialog", async function () {
+  it("opens the project, and Project memory opens Memory on it", async function () {
     if (!haveHelper) this.skip();
     this.timeout(300_000);
     await openProject("first");
     await shot("projects-open");
     await (await $('[data-testid="project-pill"]')).click();
     await (await $('[data-testid="open-project-memory"]')).click();
-    const dialog = await $('[data-testid="project-memory-dialog"]');
-    await dialog.waitForDisplayed({ timeout: 5_000 });
-    await shot("projects-memory-dialog-opening");
-    await timed("dialog: notes and count shown", 10_000, () =>
-      waitFor("the project memory dialog never finished reading", 10_000, async () => (await dialog.getAttribute("data-loading")) === "0"),
+    // "Project memory" opens Memory on this project: its name at the top,
+    // the Map's sentence about it, and its own rules on the Rules board.
+    const leaf = FOLDER.split("/").filter(Boolean).pop()!;
+    const line = await $('[data-testid="memory-project-line"]');
+    await line.waitForDisplayed({ timeout: 30_000 });
+    expect(await line.getText()).toContain(leaf);
+    await waitFor("the Map's sentence never named the project", 30_000, async () =>
+      ((await browser.execute(() => (document.querySelector('[data-testid="map-sentence"]') as HTMLElement | null)?.innerText ?? "")) as string).includes(` in ${leaf}:`),
     );
-    const status = await (await $('[data-testid="project-memory-status"]')).getText();
-    console.log(`e2e: dialog status "${status}"`);
-    expect(status).toMatch(/revisions? in your records/);
-    await shot("projects-memory-dialog");
-    // The backdrop closes it.
-    await browser.execute(() => (document.querySelector('[data-testid="project-memory-dialog"] > div') as HTMLElement | null)?.click());
+    await shot("projects-memory-map");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
+    const rules = await $('[data-testid="project-rules"]');
+    await rules.waitForDisplayed({ timeout: 30_000 });
+    expect(await rules.getText()).toContain(`Rules for ${leaf}`);
+    await shot("projects-memory-rules");
+    // "Show everywhere" leaves the project's view.
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-project-clear"]'));
+    await line.waitForExist({ reverse: true, timeout: 20_000 });
+    // Back to the chat, the project still open.
+    await browser.execute(() => history.back());
+    await waitForChat();
   });
 
   it("is given the project's rules in a new session", async function () {

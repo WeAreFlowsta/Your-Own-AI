@@ -5,7 +5,7 @@
  * same content is one press away as a list, and pressing a subject shows
  * what it holds.
  */
-import { component$, useSignal, useVisibleTask$, $, noSerialize, type NoSerialize } from '@builder.io/qwik';
+import { component$, useSignal, useVisibleTask$, $, noSerialize, type NoSerialize, type QRL } from '@builder.io/qwik';
 import LiquidMetalButton from '../LiquidMetalButton';
 import { ago, audienceWords, countWords, loadMap, renameSubject, type MapSubject, type MemoryMapData } from '../../utils/memoryMap';
 import type { MapHandle } from '../../utils/memoryMapDraw';
@@ -23,7 +23,7 @@ const PANEL_ITEMS = 6;
 
 /** `aiId`: the AI whose view is shown (its id on this device), chosen with
  *  the faces above the Map; absent or "you" for all the person's AIs. */
-export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
+export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string; name: string } | null; onProject$?: QRL<(id: string) => void> }>((props) => {
   const data = useSignal<MemoryMapData | null>(null);
   const failed = useSignal('');
   const ais = useSignal<Ai[]>([]);
@@ -54,6 +54,7 @@ export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
     const list = await getLocalCustomAis().catch(() => []);
     ais.value = list.filter((a) => a.status !== 'archived' && foundingOf(a)).map((a) => ({ id: a.id, name: a.name, founding: foundingOf(a) }));
     viewAi.value = ais.value.find((a) => a.id === props.aiId)?.founding ?? '';
+    viewProject.value = props.project?.id ?? '';
     await load();
     const again = () => void load();
     window.addEventListener('yoai-memory-changed', again);
@@ -67,6 +68,15 @@ export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
     const founding = ais.value.find((a) => a.id === id)?.founding ?? '';
     if (founding === viewAi.value) return;
     viewAi.value = founding;
+    void load();
+  });
+
+  // A project chosen from its own menu, or cleared, changes the view too.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const id = track(() => props.project?.id ?? '');
+    if (id === viewProject.value) return;
+    viewProject.value = id;
     void load();
   });
 
@@ -91,7 +101,7 @@ export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
   useVisibleTask$(({ track }) => {
     const [d, h] = [track(() => data.value), track(() => handle.value)];
     if (!d || !h) return;
-    const center = d.projects.find((p) => p.id === viewProject.value);
+    const center = d.projects.find((p) => p.id === viewProject.value) ?? (props.project && props.project.id === viewProject.value ? props.project : undefined);
     h.setData({ subjects: d.subjects, links: d.links, projects: d.projects, centerProject: center ? { id: center.id, name: center.name } : null });
     if (selected.value && !d.subjects.some((s) => s.id === selected.value)) selected.value = null;
   });
@@ -141,7 +151,10 @@ export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
   const subject = subjects.find((s) => s.id === selected.value) ?? null;
   const items = subjects.reduce((n, s) => n + s.items, 0);
   const aiName = ais.value.find((a) => a.founding === viewAi.value)?.name;
-  const projectName = d?.projects.find((p) => p.id === viewProject.value)?.name;
+  // The projects to choose from: those with something kept, and the one opened from its own menu.
+  const known = (d?.projects ?? []).map((p) => ({ id: p.id, name: p.name }));
+  const projects = props.project && !known.some((p) => p.id === props.project!.id) ? [...known, { id: props.project.id, name: props.project.name }] : known;
+  const projectName = projects.find((p) => p.id === viewProject.value)?.name;
   const who = aiName ? `What ${aiName} can use` : 'What your AIs can use';
   const sentence = `${who}${projectName ? ` in ${projectName}` : ''}: ${countWords(subjects.length, 'subject', 'subjects')}, ${countWords(items, 'item', 'items')}.`;
   const together = subject && d ? d.links.filter((l) => l.a === subject.id || l.b === subject.id).map((l) => subjects.find((s) => s.id === (l.a === subject.id ? l.b : l.a))?.name).filter(Boolean) : [];
@@ -155,17 +168,17 @@ export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
   return (
     <section data-testid="memory-map" data-subjects={subjects.length}>
       {/* Whose view is chosen with the faces above. The row of projects stays hidden until there is one. */}
-      {(d?.projects.length ?? 0) > 0 && (
+      {projects.length > 0 && (
         <div class="flex flex-col gap-2 mb-3">
           {(
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-xs text-[var(--text-secondary)]">Show</span>
               <div class={group}>
-                <button type="button" class={pill(!viewProject.value)} data-testid="map-view-project" data-project="" onClick$={() => ((viewProject.value = ''), load())}>
+                <button type="button" class={pill(!viewProject.value)} data-testid="map-view-project" data-project="" onClick$={() => ((viewProject.value = ''), props.onProject$?.(''), load())}>
                   Everywhere
                 </button>
-                {d!.projects.map((p) => (
-                  <button key={p.id} type="button" class={pill(viewProject.value === p.id)} data-testid="map-view-project" data-project={p.id} onClick$={() => ((viewProject.value = p.id), load())}>
+                {projects.map((p) => (
+                  <button key={p.id} type="button" class={pill(viewProject.value === p.id)} data-testid="map-view-project" data-project={p.id} onClick$={() => ((viewProject.value = p.id), props.onProject$?.(p.id), load())}>
                     {p.name}
                   </button>
                 ))}
