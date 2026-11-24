@@ -5,9 +5,10 @@
 import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
-const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
+// No run mark in these words: a random mark alone moves two sayings apart (0.675 measured).
+const SAID_RULE = "From now on, answer in one short sentence.";
 // This step is about the flow; how far apart two wordings may be is measured in memory-rule-offers.
-const SAID_RULE_AGAIN = "From now on, answer in one short sentence.";
+const SAID_RULE_AGAIN = "From now on, please answer in one short sentence.";
 const OTHER_RULE = "Never use tables in your replies.";
 const OTHER_RULE_AGAIN = "Never use tables in your replies, please.";
 
