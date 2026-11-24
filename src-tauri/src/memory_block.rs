@@ -552,6 +552,76 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
     Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction }
 }
 
+/// One thing memory holds to be true now, for the note after a question.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Held {
+    /// The sentence: what a replacement judgment wrote as true now, or the
+    /// item's own statement.
+    pub sentence: String,
+    /// When it became so (ms).
+    pub as_of: i64,
+    /// The person confirmed it.
+    pub confirmed: bool,
+}
+
+/// A state note holds at most this many items, each at least this close
+/// in meaning to the question, and at most this many characters.
+pub(crate) const NOTE_ITEMS: usize = 3;
+pub(crate) const NOTE_FLOOR: f32 = 0.55;
+const NOTE_CHARS: usize = 600;
+const NOT_CONFIRMED: &str = " (an AI's note, not confirmed by them)";
+
+/// The items a note is made from: the closest to the question over the
+/// floor, at most three, newest first. `near`: each candidate's index and
+/// its likeness to the question.
+pub(crate) fn note_items(held: &[Held], near: &[(usize, f32)]) -> Vec<Held> {
+    let mut close: Vec<(usize, f32)> = near.iter().copied().filter(|(i, s)| *s >= NOTE_FLOOR && *i < held.len()).collect();
+    close.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    close.truncate(NOTE_ITEMS);
+    let mut picked: Vec<Held> = close.into_iter().map(|(i, _)| held[i].clone()).collect();
+    picked.sort_by(|a, b| b.as_of.cmp(&a.as_of));
+    picked
+}
+
+/// The state note, placed right after the question: what memory holds to
+/// be true now, with the date of the newest. `mark_unconfirmed` says of an
+/// AI's own note that the person has not confirmed it. Never dropped for
+/// room: it is short by rule (later sentences give way, then the one that
+/// is left is cut).
+pub(crate) fn state_note(items: &[Held], mark_unconfirmed: bool) -> Option<String> {
+    let newest = items.iter().map(|i| i.as_of).max()?;
+    let sentence = |i: &Held| {
+        let mut s = collapse(&i.sentence);
+        if !s.ends_with(['.', '!', '?']) {
+            s.push('.');
+        }
+        if mark_unconfirmed && !i.confirmed {
+            s.push_str(NOT_CONFIRMED);
+        }
+        s
+    };
+    let mut said: Vec<String> = Vec::new();
+    for i in items {
+        let s = sentence(i);
+        if !said.is_empty() && said.iter().map(|x| x.chars().count() + 1).sum::<usize>() + s.chars().count() > NOTE_CHARS {
+            break;
+        }
+        said.push(s);
+    }
+    let mut body = said.join(" ");
+    if body.chars().count() > NOTE_CHARS {
+        body = body.chars().take(NOTE_CHARS).collect();
+    }
+    Some(format!("[From memory, the state record for this, current as of {}: {body} Anything older that disagrees is history.]", day(newest * 1000)))
+}
+
+/// Found exchanges that memory marks as replaced are left out of what is
+/// given: the exchange an item now replaced came from. Answers with what
+/// stays and what was left out, both in rank order.
+pub(crate) fn leave_out_replaced(found: Vec<Exchange>, replaced_sources: &[(i64, u32)]) -> (Vec<Exchange>, Vec<Exchange>) {
+    found.into_iter().partition(|e| !replaced_sources.contains(&(e.conversation, e.hit.seq)))
+}
+
 /// The person's turn as it is sent: the block, the question exactly as
 /// typed, and the state note, in that order (the order is measured).
 pub(crate) fn turn_text(before_question: Option<&str>, question: &str, after_question: Option<&str>) -> String {
@@ -870,6 +940,65 @@ mod tests {
         assert_eq!(turn_text(None, question, None), question);
         assert_eq!(turn_text(Some(""), question, Some("")), question);
         assert_eq!(turn_text(None, question, Some(note)), format!("{question}\n\n{note}"));
+    }
+
+    #[test]
+    fn note_text_matches_the_measured_form() {
+        let march_3 = 1_772_496_000_000i64; // 2026-03-03 00:00 UTC, ms
+        let one = [Held { sentence: "Free delivery starts at $60.".into(), as_of: march_3, confirmed: true }];
+        assert_eq!(
+            state_note(&one, true).unwrap(),
+            "[From memory, the state record for this, current as of 2026-03-03: Free delivery starts at $60. Anything older that disagrees is history.]"
+        );
+        assert_eq!(state_note(&one, false), state_note(&one, true), "a confirmed item reads the same either way");
+        assert_eq!(state_note(&[], true), None);
+        // Several: newest first as given, the date of the newest, a missing full stop added.
+        let two = [Held { sentence: "Free delivery starts at $60".into(), as_of: march_3, confirmed: true }, Held { sentence: "Orders under $60 keep the $6 fee.".into(), as_of: march_3 - 86_400_000, confirmed: true }];
+        assert_eq!(state_note(&two, true).unwrap(), "[From memory, the state record for this, current as of 2026-03-03: Free delivery starts at $60. Orders under $60 keep the $6 fee. Anything older that disagrees is history.]");
+        // After the question, never before it.
+        let turn = turn_text(None, "What is the free delivery threshold?", state_note(&one, true).as_deref());
+        assert!(turn.starts_with("What is the free delivery threshold?\n\n[From memory, the state record for this"));
+        // Short by rule.
+        let long: Vec<Held> = (0..3).map(|i| Held { sentence: format!("{i} {}", "word ".repeat(80)), as_of: march_3, confirmed: true }).collect();
+        let note = state_note(&long, true).unwrap();
+        assert!(note.chars().count() < 600 + 130, "{}", note.chars().count());
+        assert!(note.contains("0 word") && !note.contains("2 word"));
+    }
+
+    #[test]
+    fn an_unconfirmed_note_is_marked() {
+        let march_3 = 1_772_496_000_000i64;
+        let mixed = [Held { sentence: "Closed on Saturdays from March.".into(), as_of: march_3, confirmed: false }, Held { sentence: "Open 7:30 on weekdays.".into(), as_of: march_3 - 5, confirmed: true }];
+        assert_eq!(
+            state_note(&mixed, true).unwrap(),
+            "[From memory, the state record for this, current as of 2026-03-03: Closed on Saturdays from March. (an AI's note, not confirmed by them) Open 7:30 on weekdays. Anything older that disagrees is history.]"
+        );
+        assert!(!state_note(&mixed, false).unwrap().contains("not confirmed"), "the measured form has no mark");
+    }
+
+    #[test]
+    fn a_note_is_made_from_the_closest_items_newest_first() {
+        let held: Vec<Held> = (0..6).map(|i| Held { sentence: format!("Item {i}."), as_of: 1000 + i as i64, confirmed: true }).collect();
+        let near = [(0, 0.9), (1, 0.54), (2, 0.6), (3, 0.7), (4, 0.56), (5, 0.2), (9, 0.99)];
+        let picked: Vec<String> = note_items(&held, &near).into_iter().map(|h| h.sentence).collect();
+        assert_eq!(picked, vec!["Item 3.", "Item 2.", "Item 0."], "the three closest over the floor, newest first");
+        assert!(note_items(&held, &[(0, 0.5), (1, 0.3)]).is_empty(), "nothing close enough: no note");
+    }
+
+    #[test]
+    fn replaced_sources_are_left_out_and_reported() {
+        let old = Exchange { conversation: 111, title: "Delivery, January".into(), hit: person(0, "let's make delivery free over $40."), before: None, after: None, ..mill() };
+        let new = Exchange { conversation: 222, title: "Delivery, March".into(), hit: person(0, "raise the free delivery threshold to $60 from Monday."), before: None, after: None, ..mill() };
+        let (stay, left_out) = leave_out_replaced(vec![new.clone(), old.clone(), mill()], &[(111, 0)]);
+        assert_eq!(stay.iter().map(|e| e.conversation).collect::<Vec<_>>(), vec![222, mill().conversation]);
+        assert_eq!(left_out, vec![old]);
+        // The report says older, replaced exchanges were left out (the measured sentence).
+        let b = block(&stay, &About { replaced_left_out: !left_out.is_empty(), ..Default::default() }, 12, 42_000, None, Wording::measured());
+        assert!(b.text.contains("It returned the 2 dated exchange(s) below; older exchanges that memory has marked as replaced were left out."));
+        assert!(!b.text.contains("$40"));
+        // Nothing replaced among what was found: nothing is said of it.
+        let (stay, left_out) = leave_out_replaced(vec![new], &[(999, 4)]);
+        assert_eq!((stay.len(), left_out.len()), (1, 0));
     }
 
     #[test]

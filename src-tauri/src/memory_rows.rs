@@ -61,11 +61,16 @@ pub struct MemoryRow {
 /// rule - the same answer on every device). Deleted ids are dropped; rows
 /// another row `replaces` are dropped too. Pinned rules first, then newest.
 pub fn reduce(rows: Vec<MemoryRow>) -> Vec<MemoryRow> {
+    reduce_at(rows, now_ms())
+}
+
+/// `reduce`, with this device's clock given (so it can be tested).
+pub(crate) fn reduce_at(rows: Vec<MemoryRow>, now: i64) -> Vec<MemoryRow> {
     use std::collections::HashMap;
     let mut newest: HashMap<String, MemoryRow> = HashMap::new();
     for r in rows {
         match newest.get(&r.id) {
-            Some(cur) if !newer(&r, cur) => {}
+            Some(cur) if !wins(&r, cur, now) => {}
             _ => {
                 newest.insert(r.id.clone(), r);
             }
@@ -83,6 +88,38 @@ pub fn reduce(rows: Vec<MemoryRow>) -> Vec<MemoryRow> {
             .then(a.id.cmp(&b.id))
     });
     live
+}
+
+/// A stamp further ahead of this device's clock than this is a clock that
+/// is wrong, not a revision from the future: it is ordered as "now".
+const AHEAD_AT_MOST_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Does revision `a` stand over revision `b` of the same row? The later
+/// one does (`newer`), with two rules on top. A stamp more than a day
+/// ahead of this device's clock counts as now, so a device with a wrong
+/// clock cannot win every merge. And among revisions of one memory item,
+/// what the person confirmed is not overridden by a later revision that
+/// tidying made without knowing of it (on a device the confirmation had
+/// not reached): the person's stands, and tidying's becomes a question.
+fn wins(a: &MemoryRow, b: &MemoryRow, now: i64) -> bool {
+    let clamp = |r: &MemoryRow| r.updated_at.min(now.saturating_add(AHEAD_AT_MOST_MS).max(now));
+    let ahead = |r: &MemoryRow| r.updated_at > now.saturating_add(AHEAD_AT_MOST_MS);
+    let later = if ahead(a) || ahead(b) {
+        let stamp = |r: &MemoryRow| if ahead(r) { now } else { clamp(r) };
+        (stamp(a), a.deleted, revision_print(a)) > (stamp(b), b.deleted, revision_print(b))
+    } else {
+        newer(a, b)
+    };
+    if a.scope == crate::memory_items::SCOPE && !a.deleted && !b.deleted {
+        let (late, early) = if later { (a, b) } else { (b, a) };
+        if let (Some(l), Some(e)) = (crate::memory_items::meta_of(late), crate::memory_items::meta_of(early)) {
+            if l.state_by == "tidy" && e.confirmed.is_some() && l.confirmed != e.confirmed {
+                // The earlier, confirmed one stands.
+                return !later;
+            }
+        }
+    }
+    later
 }
 
 /// The later revision: by `updated_at`, a deletion over an edit at the same
@@ -1251,6 +1288,56 @@ mod tests {
         assert_eq!(b.value, "new words");
         assert!(b.embedding.is_none(), "the words changed: embed here");
         assert!(mine.iter().find(|f| f.id == "c").unwrap().embedding.is_none());
+    }
+
+    #[test]
+    fn a_person_revision_outranks_a_later_tidying_revision() {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{confirm, keep, meta_of, replace, Item, ItemState, ItemType, Keep};
+        let now = 1_772_000_000_000i64;
+        let (kept, _) = keep(&[], Keep { id: "it-1".into(), text: "Use the small plan.", item_type: ItemType::Decision, ptr: Ptr { c: 1, s: 0, t: 1, a: 0, b: 5 }, as_of: now - 9000, by: "ai:juno", audience: None, kind: "exchange", why: "settled", quote: None, subject: None, now: now - 5000 }).ok().unwrap();
+        let item = |row: &MemoryRow| Item { row: row.clone(), meta: meta_of(row).unwrap() };
+        // On the laptop the person confirms it; on the desktop, which has
+        // not seen that yet, tidying replaces it a moment later.
+        let (confirmed, _) = confirm(&item(&kept), now - 3000);
+        let (tidied, _) = replace(&item(&kept), "it-2", None, "tidy", now - 1000);
+        for order in [vec![kept.clone(), confirmed.clone(), tidied.clone()], vec![tidied.clone(), kept.clone(), confirmed.clone()], vec![confirmed.clone(), tidied.clone(), kept.clone()]] {
+            let reduced = reduce_at(order, now);
+            let m = meta_of(&reduced[0]).unwrap();
+            assert_eq!((reduced.len(), m.state, m.confirmed.is_some()), (1, ItemState::Current, true), "what the person confirmed stands");
+        }
+        // Tidying that knew of the confirmation (its revision carries it) is an ordinary later revision.
+        let (knowing, _) = replace(&item(&confirmed), "it-2", None, "tidy", now - 500);
+        assert_eq!(meta_of(&reduce_at(vec![confirmed.clone(), knowing], now)[0]).unwrap().state, ItemState::Replaced);
+        // An unconfirmed item is replaced by tidying as usual.
+        assert_eq!(meta_of(&reduce_at(vec![kept.clone(), tidied.clone()], now)[0]).unwrap().state, ItemState::Replaced);
+        // And the person's own later change always stands.
+        let (replaced_by_hand, _) = replace(&item(&confirmed), "it-2", None, "person", now - 100);
+        assert_eq!(meta_of(&reduce_at(vec![tidied, confirmed, replaced_by_hand], now)[0]).unwrap().state, ItemState::Replaced);
+        // Rows that are not items are untouched by the rule.
+        let (a, b) = (row("x", "old", now - 10), row("x", "new", now - 5));
+        assert_eq!(reduce_at(vec![a, b], now)[0].text, "new");
+    }
+
+    #[test]
+    fn a_future_stamp_does_not_win() {
+        let now = 1_772_000_000_000i64;
+        let day = 24 * 60 * 60 * 1000i64;
+        // A device whose clock is a year ahead wrote "wrong clock" last week
+        // (stamped next year); this device writes "right" today.
+        let ahead = row("x", "from the wrong clock", now + 365 * day);
+        let today = row("x", "right", now);
+        // The far stamp is ordered as this device's "now": anything written
+        // after now stands over it, in either order of arrival.
+        let later = row("x", "written after it", now + 2);
+        assert_eq!(reduce_at(vec![ahead.clone(), later.clone()], now + 1)[0].text, "written after it");
+        assert_eq!(reduce_at(vec![later, ahead.clone()], now + 1)[0].text, "written after it");
+        // Without the rule it would have won for a year.
+        assert_eq!(reduce_at(vec![ahead.clone(), today.clone()], now + 366 * day)[0].text, "from the wrong clock");
+        // Within a day ahead (ordinary clock drift) the stamp is believed.
+        let drift = row("x", "an hour ahead", now + 3_600_000);
+        assert_eq!(reduce_at(vec![today.clone(), drift], now)[0].text, "an hour ahead");
+        let _ = today;
     }
 
     #[test]
