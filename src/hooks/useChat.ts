@@ -8,6 +8,7 @@
  * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
+import { hearInstruction } from "../utils/ruleOffers";
 import { whereWords } from "../utils/givenLine";
 import { invoke } from "@tauri-apps/api/core";
 import { firstModelInFlight, setHeldTurn } from "../utils/firstModel";
@@ -1446,6 +1447,10 @@ export function useChat(props: UseChatProps) {
           return;
         }
       }
+
+      // An instruction about how to work is noted; the second time it is
+      // given, the offer to keep it as a rule shows under the message.
+      void hearInstruction(userInput, state.conversationHash, selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null);
 
       // Cancel any ongoing request
       if (abortControllerRef.value) {

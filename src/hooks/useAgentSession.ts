@@ -15,6 +15,7 @@
  * goes through the agent session instead of the direct model call.
  */
 
+import { hearInstruction, setOpenProject } from "../utils/ruleOffers";
 import { skillNameFromPath } from "../utils/skills";
 import { maskText } from "../utils/secretMask";
 import { invoke } from "@tauri-apps/api/core";
@@ -849,6 +850,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // The person's own words are named beside the whole prompt: memory
       // searches for them, not for the guidance joined in front.
       lastTyped.value = text;
+      const cfg = props.selectedAi.value.aiConfig;
+      void hearInstruction(text, null, cfg?.foundingKey ?? cfg?.agentPubKey ?? null);
       await invokeTauri("send_agent_prompt", { text: wire, question: text });
       uiLog("[send] agent: the prompt is with the program");
     } catch (err) {
@@ -1649,9 +1652,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
         // The project's own memory rows (rules, commands, locations) by its
         // id - the same project on every machine (the memory design §13.1).
         projectId.value = "";
+        setOpenProject("");
         invoke<string>("project_identity_for", { folder })
           .then(async (pid) => {
             projectId.value = pid;
+            setOpenProject(pid);
           })
           .catch(() => { /* older backend */ });
         invoke<{ content?: string }>("read_file_for_context", { filePath: `${folder.replace(/[\\/]+$/, "")}/AGENTS.md` })

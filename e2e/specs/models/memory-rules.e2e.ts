@@ -6,6 +6,9 @@ import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
+const SAID_RULE_AGAIN = "Please answer in one short sentence from now on.";
+const OTHER_RULE = "Never use tables in your replies.";
+const OTHER_RULE_AGAIN = "Do not use tables in your replies, ever.";
 
 async function mcpCall(name: string, args: Record<string, unknown>, headers: Record<string, string> = {}) {
   const r = await fetch("http://127.0.0.1:11435/mcp", {
@@ -78,32 +81,54 @@ describe("memory rules", () => {
     await shot("memory-rule-rail-line");
   });
 
-  it("offers to keep an instruction said in chat as a rule, and the remember tool revises instead of duplicating", async () => {
+  it("offers a rule the second time an instruction is given, never the first, and No stays No", async () => {
     await waitForChat();
-    // Said in chat, instruction-shaped: one line under the message offers.
+    const offers = () => browser.execute(() => document.querySelectorAll('[data-testid="rule-offer"]').length) as Promise<number>;
+    // The first time: noted, nothing offered, no rule made.
     await ask(SAID_RULE);
+    await waitForReplyDone().catch(() => undefined);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+    let rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(false);
+    // The second time, in other words: one line under the message offers.
+    await ask(SAID_RULE_AGAIN);
     const offer = await $('[data-testid="rule-offer"]');
-    await offer.waitForDisplayed({ timeout: 15_000 });
+    await offer.waitForDisplayed({ timeout: 60_000 });
+    expect(await offer.getText()).toContain("You have asked for this twice. Keep it as a rule?");
     await shot("memory-rule-offer");
+    // Left unanswered, nothing is held up and no rule exists.
+    await waitForReplyDone().catch(() => undefined);
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE_AGAIN)).toBe(false);
     await (await $('[data-testid="rule-offer-keep"]')).click();
-    await (await $('[data-testid="rule-kept"]')).waitForDisplayed({ timeout: 30_000 });
+    const kept = await $('[data-testid="rule-kept"]');
+    await kept.waitForDisplayed({ timeout: 30_000 });
+    expect(await kept.getText()).toContain("Every AI is given it");
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE_AGAIN)).toBe(true);
+    // Given a third time: it is a rule already, nothing is offered.
+    await ask(SAID_RULE);
     await waitForReplyDone().catch(() => undefined);
-    const rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
-    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(true);
-    // A preference that is NOT instruction-shaped: the extractor finds it a
-    // few seconds after the turn and the same line offers it, in the
-    // extractor's wording.
-    const PREF = `I'd rather you kept answers short since I read on my phone (pref ${Date.now().toString(36)})`;
-    await ask(PREF);
-    await browser.waitUntil(async () => {
-      const offers = await $$('[data-testid="rule-offer"]');
-      for (const o of offers) if ((await o.getText()).includes('"')) return true;
-      return false;
-    }, { timeout: 120_000, timeoutMsg: "the extractor's rule offer never appeared under the preference" });
-    const texts2 = await browser.execute(() => [...document.querySelectorAll('[data-testid="rule-offer"]')].map((n) => (n as HTMLElement).innerText));
-    console.log(`e2e: offers ${JSON.stringify(texts2)}`);
-    expect(texts2.some((t: string) => t.includes('"'))).toBe(true);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+
+    // Another instruction, twice, answered No: a third time brings no offer.
+    await ask(OTHER_RULE);
     await waitForReplyDone().catch(() => undefined);
+    await ask(OTHER_RULE_AGAIN);
+    await (await $('[data-testid="rule-offer"]')).waitForDisplayed({ timeout: 60_000 });
+    await (await $('[data-testid="rule-offer-no"]')).click();
+    await browser.waitUntil(async () => (await offers()) === 0, { timeout: 20_000, timeoutMsg: "the offer stayed after No" });
+    await waitForReplyDone().catch(() => undefined);
+    await ask(OTHER_RULE);
+    await waitForReplyDone().catch(() => undefined);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+    expect(await invoke<string[]>("memory_rule_offers_declined")).toContain(OTHER_RULE_AGAIN);
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && /tables/.test(r.text))).toBe(false);
+    await shot("memory-rule-declined");
     // The remember tool: said twice with new words, one row with the newer text.
     const first = await mcpCall("remember", { text: "Run npm test before every commit (e2e)", kind: "command" });
     console.log(`e2e: remember 1 -> ${JSON.stringify(first.text)}`);
@@ -202,7 +227,7 @@ describe("memory rules", () => {
     expect(after.some((r) => r.text === RULE)).toBe(false);
     await shot("memory-rule-removed");
     // Tidy the rule kept from chat the same way.
-    const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE);
+    const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE_AGAIN);
     if (said) await invoke("save_memory_row", { agentKey: null, row: { ...said, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 

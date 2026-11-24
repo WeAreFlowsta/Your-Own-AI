@@ -23,8 +23,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { givenLineWords, type Sent } from '../utils/givenLine';
 import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
-import { KEPT_EVENT, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
-import { looksLikeInstruction } from '../utils/memory';
+import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
+import { answerOffer, openProjectId, ruleKeptWords, type RuleFor } from '../utils/ruleOffers';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
 
@@ -936,27 +936,54 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     window.addEventListener('rule-offer', onOffer);
     cleanup(() => window.removeEventListener('rule-offer', onOffer));
   });
-  const keepAsRule = $(async () => {
+  /** Whom the rule just kept is for. */
+  const ruleFor = useSignal<RuleFor>('all');
+  /** A project is open: the offer has a fourth answer. */
+  const inProject = useSignal(false);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => offeredRule.value);
+    inProject.value = !!offeredRule.value && !!openProjectId();
+  });
+  const keepAsRule = $(async (whom: RuleFor) => {
     if (captureState.value === 'saving') return;
     captureState.value = 'saving';
     try {
-      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope }, { normalizeRuleText, clearRuleOffer }] = await Promise.all([
+      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope, aiScope, projectScope }, { normalizeRuleText, clearRuleOffer }] = await Promise.all([
         import('../utils/memoryRows'),
         import('../utils/memory'),
       ]);
-      // The extractor's wording when it offered one, else the message as said.
       const text = (offeredRule.value ?? props.message.content).trim();
+      let scope = personScope;
+      if (whom === 'ai') {
+        const { founding } = await keysOf(props.turnAiId ?? '');
+        if (!founding) throw new Error('this AI has no key yet');
+        scope = aiScope(founding);
+      } else if (whom === 'project') {
+        const project = openProjectId();
+        if (!project) throw new Error('no project is open');
+        scope = projectScope(project);
+      }
       clearRuleOffer(props.message.content);
-      const same = (await listMemoryRowsCached(personScope).catch(() => [])).find(
+      const same = (await listMemoryRowsCached(scope).catch(() => [])).find(
         (r) => r.kind === 'rule' && normalizeRuleText(r.text) === normalizeRuleText(text),
       );
-      if (!same) await saveMemoryRow(newRow(personScope, 'rule', text, { pinned: true }));
+      if (!same) await saveMemoryRow(newRow(scope, 'rule', text, { pinned: true }));
+      void answerOffer(text, 'kept');
+      ruleFor.value = whom;
       captureState.value = 'saved-rule';
     } catch (e) {
       console.warn('[ChatMessage] keeping the rule failed:', e);
       captureState.value = 'error';
       setTimeout(() => (captureState.value = ''), 2500);
     }
+  });
+  const declineRule = $(async () => {
+    const text = (offeredRule.value ?? props.message.content).trim();
+    const { clearRuleOffer } = await import('../utils/memory');
+    clearRuleOffer(props.message.content);
+    offeredRule.value = null;
+    void answerOffer(text, 'declined');
   });
   const keptOwn = useSignal<Kept | null>(null);
   const keepFailed = useSignal('');
@@ -1411,21 +1438,29 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       {props.message.content && captureState.value !== 'dismissed' && (
         <div class="mt-1 pr-1 text-[11px] text-[var(--text-muted)] flex items-center gap-2" data-testid="own-message-capture">
           {captureState.value === 'saved-rule' ? (
-            <span data-testid="rule-kept">Kept as a rule - every AI follows it.</span>
+            <span data-testid="rule-kept" data-for={ruleFor.value}>{ruleKeptWords(ruleFor.value, props.turnAiName || '')}</span>
           ) : captureState.value === 'saved-note' && keptOwn.value ? (
             <KeptLine kept={keptOwn} aiId={props.turnAiId ?? ''} aiName={props.turnAiName || ''} own />
           ) : captureState.value === 'error' ? (
             <span>{keepFailed.value || 'Could not save it just now.'}</span>
-          ) : looksLikeInstruction(props.message.content) || offeredRule.value ? (
+          ) : offeredRule.value ? (
             <>
-              <span data-testid="rule-offer">
-                {offeredRule.value && !looksLikeInstruction(props.message.content) ? `Keep this as a rule? "${offeredRule.value}"` : 'Keep this as a rule?'}
-              </span>
-              <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={keepAsRule} disabled={captureState.value === 'saving'}>
-                {captureState.value === 'saving' ? 'Keeping…' : 'Keep'}
+              <span data-testid="rule-offer">You have asked for this twice. Keep it as a rule?</span>
+              {props.turnAiId && (
+                <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-ai" onClick$={() => keepAsRule('ai')} disabled={captureState.value === 'saving'}>
+                  Just {props.turnAiName || 'this AI'}
+                </button>
+              )}
+              <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={() => keepAsRule('all')} disabled={captureState.value === 'saving'}>
+                Every AI
               </button>
-              <button type="button" class="hover:text-[var(--text-primary)]" onClick$={() => (captureState.value = 'dismissed')}>
-                Not now
+              {inProject.value && (
+                <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-project" onClick$={() => keepAsRule('project')} disabled={captureState.value === 'saving'}>
+                  This project
+                </button>
+              )}
+              <button type="button" class="hover:text-[var(--text-primary)]" data-testid="rule-offer-no" onClick$={declineRule}>
+                No
               </button>
             </>
           ) : (

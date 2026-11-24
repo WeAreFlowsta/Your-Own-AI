@@ -90,9 +90,13 @@ describe("what an exchange settled is kept in idle time", () => {
     expect(report.ran).toBe(false);
     expect(report.whyNot).toBe("keeping is turned off");
     expect((await items()).length).toBe(before);
+    // The turn's records can land a few seconds after the reply shows;
+    // they are written while keeping is still off.
+    await browser.pause(8000);
     await invoke("memory_tidy_set", { off: false });
     // What waited while it was off is not looked at afterward.
     const after = await pass();
+    console.log(`e2e: keeping pass after turning it on again: ${JSON.stringify(after)}`);
     expect(after.ran).toBe(false);
   });
 });

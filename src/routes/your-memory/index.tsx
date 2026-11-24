@@ -15,6 +15,7 @@ import ProfileMemory from "../../components/ProfileMemory";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
 import MemoryOwners from "../../components/MemoryOwners";
 import { RecentlyBoard } from "../../components/memory/RecentlyBoard";
+import { DeclinedOffers } from "../../components/memory/DeclinedOffers";
 import { SetAsideList } from "../../components/memory/SetAsideList";
 
 export default component$(() => {
@@ -71,6 +72,10 @@ export default component$(() => {
 
           <div class="mt-6">
             <SetAsideList />
+          </div>
+
+          <div class="mt-6">
+            <DeclinedOffers />
           </div>
 
           <ImportHistoryCard />
