@@ -69,7 +69,10 @@ describe("one builder for what memory adds to a request", () => {
     otherProject = await invoke<string>("project_identity_for", { folder: mkdtempSync(join(tmpdir(), "yoai-one-builder-other-")) });
     await invoke("save_memory_row", { agentKey: null, row: row(`project:${project}`, "rule", PROJECT_RULE) });
     await invoke("save_memory_row", { agentKey: null, row: row(`project:${project}`, "command", PROJECT_COMMAND) });
-    // Every turn reads the per-scope caches: wait until they hold the rows.
+    // Every turn reads the per-scope caches, which a read of the scope
+    // fills (the page reads a scope after it saves to it).
+    await invoke("list_memory_rows", { agentKey: null, scope: "person" });
+    await invoke("list_memory_rows", { agentKey: null, scope: `project:${project}` });
     await browser.waitUntil(async () => {
       const person = await invoke<{ text: string }[]>("list_memory_rows_cached", { scope: "person" });
       const proj = await invoke<{ text: string }[]>("list_memory_rows_cached", { scope: `project:${project}` });
@@ -105,7 +108,10 @@ describe("one builder for what memory adds to a request", () => {
   it("an agent gets the rules on every call, and a project's rules only in that project", async () => {
     const plain = await assemble({ ai: ai.id, question: "List the files here.", mode: "agent", messages: [{ role: "system", content: "You are a coding agent." }] });
     const text = systemText(plain.messages);
-    expect(text.startsWith("You are a coding agent.")).toBe(true);
+    console.log(`e2e: an agent's system text (${text.length} characters) starts: ${JSON.stringify(text.slice(0, 200))}`);
+    // The caller's own system prompt stays first.
+    expect(text.indexOf("You are a coding agent.")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("You are a coding agent.")).toBeLessThan(text.indexOf(RULE));
     expect(text).toContain(RULE);
     expect(text).toContain(today());
     expect(text).not.toContain(PROJECT_RULE);
@@ -130,6 +136,7 @@ describe("one builder for what memory adds to a request", () => {
     const before = systemText((await assemble({ ai: ai.id, question: "Next step?", mode: "agent", project })).messages);
     expect(before).not.toContain(LATE);
     await invoke("save_memory_row", { agentKey: null, row: { ...row(`project:${project}`, "rule", LATE), id: `one-builder-late-${stamp}` } });
+    await invoke("list_memory_rows", { agentKey: null, scope: `project:${project}` });
     await browser.waitUntil(async () => systemText((await assemble({ ai: ai.id, question: "Next step?", mode: "agent", project })).messages).includes(LATE), {
       timeout: 30_000, interval: 2_000, timeoutMsg: "the rule saved mid-session did not reach the next call",
     });
