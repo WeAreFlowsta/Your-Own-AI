@@ -14,6 +14,17 @@ async function pass(): Promise<any> {
   return answer.report;
 }
 
+/** A pass once the turn's records have landed and its exchange waits:
+ *  they can lag the reply by a few seconds. */
+async function passWhenQueued(): Promise<Awaited<ReturnType<typeof pass>>> {
+  let report = await pass();
+  for (let i = 0; i < 10 && !report.ran && report.whyNot === "no new exchange waits"; i++) {
+    await browser.pause(3000);
+    report = await pass();
+  }
+  return report;
+}
+
 type Item = { id: string; text: string; savedBy: string; item: { state: string; confirmed?: unknown; audience?: { kind: string }; source?: { kind: string; why?: string; quote?: string | null; ptr?: { c: number; s: number } | null } | null } };
 const items = () => invoke<Item[]>("memory_items");
 const current = async () => (await items()).filter((i) => i.item.state === "current" || i.item.state === "open");
@@ -24,7 +35,7 @@ describe("what an exchange settled is kept in idle time", () => {
     await ask("We have decided: from March 9 the bakery is closed on Mondays, because Monday sales do not cover the staff. Please confirm in one short sentence.");
     await waitForReplyDone();
     expect((await current()).length).toBe(0);
-    const report = await pass();
+    const report = await passWhenQueued();
     console.log(`e2e: keeping pass: ${JSON.stringify(report)}`);
     expect(report.ran).toBe(true);
     expect(report.lookedAt).toBe(1);

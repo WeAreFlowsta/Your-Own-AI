@@ -77,7 +77,11 @@ export const RecentlyBoard = component$(() => {
     // A change made elsewhere on the page (a keep, an undo) shows at once.
     const again = () => void load().catch(() => {});
     window.addEventListener('focus', again);
-    cleanup(() => window.removeEventListener('focus', again));
+    window.addEventListener('yoai-memory-changed', again);
+    cleanup(() => {
+      window.removeEventListener('focus', again);
+      window.removeEventListener('yoai-memory-changed', again);
+    });
   });
 
   const undo = $(async (id: string) => {

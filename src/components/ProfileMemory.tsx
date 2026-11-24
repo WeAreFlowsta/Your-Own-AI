@@ -40,6 +40,8 @@ import {
   embedBareNotes,
   type Fact,
 } from "../utils/memory";
+import { invoke } from "@tauri-apps/api/core";
+import { updateReport } from "../utils/memoryUpdate";
 import { saveMemoryRow, newRow, personScope } from "../utils/memoryRows";
 import MemoryRowsPanel from "./MemoryRowsPanel";
 
@@ -213,6 +215,22 @@ export default component$<ProfileMemoryProps>(
           rulesRefresh.value++;
         } catch (e) {
           console.warn("[Memory] saving the rule failed:", e);
+        }
+        return;
+      }
+      // After the update, what you write about yourself is kept as a memory
+      // item of yours: given to your AIs as you wrote it, listed in
+      // Recently with Undo. (Your name keeps its own place.)
+      if (addPredicate.value !== "name_is" && (await updateReport())) {
+        const label = RELATION_OPTIONS.find((o) => o.predicate === addPredicate.value)?.label ?? "";
+        const text = addPredicate.value === "note" ? val : `${label}: ${val}`;
+        try {
+          await invoke("memory_keep_words", { text });
+          addValue.value = "";
+          showAdd.value = false;
+          window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
+        } catch (e) {
+          console.warn("[Memory] keeping it failed:", e);
         }
         return;
       }

@@ -896,6 +896,7 @@ pub fn run() {
             memory_items::memory_items,
             memory_items::memory_keep,
             memory_items::memory_item_change,
+            memory_items::memory_keep_words,
             memory_items::memory_changes,
             memory_items::memory_undo,
             memory_items::memory_not_replaced,

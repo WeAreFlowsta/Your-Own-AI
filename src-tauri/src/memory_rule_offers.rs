@@ -138,6 +138,11 @@ pub(crate) fn decide(text: &str, vec: &[f32], from: (&str, i64), heard: &[Heard]
     }
 }
 
+/// How close the nearest instruction heard before is, the message itself left out.
+pub(crate) fn closest(vec: &[f32], from: (&str, i64), heard: &[Heard]) -> Option<f32> {
+    heard.iter().filter(|h| !(h.conversation == from.0 && h.at == from.1)).map(|h| cosine(vec, &unpack(&h.vec))).fold(None, |m: Option<f32>, c| Some(m.map_or(c, |m| m.max(c))))
+}
+
 /// The heard rows that no longer fit, as rows marked deleted.
 fn over(rows: &[MemoryRow], now: i64) -> Vec<MemoryRow> {
     let mut held: Vec<&MemoryRow> = rows.iter().filter(|r| !r.deleted && r.structured.as_ref().and_then(|s| s.get("sys")).and_then(|s| s.as_str()) == Some("rule_heard")).collect();
@@ -173,6 +178,8 @@ pub struct HeardAnswer {
     pub earlier: Option<String>,
     /// `first` | `offer` | `answered` | `is_a_rule` | `not_measured`.
     pub why: &'static str,
+    /// How close the nearest instruction heard before is (1 = the same).
+    pub closest: Option<f32>,
 }
 
 /// An instruction was given: note it, and say whether this is the second
@@ -192,6 +199,7 @@ pub async fn memory_rule_heard(app: tauri::AppHandle, input: HeardInput) -> Resu
     let conversation = input.conversation.unwrap_or_default();
     let at = input.at.unwrap_or_else(now_ms);
     let verdict = decide(&text, &vec, (&conversation, at), &heard(&rows), &answered(&rows), &input.rules);
+    let near = closest(&vec, (&conversation, at), &heard(&rows));
     if matches!(verdict, Verdict::First | Verdict::Offer { .. }) {
         let h = Heard { text: text.clone(), vec: pack(&vec), at, conversation, answer: None };
         crate::memory_rows::save_and_cache(&app, heard_row(&h)).await?;
@@ -200,10 +208,10 @@ pub async fn memory_rule_heard(app: tauri::AppHandle, input: HeardInput) -> Resu
         }
     }
     Ok(match verdict {
-        Verdict::First => HeardAnswer { why: "first", ..Default::default() },
-        Verdict::Offer { earlier } => HeardAnswer { offer: true, earlier: Some(earlier), why: "offer" },
-        Verdict::Answered => HeardAnswer { why: "answered", ..Default::default() },
-        Verdict::IsARule => HeardAnswer { why: "is_a_rule", ..Default::default() },
+        Verdict::First => HeardAnswer { why: "first", closest: near, ..Default::default() },
+        Verdict::Offer { earlier } => HeardAnswer { offer: true, earlier: Some(earlier), why: "offer", closest: near },
+        Verdict::Answered => HeardAnswer { why: "answered", closest: near, ..Default::default() },
+        Verdict::IsARule => HeardAnswer { why: "is_a_rule", closest: near, ..Default::default() },
     })
 }
 

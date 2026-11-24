@@ -347,6 +347,49 @@ pub(crate) fn keep_set_aside(item: &Item, now: i64) -> Option<(MemoryRow, Change
     Some(changed(item, None, meta, What::Kept, "person", now))
 }
 
+/// Words the person wrote on the Memory page, about themselves: an item
+/// that is theirs from the start, current, confirmed, for all their AIs,
+/// under "About you". No exchange stands behind it.
+pub(crate) fn keep_words(id: String, text: &str, now: i64) -> (MemoryRow, Change) {
+    let meta = ItemMeta {
+        v: 1,
+        item_type: ItemType::AboutPerson,
+        state: ItemState::Current,
+        replaced_by: None,
+        now: None,
+        reason: None,
+        waiting_on: None,
+        state_at: now,
+        state_by: "person".into(),
+        confirmed: Some(Confirmed { at: now, how: "kept".into() }),
+        corrected_from: None,
+        subject: Some(crate::memory_subjects::ABOUT_YOU.to_string()),
+        audience: Audience::All,
+        source: Source { kind: "note".into(), ptr: None, quote: None, doc: None, why: "pressed".into(), for_ai: None },
+        last_came_up: None,
+        more: Default::default(),
+    };
+    let row = MemoryRow {
+        id: id.clone(),
+        scope: SCOPE.to_string(),
+        kind: "fact".to_string(),
+        text: text.trim().to_string(),
+        structured: Some(serde_json::json!({ "item": meta })),
+        as_of: now,
+        valid_to: None,
+        saved_by: "person".to_string(),
+        provenance: "authored".to_string(),
+        pinned: false,
+        topics: Vec::new(),
+        replaces: Vec::new(),
+        deleted: false,
+        updated_at: now,
+        action_hash: None,
+    };
+    let change = Change { id: format!("chg-{now}-{id}"), at: now, what: What::Kept, items: vec![id], by: "person".into(), undo: Undo::Forget, device: None };
+    (row, change)
+}
+
 /// The person corrects an item's words: theirs now, and confirmed.
 pub(crate) fn correct(item: &Item, text: &str, now: i64) -> (MemoryRow, Change) {
     let meta = ItemMeta {
@@ -754,6 +797,31 @@ async fn place_of(app: &tauri::AppHandle, input: &KeepMessageInput) -> Result<Pt
 /// Remember, pressed on a message (or on words selected in it): the
 /// exchange is kept as an item that points at it. A second press answers
 /// with the item that already holds it.
+/// The person wrote something about themselves on the Memory page.
+/// The same words kept before are not kept twice.
+#[tauri::command]
+pub async fn memory_keep_words(app: tauri::AppHandle, text: String) -> Result<KeptAnswer, String> {
+    // What is kept is kept without its secrets.
+    let text = crate::secret_mask::hand_on(text.trim()).text;
+    if text.is_empty() {
+        return Err("there is nothing to keep".into());
+    }
+    let key = data_key(&app)?;
+    let plain = |t: &str| t.trim().trim_end_matches('.').to_lowercase();
+    if let Some(had) = held(&app, &key).into_iter().find(|i| i.meta.state == ItemState::Current && i.meta.source.kind == "note" && plain(&i.row.text) == plain(&text)) {
+        return Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true });
+    }
+    let id = {
+        use rand::Rng as _;
+        format!("it-{:016x}{:016x}", rand::thread_rng().gen::<u64>(), rand::thread_rng().gen::<u64>())
+    };
+    let (row, change) = keep_words(id, &text, now_ms());
+    let change_id = change.id.clone();
+    let item = save(&app, &key, row, change).await?;
+    crate::memory_tidying::kept(&app, &item.id);
+    Ok(KeptAnswer { item, change: Some(change_id), already: false })
+}
+
 #[tauri::command]
 pub async fn memory_keep_message(app: tauri::AppHandle, input: KeepMessageInput) -> Result<KeptAnswer, String> {
     let text = words_to_keep(&input.text, input.selection.as_deref());
@@ -1258,5 +1326,18 @@ mod tests {
         assert_eq!(ids(&merged_log(mine.clone(), theirs.clone(), 10)), vec!["d", "c", "b", "a"]);
         assert_eq!(ids(&merged_log(mine.clone(), theirs, 2)), vec!["d", "c"], "the newest are the ones held");
         assert_eq!(ids(&merged_log(mine.clone(), vec![], 10)), ids(&mine));
+    }
+
+    #[test]
+    fn words_the_person_wrote_about_themselves_are_theirs_and_are_given() {
+        let (row, change) = keep_words("it-w".into(), "  Vegetarian since 2019.  ", 5_000);
+        let item = items(&[row]).pop().expect("an item");
+        assert_eq!(item.row.text, "Vegetarian since 2019.");
+        assert_eq!((item.meta.state, item.meta.item_type), (ItemState::Current, ItemType::AboutPerson));
+        assert!(item.meta.confirmed.is_some() && item.meta.source.ptr.is_none());
+        assert_eq!(item.meta.subject.as_deref(), Some(crate::memory_subjects::ABOUT_YOU));
+        assert_eq!((change.what, change.by.as_str(), change.undo.clone()), (What::Kept, "person", Undo::Forget));
+        // It is among what a turn is told about the person, for any of their AIs.
+        assert_eq!(crate::memory_prompt::kept_about_them(&[item], "any-ai", None, true), vec!["Vegetarian since 2019.".to_string()]);
     }
 }

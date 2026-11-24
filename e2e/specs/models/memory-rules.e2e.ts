@@ -6,9 +6,10 @@ import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
-const SAID_RULE_AGAIN = "Please answer in one short sentence from now on.";
+// This step is about the flow; how far apart two wordings may be is measured in memory-rule-offers.
+const SAID_RULE_AGAIN = "From now on, answer in one short sentence.";
 const OTHER_RULE = "Never use tables in your replies.";
-const OTHER_RULE_AGAIN = "Do not use tables in your replies, ever.";
+const OTHER_RULE_AGAIN = "Never use tables in your replies, please.";
 
 async function mcpCall(name: string, args: Record<string, unknown>, headers: Record<string, string> = {}) {
   const r = await fetch("http://127.0.0.1:11435/mcp", {
