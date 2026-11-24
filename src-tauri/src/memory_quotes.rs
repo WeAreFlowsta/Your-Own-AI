@@ -149,6 +149,34 @@ pub(crate) fn check(reply: &str, given: &[String]) -> QuoteCheck {
     QuoteCheck { quoted, not_given, quotes: quotes.len() }
 }
 
+/// A quotation shorter than this (letters and figures, folded) keeps
+/// nothing: a few words are not a decision or a detail.
+const KEEP_AT_LEAST: usize = 20;
+
+/// What a reply's quotations keep: for each exchange it was given and
+/// quoted word for word (no slip at all), the longest such quotation and
+/// the place of the found message. The words must be the conversation's
+/// own: a quotation of the passage's heading (its date and title) keeps
+/// nothing.
+pub(crate) fn quoted_exactly(reply: &str, given: &GivenRecord, texts: &[String]) -> Vec<(crate::memory_block::Ptr, String)> {
+    let quotes = quotations(reply);
+    let mut out = Vec::new();
+    for (e, text) in given.exchanges.iter().zip(texts) {
+        let said = fold(text.split_once('\n').map_or(text.as_str(), |(_, lines)| lines));
+        let best = quotes
+            .iter()
+            .filter(|q| {
+                let needle = fold(q);
+                needle.len() >= KEEP_AT_LEAST && found_within(&needle, &said, 0)
+            })
+            .max_by_key(|q| q.chars().count());
+        if let Some(q) = best {
+            out.push((e.hit, q.clone()));
+        }
+    }
+    out
+}
+
 /// The page's door to the check, when a reply finishes.
 #[tauri::command]
 pub fn memory_check_quotes(reply: String, given: Vec<String>) -> QuoteCheck {
@@ -365,5 +393,28 @@ mod tests {
         assert!(!found_within(&fold("hartwel mils"), &fold("we go with Hartwell Mills now"), 1));
         assert!(!found_within(&fold("a much longer needle than the hay"), &fold("short hay"), 2));
         assert_eq!((slips_for(15), slips_for(25), slips_for(60), slips_for(400)), (0, 1, 2, 3));
+    }
+
+    #[test]
+    fn only_a_word_for_word_quotation_of_the_conversation_keeps_its_exchange() {
+        use crate::memory_block::{GivenExchange, Ptr};
+        let ptr = |s: u32| Ptr { c: 1, s, t: 2, a: 0, b: 10 };
+        let mut rec = record(ran(2, 2));
+        rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }];
+        let texts = given();
+        // Word for word, from the second passage: kept, by its found message.
+        let kept = quoted_exactly("You set it in March: \"Set: $60 from Monday March 9.\"", &rec, &texts);
+        assert_eq!(kept, vec![(ptr(0), "Set: $60 from Monday March 9".to_string())]);
+        // One letter off is still a quotation for the line under the reply, and keeps nothing.
+        assert!(check("As you said: \"Set: $60 from Monday Marsh 9.\"", &texts).quoted[1]);
+        assert!(quoted_exactly("As you said: \"Set: $60 from Monday Marsh 9.\"", &rec, &texts).is_empty());
+        // A few words keep nothing; neither does a reply with no quotation.
+        assert!(quoted_exactly("You said \"from Monday\" I think.", &rec, &texts).is_empty());
+        assert!(quoted_exactly("The threshold is $60.", &rec, &texts).is_empty());
+        // Words that are only in a passage's heading are not the conversation's.
+        let headed = vec!["[2026-03-03, conversation \"Delivery threshold for the van\"]\nThey said: raise it".to_string()];
+        let mut one = record(ran(1, 1));
+        one.exchanges = vec![GivenExchange { before: None, hit: ptr(4), after: None, score: 0.7, quoted: false }];
+        assert!(quoted_exactly("In \"Delivery threshold for the van\" you raised it.", &one, &headed).is_empty());
     }
 }

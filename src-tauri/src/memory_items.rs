@@ -346,6 +346,19 @@ pub(crate) fn replace(item: &Item, by_item: &str, now_true: Option<&str>, by: &s
     changed(item, None, meta, What::Replaced, by, now)
 }
 
+/// The person says a replaced item is not replaced: it is current again,
+/// beside the one that was said to replace it. `None` when it is not
+/// replaced.
+pub(crate) fn not_replaced(item: &Item, now: i64) -> Option<(MemoryRow, Change)> {
+    if item.meta.state != ItemState::Replaced {
+        return None;
+    }
+    let meta = ItemMeta { state: ItemState::Current, replaced_by: None, state_at: now, state_by: "person".into(), ..item.meta.clone() };
+    let (row, mut change) = changed(item, None, meta, What::Undone, "person", now);
+    change.undo = Undo::Nothing;
+    Some((row, change))
+}
+
 /// An open item is closed: done, or no longer needed.
 pub(crate) fn close(item: &Item, done: bool, by: &str, now: i64) -> (MemoryRow, Change) {
     let meta = ItemMeta { state: if done { ItemState::Done } else { ItemState::NotNeeded }, state_at: now, state_by: by.to_string(), ..item.meta.clone() };
@@ -471,6 +484,11 @@ fn write_changes(app: &tauri::AppHandle, key: &[u8; 32], log: &[Change]) -> Resu
     Ok(())
 }
 
+/// Note a change in this device's log.
+pub(crate) fn log_change(app: &tauri::AppHandle, key: &[u8; 32], change: Change) -> Result<(), String> {
+    write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
@@ -498,7 +516,7 @@ fn view(row: &MemoryRow) -> Option<ItemView> {
 /// Save a changed item and note the change in the log.
 async fn save(app: &tauri::AppHandle, key: &[u8; 32], row: MemoryRow, change: Change) -> Result<ItemView, String> {
     let saved = crate::memory_rows::save_and_cache(app, row).await?;
-    write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))?;
+    log_change(app, key, change)?;
     view(&saved).ok_or_else(|| "the saved row is not an item".to_string())
 }
 
@@ -562,9 +580,149 @@ pub async fn memory_keep(app: tauri::AppHandle, input: KeepInput) -> Result<Kept
         Err(had) => Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true }),
         Ok((row, change)) => {
             let change_id = change.id.clone();
-            Ok(KeptAnswer { item: save(&app, &key, row, change).await?, change: Some(change_id), already: false })
+            let item = save(&app, &key, row, change).await?;
+            // A new item is looked at by tidying when the computer is idle.
+            crate::memory_tidying::kept(&app, &item.id);
+            Ok(KeptAnswer { item, change: Some(change_id), already: false })
         }
     }
+}
+
+/// One message of a conversation, as a place to keep from.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Recorded {
+    pub seq: u32,
+    pub by_person: bool,
+    /// When it was written (microseconds).
+    pub at: i64,
+    pub content: String,
+}
+
+/// Which recorded message a bubble is: the one at its sequence when the
+/// page knows it (and it is by the same speaker), else the latest message
+/// by that speaker with the same words.
+pub(crate) fn recorded_for<'a>(entries: &'a [Recorded], seq: Option<u32>, by_person: bool, words: &str) -> Option<&'a Recorded> {
+    if let Some(e) = seq.and_then(|s| entries.iter().find(|e| e.seq == s && e.by_person == by_person)) {
+        return Some(e);
+    }
+    let same = |a: &str, b: &str| a.split_whitespace().eq(b.split_whitespace());
+    entries.iter().rev().find(|e| e.by_person == by_person && !words.trim().is_empty() && same(&e.content, words))
+}
+
+/// An item's words are at most this long; the pointer leads to the rest.
+const ITEM_CHARS: usize = 1000;
+
+/// The words an item gets: the selection when there is one, else the
+/// message, shortened to what an item holds.
+pub(crate) fn words_to_keep(message: &str, selection: Option<&str>) -> String {
+    let words = selection.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(message.trim());
+    words.chars().take(ITEM_CHARS).collect::<String>().trim().to_string()
+}
+
+/// What the page says when Remember is pressed on a message.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepMessageInput {
+    /// The open conversation's id.
+    pub conversation: String,
+    /// The chain that holds it (the AI's key), for a conversation this
+    /// device has not read into its text cache yet.
+    #[serde(default)]
+    pub agent_key: Option<String>,
+    /// The message's sequence, when the page knows it.
+    #[serde(default)]
+    pub seq: Option<u32>,
+    /// `user` or `assistant`.
+    pub role: String,
+    /// The message as the bubble shows it.
+    pub text: String,
+    /// The selected words, for Remember on a selection.
+    #[serde(default)]
+    pub selection: Option<String>,
+    #[serde(default)]
+    pub audience: Option<Audience>,
+    /// Absent: `pressed`. `said` for "remember that".
+    #[serde(default)]
+    pub why: Option<String>,
+}
+
+/// Where a bubble's message is recorded: read from this device's text of
+/// the conversation, else (a conversation not read here yet) from its
+/// records.
+async fn place_of(app: &tauri::AppHandle, input: &KeepMessageInput) -> Result<Ptr, String> {
+    use tauri::Manager;
+    let by_person = input.role == "user";
+    let k = crate::transcript_search::row_key(app, &input.conversation)?;
+    if let Some(conv) = crate::transcript_search::cached_conversations(app)?.into_iter().find(|c| c.k == k) {
+        let entries: Vec<Recorded> = crate::transcript_search::cached_entries(app, &k, 0)?.into_iter().map(|e| Recorded { seq: e.seq, by_person: e.role == "user", at: e.at, content: e.content }).collect();
+        if let Some(e) = recorded_for(&entries, input.seq, by_person, &input.text) {
+            return Ok(Ptr { c: conv.started_at, s: e.seq, t: e.at, a: 0, b: 0 });
+        }
+    }
+    let agent = input.agent_key.as_deref().filter(|a| !a.is_empty()).ok_or("this conversation is still being saved; try again in a moment")?;
+    let started_at = crate::conversation_cache::read_cache(app, agent)?.into_iter().find(|c| c.hash == input.conversation).map(|c| c.started_at).ok_or("that conversation is not in the list yet; try again in a moment")?;
+    let entries: Vec<Recorded> = crate::commands_holochain::get_conversation_transcript(agent.to_string(), input.conversation.clone(), app.state())
+        .await?
+        .into_iter()
+        .map(|e| Recorded { seq: e.sequence, by_person: e.role == "user", at: e.timestamp, content: e.content })
+        .collect();
+    let e = recorded_for(&entries, input.seq, by_person, &input.text).ok_or("that message is not saved yet; try again in a moment")?;
+    Ok(Ptr { c: started_at, s: e.seq, t: e.at, a: 0, b: 0 })
+}
+
+/// Remember, pressed on a message (or on words selected in it): the
+/// exchange is kept as an item that points at it. A second press answers
+/// with the item that already holds it.
+#[tauri::command]
+pub async fn memory_keep_message(app: tauri::AppHandle, input: KeepMessageInput) -> Result<KeptAnswer, String> {
+    let text = words_to_keep(&input.text, input.selection.as_deref());
+    if text.is_empty() {
+        return Err("there is nothing to keep".into());
+    }
+    let ptr = place_of(&app, &input).await?;
+    let kind = if input.selection.as_deref().is_some_and(|s| !s.trim().is_empty()) { "selection" } else { "exchange" };
+    memory_keep(app, KeepInput { text, item_type: ItemType::Detail, ptr, as_of: ptr.t / 1000, by: None, audience: input.audience, kind: kind.to_string(), why: input.why.unwrap_or_else(|| "pressed".to_string()), subject: None }).await
+}
+
+/// A finished reply quoted, word for word, exchanges memory had found for
+/// the question: each such exchange is kept, once, because it answered
+/// something the person asked. No model is involved. `ai` is the founding
+/// key of the AI that replied. Nothing is kept from a private
+/// conversation, or while the person has keeping turned off; an exchange
+/// that was kept before (and perhaps undone) is not kept again.
+#[tauri::command]
+pub async fn memory_keep_quoted(app: tauri::AppHandle, reply: String, given: crate::memory_block::GivenRecord, texts: Vec<String>, ai: Option<String>) -> Result<Vec<ItemView>, String> {
+    let key = data_key(&app)?;
+    let rows = crate::memory_rows::read_cache(&app, &key, SCOPE);
+    if crate::memory_tidy::tidy_is_off(&rows) {
+        return Ok(Vec::new());
+    }
+    let uses = crate::memory_use::conv_uses(&rows);
+    let mut have = items(&rows);
+    let by = ai.filter(|k| !k.is_empty()).map(|k| format!("ai:{k}")).unwrap_or_else(|| "memory".to_string());
+    let mut out = Vec::new();
+    for (ptr, quote) in crate::memory_quotes::quoted_exactly(&reply, &given, &texts) {
+        if crate::memory_use::is_private(&uses, ptr.c) || have.iter().any(|i| i.meta.source.ptr.is_some_and(|p| p.c == ptr.c && p.s == ptr.s)) {
+            continue;
+        }
+        // The item is for whoever the conversation it came from is for.
+        let audience = uses.iter().find(|u| u.started_at == ptr.c).and_then(|u| u.audience.clone());
+        let text = crate::secret_mask::hand_on(&quote).text;
+        let now = now_ms();
+        let id = {
+            use rand::Rng as _;
+            format!("it-{:016x}{:016x}", rand::thread_rng().gen::<u64>(), rand::thread_rng().gen::<u64>())
+        };
+        let k = Keep { id, text: &text, item_type: ItemType::Detail, ptr, as_of: ptr.t / 1000, by: &by, audience, kind: "exchange", why: "asked", quote: Some(text.clone()), subject: None, now };
+        let Some((row, change)) = keep(&have, k).ok() else { continue };
+        if let Some(meta) = meta_of(&row) {
+            have.push(Item { row: row.clone(), meta });
+        }
+        let item = save(&app, &key, row, change).await?;
+        crate::memory_tidying::kept(&app, &item.id);
+        out.push(item);
+    }
+    Ok(out)
 }
 
 /// A change the person makes to one item.
@@ -591,7 +749,26 @@ pub async fn memory_item_change(app: tauri::AppHandle, id: String, edit: ItemEdi
         ItemEdit::Audience { audience } => set_audience(item, audience, now),
         ItemEdit::Close { done } => close(item, done, "person", now),
     };
-    save(&app, &key, row, change).await
+    let saved = save(&app, &key, row, change).await?;
+    // Other words need another vector.
+    crate::memory_tidying::words_changed(&app);
+    Ok(saved)
+}
+
+/// "Not replaced", pressed where a reply's panel shows what was left out:
+/// the item is current again, and tidying never judges that pair again.
+#[tauri::command]
+pub async fn memory_not_replaced(app: tauri::AppHandle, id: String) -> Result<ItemView, String> {
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let item = have.iter().find(|i| i.row.id == id).ok_or("no such item")?;
+    let now = now_ms();
+    let (row, change) = not_replaced(item, now).ok_or("that item is not replaced")?;
+    let saved = save(&app, &key, row, change).await?;
+    if let (Some(by), "tidy") = (item.meta.replaced_by.as_deref(), item.meta.state_by.as_str()) {
+        crate::memory_rows::save_and_cache(&app, crate::memory_tidy::ledger_row(&crate::memory_tidy::not_replaced_entry(&id, by, now))).await?;
+    }
+    Ok(saved)
 }
 
 /// What memory changed lately, newest first.
@@ -609,11 +786,22 @@ pub async fn memory_undo(app: tauri::AppHandle, change_id: String) -> Result<Vec
     let have = held(&app, &key);
     let now = now_ms();
     let mut out = Vec::new();
-    for id in &change.items {
+    // What a change restores belongs to the item it changed, which is
+    // named first; a second item (the one that replaced it) is only named.
+    let changed = if matches!(change.undo, Undo::Restore { .. }) { &change.items[..change.items.len().min(1)] } else { &change.items[..] };
+    for id in changed {
         let Some(item) = have.iter().find(|i| &i.row.id == id) else { continue };
         if let Some((row, entry)) = undo(&change, item, now) {
             out.push(save(&app, &key, row, entry).await?);
         }
+    }
+    // An undo of what tidying did is kept where every device reads it: the
+    // pair is never judged again, and undos count toward the pause.
+    if !out.is_empty() {
+        if let Some(j) = crate::memory_tidy::undone(&change, now) {
+            crate::memory_rows::save_and_cache(&app, crate::memory_tidy::ledger_row(&j)).await?;
+        }
+        crate::memory_tidying::words_changed(&app);
     }
     Ok(out)
 }
@@ -847,5 +1035,53 @@ mod tests {
         // Forgetting is undone to exactly what it was.
         let (back, _) = undo(&change, &item_of(gone), NOW + 7).unwrap();
         assert_eq!(meta_of(&back).unwrap(), ItemMeta { ..open.meta.clone() });
+    }
+
+    #[test]
+    fn not_replaced_makes_an_item_current_again_beside_the_other() {
+        let (old, _) = kept(&[], "it-40", "Free delivery starts at $40.", 2, "ai:uhCAkJuno");
+        let old = item_of(old);
+        assert!(not_replaced(&old, NOW).is_none(), "an item that is not replaced has nothing to put back");
+        let (replaced, _) = replace(&old, "it-60", None, "tidy", NOW + 1);
+        let replaced = item_of(replaced);
+        assert!(!may_use(&replaced.meta, "uhCAkJuno", None, false));
+        let (back, change) = not_replaced(&replaced, NOW + 9).unwrap();
+        let meta = meta_of(&back).unwrap();
+        assert_eq!((meta.state, meta.replaced_by.clone(), meta.state_by.as_str(), meta.state_at), (ItemState::Current, None, "person", NOW + 9));
+        assert!(may_use(&meta, "uhCAkJuno", None, false));
+        assert_eq!((change.what, change.by.as_str(), change.undo.clone()), (What::Undone, "person", Undo::Nothing));
+        assert_eq!(back.text, "Free delivery starts at $40.");
+        // The pair is settled for tidying on every device, and counts as an undo of its change.
+        let entry = crate::memory_tidy::not_replaced_entry("it-40", "it-60", NOW + 9);
+        assert!(!crate::memory_tidy::may_judge(&[entry.clone()], "it-60", "it-40"));
+        assert_eq!((entry.outcome.as_str(), entry.of.as_deref()), ("undone", Some("replaced")));
+    }
+
+    #[test]
+    fn a_bubble_is_found_by_its_sequence_or_by_its_words() {
+        let entries = vec![
+            Recorded { seq: 0, by_person: true, at: 10, content: "raise the threshold to $60".into() },
+            Recorded { seq: 1, by_person: false, at: 11, content: "Updated.  From Monday,\nfree delivery starts at $60.".into() },
+            Recorded { seq: 2, by_person: true, at: 12, content: "Thanks.".into() },
+            Recorded { seq: 3, by_person: false, at: 13, content: "You're welcome.".into() },
+            Recorded { seq: 4, by_person: true, at: 14, content: "Thanks.".into() },
+        ];
+        assert_eq!(recorded_for(&entries, Some(1), false, "anything").map(|e| e.at), Some(11));
+        // A sequence that is the other speaker's is not trusted: the words decide.
+        assert_eq!(recorded_for(&entries, Some(1), true, "Thanks.").map(|e| e.seq), Some(4), "the latest message with those words");
+        assert_eq!(recorded_for(&entries, None, false, "Updated. From Monday, free delivery starts at $60.").map(|e| e.seq), Some(1), "spacing does not matter");
+        assert_eq!(recorded_for(&entries, None, true, "You're welcome."), None, "the AI said that, not the person");
+        assert_eq!(recorded_for(&entries, None, true, "  "), None);
+        assert_eq!(recorded_for(&entries, Some(9), false, "never said"), None);
+    }
+
+    #[test]
+    fn the_words_kept_are_the_selection_or_the_message_within_what_an_item_holds() {
+        assert_eq!(words_to_keep("  the whole reply  ", None), "the whole reply");
+        assert_eq!(words_to_keep("the whole reply", Some(" whole ")), "whole");
+        assert_eq!(words_to_keep("the whole reply", Some("   ")), "the whole reply", "an empty selection is no selection");
+        assert_eq!(words_to_keep(&"é".repeat(3000), None).chars().count(), 1000);
+        let k: KeepMessageInput = serde_json::from_value(serde_json::json!({ "conversation": "h", "role": "assistant", "text": "t", "seq": 3, "agentKey": "k" })).unwrap();
+        assert_eq!((k.seq, k.agent_key.as_deref(), k.selection, k.why), (Some(3), Some("k"), None, None));
     }
 }

@@ -173,6 +173,13 @@ pub(crate) fn undone(change: &Change, now: i64) -> Option<Judged> {
     Some(Judged { pair, outcome: "undone".to_string(), at: now, of: Some(of.to_string()) })
 }
 
+/// The ledger entry for "Not replaced" pressed on an item that tidying
+/// replaced, wherever the change itself is logged: the pair is settled on
+/// every device, and the undo counts toward the pause.
+pub(crate) fn not_replaced_entry(replaced: &str, by: &str, now: i64) -> Judged {
+    Judged { pair: pair_of(replaced, by), outcome: "undone".to_string(), at: now, of: Some("replaced".to_string()) }
+}
+
 /// Is tidying paused? When three of its last five changes (replacements
 /// and closings, from any device) were undone. `started_again` is when the
 /// person last pressed "Start again": the count begins after it.
@@ -305,6 +312,26 @@ pub(crate) fn tidy_off_row(off: bool, now: i64) -> MemoryRow {
 
 pub(crate) fn tidy_is_off(rows: &[MemoryRow]) -> bool {
     sys::<bool>(rows, "tidy_off", "off").unwrap_or(false)
+}
+
+/// The person pressed "Start again" after a pause: one row, for all their
+/// devices. The count of undone changes begins after it.
+pub(crate) fn started_again_row(now: i64) -> MemoryRow {
+    MemoryRow { id: "sys-tidy-started-again".to_string(), structured: Some(serde_json::json!({ "sys": "tidy_started", "at": now })), ..ledger_row(&Judged { pair: (String::new(), String::new()), outcome: String::new(), at: now, of: None }) }
+}
+
+pub(crate) fn started_again(rows: &[MemoryRow]) -> Option<i64> {
+    sys::<i64>(rows, "tidy_started", "at")
+}
+
+/// A ledger entry's row for a question put to the person, carrying the
+/// sentence the judgment wrote, so the question can show it on any device.
+pub(crate) fn asked_row(j: &Judged, now_true: &str) -> MemoryRow {
+    let mut row = ledger_row(j);
+    if let Some(serde_json::Value::Object(o)) = row.structured.as_mut() {
+        o.insert("now".into(), serde_json::Value::String(now_true.to_string()));
+    }
+    row
 }
 
 #[cfg(test)]
@@ -574,5 +601,17 @@ mod tests {
         assert_eq!(left_today(&led, day_start), 0);
         // Yesterday's changes do not count against today.
         assert_eq!(left_today(&led, day_start + DAY), 20);
+    }
+
+    #[test]
+    fn start_again_and_a_question_travel_as_rows() {
+        assert_eq!(started_again(&[]), None);
+        let rows = vec![started_again_row(NOW), tidy_off_row(false, NOW)];
+        assert_eq!(started_again(&rows), Some(NOW));
+        assert!(ledger(&rows).is_empty(), "neither is a ledger entry");
+        let j = Judged { pair: pair_of("it-a", "it-b"), outcome: "asked".into(), at: NOW, of: None };
+        let row = asked_row(&j, "They moved to the medium plan.");
+        assert_eq!(row.structured.as_ref().unwrap()["now"], "They moved to the medium plan.");
+        assert_eq!(ledger(&[row]), vec![j], "the entry reads the same with the sentence beside it");
     }
 }

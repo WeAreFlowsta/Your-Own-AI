@@ -1130,6 +1130,25 @@ pub(crate) fn apply_no_think_here(body: &mut serde_json::Value, model: &str) -> 
 /// character. The stream drops the leading whitespace it produces.
 pub(crate) const EMPTY_THOUGHT_PREFILL: &str = " ";
 
+/// How much memory the chat engine may use to keep the states of past
+/// prompts, in MiB: a sixteenth of the machine's memory, at least 512 and
+/// at most 2,048.
+pub(crate) fn prompt_store_mib(total_ram_gb: f64) -> u32 {
+    ((total_ram_gb.max(0.0) * 1024.0 / 16.0) as u32).clamp(512, 2048)
+}
+
+#[cfg(test)]
+mod prompt_store_tests {
+    #[test]
+    fn the_prompt_store_is_a_share_of_the_machines_memory() {
+        assert_eq!(super::prompt_store_mib(4.0), 512, "a small machine still keeps a few conversations warm");
+        assert_eq!(super::prompt_store_mib(16.0), 1024);
+        assert_eq!(super::prompt_store_mib(24.0), 1536);
+        assert_eq!(super::prompt_store_mib(64.0), 2048, "never the engine's own 8 GB");
+        assert_eq!(super::prompt_store_mib(0.0), 512);
+    }
+}
+
 /// The engine's `--reasoning` flag for a model, from its own template:
 /// `off` for a model whose template declares a thinking switch (the app
 /// turns thinking on per request, report mode), `auto` for one that does
@@ -3524,6 +3543,11 @@ pub async fn start_llama_server(
         // path (what the previous engine did), which loads reliably.
         "--fit".to_string(),
         "off".to_string(),
+        // The engine keeps the states of past prompts in memory, so a
+        // conversation that comes back is answered sooner. Left alone it
+        // keeps up to 8 GB of them; here, a share of this machine's memory.
+        "--cache-ram".to_string(),
+        prompt_store_mib(total_ram_gb).to_string(),
     ];
     // Machine fine-tune: a chosen worker-thread count; the engine's own
     // default otherwise (settings.json engineThreads).

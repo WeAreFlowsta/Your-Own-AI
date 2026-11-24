@@ -37,12 +37,16 @@ struct Open {
     store: Store,
     cache: Cache,
     opened: Opened,
+    /// Every item's vector with the stamp of the words it was made from,
+    /// loaded on first use.
+    items: Option<std::collections::HashMap<String, (i64, index::Quant)>>,
 }
 
 static INDEX: Mutex<Option<Open>> = Mutex::new(None);
 static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 static READ_NOW: AtomicBool = AtomicBool::new(false);
 static STATUS: Mutex<Option<Status>> = Mutex::new(None);
+static LEVEL_AT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 /// What the reading line shows.
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
@@ -62,6 +66,10 @@ pub struct Status {
     pub needs_mb: Option<u64>,
     /// The index could not be read and is being built again.
     pub rebuilding: bool,
+    /// When the reader last began bringing the text of every conversation
+    /// level and finished it, in milliseconds since 1970 (0: not yet). What
+    /// was recorded before then is counted in `total`.
+    pub level_at: i64,
     /// Seconds one message has been taking, for the estimate.
     pub secs_per_message: Option<f32>,
     /// Passages embedded from a shortened text, so far.
@@ -97,12 +105,12 @@ fn with_index<R>(app: &AppHandle, f: impl FnOnce(&mut Open, &[u8; 32]) -> Result
                     let _ = std::fs::remove_file(PathBuf::from(format!("{}{suffix}", root.join("memory-index.sqlite").display())));
                 }
                 let (store, _) = Store::open(&root.join("memory-index.sqlite"), &made())?;
-                *guard = Some(Open { root: root.clone(), store, cache: Cache::default(), opened: Opened::Rebuilt });
+                *guard = Some(Open { root: root.clone(), store, cache: Cache::default(), opened: Opened::Rebuilt, items: None });
                 return f(guard.as_mut().unwrap(), &key);
             }
         };
         log::info!("[memory index] open: {} passage(s) in memory ({} KB) in {} ms", cache.passages(), cache.bytes_held() / 1024, t0.elapsed().as_millis());
-        *guard = Some(Open { root, store, cache, opened });
+        *guard = Some(Open { root, store, cache, opened, items: None });
     }
     f(guard.as_mut().unwrap(), &key)
 }
@@ -241,7 +249,69 @@ pub fn memory_given_texts(app: AppHandle, given: crate::memory_block::GivenRecor
         }
         gone
     };
-    Ok(crate::memory_block::rebuild(&given, &at, crate::memory_block::Wording::shipped()))
+    let mut panel = crate::memory_block::rebuild(&given, &at, crate::memory_block::Wording::shipped());
+    // What was left out as replaced: is it still, and since when.
+    if !panel.left_out.is_empty() {
+        let items = data_key(&app).map(|key| crate::memory_items::items(&crate::memory_rows::read_cache(&app, &key, crate::memory_items::SCOPE))).unwrap_or_default();
+        for l in panel.left_out.iter_mut() {
+            let replaced = items.iter().find(|i| i.row.id == l.item).filter(|i| i.meta.state == crate::memory_items::ItemState::Replaced);
+            l.still_replaced = replaced.is_some();
+            l.replaced_on = replaced.map(|i| crate::memory_block::day(i.meta.state_at * 1000));
+        }
+    }
+    Ok(panel)
+}
+
+fn item_table<'a>(open: &'a mut Open, key: &[u8; 32]) -> Result<&'a mut std::collections::HashMap<String, (i64, index::Quant)>, String> {
+    if open.items.is_none() {
+        open.items = Some(open.store.item_vecs(key)?.into_iter().map(|(id, at, q)| (id, (at, q))).collect());
+    }
+    Ok(open.items.as_mut().expect("just loaded"))
+}
+
+/// Every item's vector on this device: the item's id, the stamp of the
+/// words the vector was made from, the vector.
+pub(crate) fn item_vectors(app: &AppHandle) -> std::collections::HashMap<String, (i64, index::Quant)> {
+    with_index(app, |open, key| item_table(open, key).map(|t| t.clone())).unwrap_or_default()
+}
+
+/// Keep an item's vector, with the stamp of the words it was made from.
+pub(crate) fn put_item_vector(app: &AppHandle, id: &str, stamp: i64, vector: &[f32]) -> Result<(), String> {
+    let q = index::quantize(vector);
+    with_index(app, |open, key| {
+        open.store.item_vec_put(key, id, stamp, &q)?;
+        item_table(open, key)?.insert(id.to_string(), (stamp, q));
+        Ok(())
+    })
+}
+
+/// When each found message's conversation started, and how alike the
+/// message is to each of `to`: one row per hit, in the hits' order.
+pub(crate) fn hits_beside(app: &AppHandle, hits: &[Hit], to: &[Vec<f32>]) -> Vec<(Option<i64>, Vec<Option<f32>>)> {
+    with_index(app, |open, _| Ok(hits.iter().map(|h| (open.cache.started_at(&h.k), to.iter().map(|v| open.cache.message_likeness(&h.k, h.seq, v)).collect())).collect())).unwrap_or_default()
+}
+
+/// The messages of one exchange, read from this device's copy of the
+/// conversation that started at `started_at`: the message at `seq` and
+/// the other half of its exchange (the reply to a person's message, or
+/// the message an AI's reply answered), with secrets hidden. Empty when
+/// the conversation is not here.
+pub(crate) fn exchange_at(app: &AppHandle, started_at: i64, seq: u32) -> Vec<crate::memory_block::Said> {
+    let Ok(cached) = crate::transcript_search::cached_conversations(app) else { return Vec::new() };
+    for c in cached.iter().filter(|c| c.started_at == started_at) {
+        let said: Vec<_> = crate::transcript_search::cached_entries(app, &c.k, 0).unwrap_or_default().into_iter().filter(|e| e.role == "user" || e.role == "assistant").collect();
+        let Some(x) = said.iter().position(|e| e.seq == seq) else { continue };
+        let (from, to) = if said[x].role == "user" {
+            (x, if said.get(x + 1).is_some_and(|n| n.role == "assistant") { x + 1 } else { x })
+        } else {
+            (if x > 0 && said[x - 1].role == "user" { x - 1 } else { x }, x)
+        };
+        return said[from..=to]
+            .iter()
+            .map(|e| crate::memory_block::Said { by_person: e.role == "user", text: crate::secret_mask::hand_on(&e.content).text, seq: e.seq, at: e.at })
+            .collect();
+    }
+    Vec::new()
 }
 
 /// How many passages the index holds in memory.
@@ -342,12 +412,20 @@ async fn pass(app: &AppHandle) -> Result<bool, String> {
     let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() else { return Ok(false) };
     let manager = hc.get()?;
     let agents = manager.ai_agents().await;
+    let began = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let mut level = true;
     for agent in &agents {
         if gate().is_err() {
+            level = false;
             break;
         }
         // Another read is running (the person opened search): next pass.
-        let _ = crate::transcript_search::read_agent(app, agent).await;
+        if !matches!(crate::transcript_search::read_agent(app, agent).await, Ok(true)) {
+            level = false;
+        }
+    }
+    if level {
+        LEVEL_AT.store(began, Ordering::SeqCst);
     }
 
     let mut shortened = 0usize;
@@ -372,7 +450,7 @@ async fn pass(app: &AppHandle) -> Result<bool, String> {
         })?;
         let todo = index::to_read(&listed, &known);
         let (read, total) = index::share_read(&listed, &known);
-        let status = |waiting: bool, why: Option<String>, needs_mb: Option<u64>| Status { read, total, passages, waiting, why, read_now: READ_NOW.load(Ordering::SeqCst), needs_mb, rebuilding: rebuilding && read < total, secs_per_message: pace_secs, shortened };
+        let status = |waiting: bool, why: Option<String>, needs_mb: Option<u64>| Status { read, total, passages, waiting, why, read_now: READ_NOW.load(Ordering::SeqCst), needs_mb, rebuilding: rebuilding && read < total, secs_per_message: pace_secs, shortened, level_at: LEVEL_AT.load(Ordering::SeqCst) };
         let Some((k, from)) = todo.into_iter().next() else {
             READ_NOW.store(false, Ordering::SeqCst);
             publish(app, status(false, None, None));

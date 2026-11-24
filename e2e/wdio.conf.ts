@@ -179,7 +179,9 @@ export const config: WebdriverIO.Config = {
     if (screenLocked()) throw new SevereServiceError("e2e: the screen is locked - the app gets no frames while it is. Unlock it and run again.");
     holdIdleLock();
     reapSidecars();
-    rmSync(PROFILE, { recursive: true, force: true });
+    // YOAI_E2E_KEEP_PROFILE=1 starts from the scratch profile as the last
+    // run left it (a long history already loaded and read).
+    if (!process.env.YOAI_E2E_KEEP_PROFILE) rmSync(PROFILE, { recursive: true, force: true });
     rmSync(SHOTS, { recursive: true, force: true });
     mkdirSync(SHOTS, { recursive: true });
     seedWindowsProfile();

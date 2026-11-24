@@ -83,6 +83,21 @@ fn score(unit_query: &[f32], bytes: &[i8], scale: f32) -> f32 {
     unit_query.iter().zip(bytes).map(|(q, b)| q * f32::from(*b)).sum::<f32>() * scale
 }
 
+/// A stored vector as numbers again (of a length close to 1).
+pub(crate) fn numbers(q: &Quant) -> Vec<f32> {
+    q.bytes.iter().map(|b| f32::from(*b) * q.scale).collect()
+}
+
+/// How alike a vector of any length and a stored one are: the cosine,
+/// within what one byte per number can say. Vectors of different sizes
+/// (made by different models) are not alike at all.
+pub(crate) fn likeness(v: &[f32], q: &Quant) -> f32 {
+    if v.is_empty() || v.len() != q.bytes.len() {
+        return 0.0;
+    }
+    score(&unit(v), &q.bytes, q.scale)
+}
+
 /// What the index knows of a conversation beyond its key.
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub(crate) struct ConvMeta {
@@ -211,6 +226,27 @@ impl Cache {
         // The key stays in the table (indexes into it are held by rows); a
         // conversation with no rows is simply never found.
         before - self.rows.len()
+    }
+
+    /// When a conversation started, by its key.
+    pub(crate) fn started_at(&self, k: &str) -> Option<i64> {
+        self.by_key.get(k).map(|i| self.metas[*i as usize].started_at)
+    }
+
+    /// How alike one message and a vector are: its best passage's
+    /// likeness. `None` when the message has no passage here.
+    pub(crate) fn message_likeness(&self, k: &str, seq: u32, to: &[f32]) -> Option<f32> {
+        let conv = *self.by_key.get(k)?;
+        if self.dims == 0 || to.len() != self.dims {
+            return None;
+        }
+        let q = unit(to);
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.conv == conv && r.seq == seq)
+            .map(|(i, r)| score(&q, &self.bytes[i * self.dims..(i + 1) * self.dims], r.scale))
+            .fold(None, |best: Option<f32>, s| Some(best.map_or(s, |b| b.max(s))))
     }
 
     /// The messages closest to a question: a message's score is its best
@@ -439,6 +475,33 @@ impl Store {
             let (k, read_through, entries, touched, meta_enc) = row.map_err(|e| e.to_string())?;
             let meta = serde_json::from_slice(&dec(key, &meta_enc)?).map_err(|e| e.to_string())?;
             out.push(ConvState { k, read_through, entries, touched, meta });
+        }
+        Ok(out)
+    }
+
+    /// Store an item's vector, with a stamp of the words it was made from
+    /// (other words are embedded again).
+    pub(crate) fn item_vec_put(&self, key: &[u8; 32], id: &str, stamp: i64, q: &Quant) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO item_vecs (id, updated_at, vec_enc) VALUES (?1, ?2, ?3) ON CONFLICT(id) DO UPDATE SET updated_at = ?2, vec_enc = ?3",
+                params![id, stamp, enc(key, &vec_blob(q))?],
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Every item's vector: its id, the stamp of the words it was made
+    /// from, the vector. One that cannot be opened is left out (it is made again).
+    pub(crate) fn item_vecs(&self, key: &[u8; 32]) -> Result<Vec<(String, i64, Quant)>, String> {
+        let mut st = self.conn.prepare("SELECT id, updated_at, vec_enc FROM item_vecs").map_err(|e| e.to_string())?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, Vec<u8>>(2)?))).map_err(|e| e.to_string())?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, updated_at, vec_enc) = row.map_err(|e| e.to_string())?;
+            if let Some(q) = dec(key, &vec_enc).ok().and_then(|p| blob_vec(&p)) {
+                out.push((id, updated_at, q));
+            }
         }
         Ok(out)
     }
@@ -799,5 +862,43 @@ mod tests {
         for word in ["founding-key-of-the-bakery", "somewhere-recognizable", "project-recognizable"] {
             assert!(!raw.windows(word.len()).any(|w| w == word.as_bytes()), "{word} is readable in the file");
         }
+    }
+
+    #[test]
+    fn an_items_vector_is_kept_with_its_stamp_and_replaced_by_a_later_one() {
+        let path = scratch("items");
+        let (store, _) = Store::open(&path, &made()).unwrap();
+        store.item_vec_put(&KEY, "it-1", 10, &quantize(&v(0, 0.0))).unwrap();
+        store.item_vec_put(&KEY, "it-2", 11, &quantize(&v(3, 0.0))).unwrap();
+        store.item_vec_put(&KEY, "it-1", 20, &quantize(&v(1, 0.0))).unwrap();
+        let mut held = store.item_vecs(&KEY).unwrap();
+        held.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(held.iter().map(|(id, at, _)| (id.as_str(), *at)).collect::<Vec<_>>(), vec![("it-1", 20), ("it-2", 11)]);
+        // Alike to what it was made from, unlike another direction.
+        assert!(likeness(&v(1, 0.0), &held[0].2) > 0.99);
+        assert!(likeness(&v(5, 0.0), &held[0].2) < 0.3);
+        assert_eq!(likeness(&[1.0, 0.0], &held[0].2), 0.0, "a vector of another size is not alike");
+        assert!(store.item_vecs(&[8; 32]).unwrap().is_empty(), "another key opens none of them");
+        // The numbers come back close to the unit vector they were.
+        let back = numbers(&held[1].2);
+        assert!(unit(&v(3, 0.0)).iter().zip(&back).all(|(a, b)| (a - b).abs() < 0.01));
+        // A store made again for another model drops them with the passages.
+        drop(store);
+        let (store, _) = Store::open(&path, &Made { model: "embed-b.gguf".into(), ..made() }).unwrap();
+        assert!(store.item_vecs(&KEY).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_message_is_as_alike_as_its_best_passage() {
+        let mut cache = Cache::default();
+        cache.append("c", &meta(77), 4, ROLE_PERSON, 0, &quantize(&v(0, 0.0)));
+        cache.append("c", &meta(77), 4, ROLE_PERSON, 0, &quantize(&v(2, 0.0)));
+        cache.append("c", &meta(77), 5, ROLE_AI, 0, &quantize(&v(6, 0.0)));
+        assert_eq!(cache.started_at("c"), Some(77));
+        assert_eq!(cache.started_at("other"), None);
+        assert!(cache.message_likeness("c", 4, &v(2, 0.0)).unwrap() > 0.99);
+        assert!(cache.message_likeness("c", 5, &v(2, 0.0)).unwrap() < 0.3);
+        assert_eq!(cache.message_likeness("c", 9, &v(2, 0.0)), None);
+        assert_eq!(cache.message_likeness("other", 4, &v(2, 0.0)), None);
     }
 }

@@ -440,19 +440,19 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     });
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
-    let (before_question, given, given_texts) = if beside && asked && !input.skip_search {
-        let (text, mut record, texts) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
+    let (before_question, given, given_texts, after_question) = if beside && asked && !input.skip_search {
+        let (text, mut record, texts, note) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
         if let Some(r) = record.as_mut() {
             r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
         }
-        (text, record, texts)
+        (text, record, texts, note)
     } else {
-        (None, None, Vec::new())
+        (None, None, Vec::new(), None)
     };
     TurnMemory {
         system_part: format!("{text}\n{today}"),
         before_question,
-        after_question: None,
+        after_question,
         counts,
         bare_notes: facts.iter().filter(live_note).any(|f| !f.embedding.as_ref().is_some_and(|v| !v.is_empty())),
         bare_knowledge: recall.as_deref().is_some_and(|r| r.iter().any(|e| e.kind == "authored" && e.source.is_none() && e.vector.is_empty())),
@@ -487,9 +487,10 @@ pub(crate) fn merge_hits(a: Vec<crate::memory_index::Hit>, b: Vec<crate::memory_
 }
 
 /// What memory found for the question, as the block that goes ahead of it,
-/// with the record of what was given. No block at all when there is
-/// nothing to search: a first message is answered as if memory were not
-/// there.
+/// with the record of what was given, the texts given, and the note that
+/// goes after the question (what memory holds to be true now). No block at
+/// all when there is nothing to search: a first message is answered as if
+/// memory were not there.
 async fn found_beside(
     app: &tauri::AppHandle,
     input: &TurnInput,
@@ -497,11 +498,11 @@ async fn found_beside(
     facts: &[crate::memory::MemoryFact],
     recall: Option<&[TranscriptEmbedding]>,
     today: &str,
-) -> (Option<String>, Option<crate::memory_block::GivenRecord>, Vec<String>) {
+) -> (Option<String>, Option<crate::memory_block::GivenRecord>, Vec<String>, Option<String>) {
     use crate::memory_block::{self as mb, About, GivenRecord, SearchReport, WhyNot, Wording};
     let wording = Wording::shipped();
     let record = |search: SearchReport| GivenRecord { v: 1, search, mask_version: crate::secret_mask::MASK_VERSION.to_string(), cut_version: mb::CUT_VERSION.to_string(), ..Default::default() };
-    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new());
+    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new(), None);
     if !stores_open {
         return not_run(WhyNot::VaultLocked);
     }
@@ -510,7 +511,7 @@ async fn found_beside(
     let notes: Vec<&crate::memory::MemoryFact> = facts.iter().filter(|f| f.valid_to.is_none() && f.entry_kind == "note" && f.embedding.as_ref().is_some_and(|v| !v.is_empty())).collect();
     let knowledge: Vec<&TranscriptEmbedding> = recall.unwrap_or(&[]).iter().filter(|e| e.kind == "authored" && !e.vector.is_empty()).collect();
     if passages == 0 && reading.total == 0 && notes.is_empty() && knowledge.is_empty() {
-        return (None, None, Vec::new());
+        return (None, None, Vec::new(), None);
     }
     if crate::memory_reading::rebuilding(app) {
         return not_run(WhyNot::IndexRebuilding);
@@ -569,6 +570,28 @@ async fn found_beside(
         if uses.is_empty() { 0 } else { conversations.len() as u32 }
     };
     let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits).unwrap_or_default();
+    // What memory holds to be true now on this matter: the note for after
+    // the question, and the found exchanges it marks as replaced, which
+    // are left out of what is given and recorded as left out.
+    let stand = crate::memory_state::stand_for(app, &question, &memory_rows, &who);
+    let (exchanges, left_out) = {
+        let like: Vec<Vec<f32>> = stand.superseded.iter().map(|s| s.like.clone()).collect();
+        let alike: std::collections::HashMap<(i64, u32), Vec<Option<f32>>> = hits
+            .iter()
+            .zip(crate::memory_reading::hits_beside(app, &hits, &like))
+            .filter_map(|(h, (started, alike))| started.map(|c| ((c, h.seq), alike)))
+            .collect();
+        let unknown: Vec<Option<f32>> = Vec::new();
+        let mut stay = Vec::new();
+        let mut left: Vec<mb::LeftOut> = Vec::new();
+        for e in exchanges {
+            match crate::memory_state::left_out(&stand, e.conversation, e.hit.seq, e.hit.at, alike.get(&(e.conversation, e.hit.seq)).unwrap_or(&unknown)) {
+                Some(item) => left.push(mb::LeftOut { hit: mb::Ptr { c: e.conversation, s: e.hit.seq, t: e.hit.at, a: 0, b: 0 }, score: e.score, item: item.to_string() }),
+                None => stay.push(e),
+            }
+        }
+        (stay, left)
+    };
     // Saved notes and knowledge given to this AI, found by the rule they
     // were always found by, as dated lines.
     let mut dated: Vec<String> = Vec::new();
@@ -593,7 +616,7 @@ async fn found_beside(
         &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
     );
     let partial = (reading.total > 0 && reading.read < reading.total).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
-    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: false };
+    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: !left_out.is_empty() };
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
     let room = input.room_tokens.map(|t| t as usize * 3);
@@ -604,7 +627,15 @@ async fn found_beside(
     rec.lines = b.lines;
     rec.block = mb::fingerprint(&b.text);
     rec.masked = hidden;
-    (Some(b.text), Some(rec), b.texts)
+    rec.left_out = left_out;
+    let mut texts = b.texts;
+    if let Some(note) = &stand.note {
+        rec.note_items = stand.note_items.clone();
+        rec.note = mb::fingerprint(note);
+        // A reply that quotes the note quotes what it was given.
+        texts.push(note.clone());
+    }
+    (Some(b.text), Some(rec), texts, stand.note)
 }
 
 /// The chat page's door to the builder. While the stores are still opening

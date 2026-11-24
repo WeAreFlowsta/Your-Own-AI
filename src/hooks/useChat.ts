@@ -2150,6 +2150,16 @@ export function useChat(props: UseChatProps) {
             if (checked.given) givenRecord = checked.given;
             replyLine = checked.line ?? undefined;
             quotesNotGiven = checked.check.notGiven.length ? checked.check.notGiven : undefined;
+            // An exchange the reply quoted word for word answered something
+            // the person asked: it is kept, once, with no model involved.
+            if (checked.check.quoted.some(Boolean)) {
+              void invoke("memory_keep_quoted", {
+                reply: displayContent,
+                given: givenRecord,
+                texts: foundMemory?.givenTexts ?? [],
+                ai: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
+              }).catch((e) => console.warn("[memory] keeping what was quoted failed:", e));
+            }
           }
         }
 
@@ -2345,12 +2355,13 @@ export function useChat(props: UseChatProps) {
             // Record assistant message - with full provenance: sources, the
             // exact system prompt it ran under, mode, and the runtime/build.
             if (sources?.length) uiLog(`[web] recording the reply with ${sources.length} source(s)`);
+            const replySeq = takeSeq();
             const assistantMsgHash = await recordMessage(
               holochainId,
               turnConv!,
               "assistant",
               displayContent,
-              takeSeq(),
+              replySeq,
               modelName,
               finalThinking || undefined,
               tokenUsage ? {
@@ -2392,7 +2403,7 @@ export function useChat(props: UseChatProps) {
             if (assistantMsgHash) {
               state.messages = state.messages.map((m) =>
                 m.id === assistantId
-                  ? { ...m, transcriptHash: assistantMsgHash }
+                  ? { ...m, transcriptHash: assistantMsgHash, sequence: replySeq }
                   : m,
               );
             }

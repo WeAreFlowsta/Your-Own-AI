@@ -148,10 +148,16 @@ pub(crate) fn day(micros: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Messages of one conversation as the lines a passage is made of, in
+/// the form every judgment reads ("They said: ...", "AI: ...").
+pub(crate) fn passage_text(said: &[Said]) -> String {
+    said.iter().map(|m| line(m, false).0).collect::<Vec<_>>().join("\n")
+}
+
 /// An exchange as text, and as pointers to what the text shows.
 pub(crate) fn exchange_text(e: &Exchange, wording: Wording) -> (String, GivenExchange) {
     let mut lines: Vec<String> = Vec::new();
-    let mut ptr = |m: &Said, tail: bool, lines: &mut Vec<String>| {
+    let ptr = |m: &Said, tail: bool, lines: &mut Vec<String>| {
         let (text, a, b) = line(m, tail);
         lines.push(text);
         Ptr { c: e.conversation, s: m.seq, t: m.at, a, b }
@@ -393,6 +399,15 @@ pub struct GivenRecord {
     /// the pointers is compared with.
     #[serde(default)]
     pub block: String,
+    /// Found, and left out because memory marks them replaced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<LeftOut>,
+    /// The items the note after the question was made from, and the
+    /// note's sha256.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub note_items: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     /// sha256 of the person's turn exactly as sent (set by the sender,
     /// which is the one that knows the final text).
     #[serde(default)]
@@ -400,6 +415,15 @@ pub struct GivenRecord {
     /// Fields later versions add ride through untouched.
     #[serde(flatten)]
     pub more: serde_json::Map<String, serde_json::Value>,
+}
+
+/// A found message that was left out of what was given, and the replaced
+/// item it was left out for.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LeftOut {
+    pub hit: Ptr,
+    pub score: f32,
+    pub item: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -476,6 +500,24 @@ pub struct Panel {
     pub lines: Vec<String>,
     /// The report and the rule, exactly as given (when it could be rebuilt).
     pub instruction: Option<String>,
+    /// Found and left out because memory marks them replaced: each by its
+    /// found message.
+    pub left_out: Vec<PanelLeftOut>,
+}
+
+/// A left-out message as the panel shows it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelLeftOut {
+    /// State `left-out`; one line, the found message's.
+    #[serde(flatten)]
+    pub passage: PanelPassage,
+    /// The replaced item it was left out for.
+    pub item: String,
+    /// The day that item was replaced, and whether it still is (filled by
+    /// the reader of the items).
+    pub replaced_on: Option<String>,
+    pub still_replaced: bool,
 }
 
 /// Rebuild what a reply was given from its record: each pointer looked up
@@ -534,7 +576,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
         }
     }
     let s = &record.search;
-    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: false };
+    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: !record.left_out.is_empty() };
     // Everything that was given is here: put it together again, as given
     // (no budget: what was given already fit).
     let whole = deleted == 0 && not_here == 0;
@@ -549,7 +591,24 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
         (Some(_), false) => Checked::Differs,
     };
     let instruction = rebuilt.as_ref().map(|b| b.text.split("\n\n[").next().unwrap_or("").trim_start_matches("[From memory. ").trim_end_matches(']').to_string());
-    Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction }
+    let left_out = record
+        .left_out
+        .iter()
+        .map(|g| {
+            let gone = PanelPassage { state: "left-out", day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, lines: Vec::new(), quoted: false, score: g.score };
+            match at(&g.hit) {
+                Now::Here { by_person, text, title, ai_name, conversation_id, .. } => {
+                    let shown = line(&Said { by_person, text, seq: g.hit.s, at: g.hit.t }, false).0;
+                    let shown = shown.trim_start_matches(if by_person { "They said: " } else { "AI: " }).to_string();
+                    PanelPassage { title, ai_name, conversation_id, lines: vec![(by_person, shown)], ..gone }
+                }
+                _ => gone,
+            }
+        })
+        .zip(&record.left_out)
+        .map(|(passage, l)| PanelLeftOut { passage, item: l.item.clone(), replaced_on: None, still_replaced: true })
+        .collect();
+    Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction, left_out }
 }
 
 /// One thing memory holds to be true now, for the note after a question.
@@ -575,11 +634,16 @@ const NOT_CONFIRMED: &str = " (an AI's note, not confirmed by them)";
 /// floor, at most three, newest first. `near`: each candidate's index and
 /// its likeness to the question.
 pub(crate) fn note_items(held: &[Held], near: &[(usize, f32)]) -> Vec<Held> {
+    note_order(held, near).into_iter().map(|i| held[i].clone()).collect()
+}
+
+/// `note_items`, as places in `held`.
+pub(crate) fn note_order(held: &[Held], near: &[(usize, f32)]) -> Vec<usize> {
     let mut close: Vec<(usize, f32)> = near.iter().copied().filter(|(i, s)| *s >= NOTE_FLOOR && *i < held.len()).collect();
     close.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
     close.truncate(NOTE_ITEMS);
-    let mut picked: Vec<Held> = close.into_iter().map(|(i, _)| held[i].clone()).collect();
-    picked.sort_by(|a, b| b.as_of.cmp(&a.as_of));
+    let mut picked: Vec<usize> = close.into_iter().map(|(i, _)| i).collect();
+    picked.sort_by(|a, b| held[*b].as_of.cmp(&held[*a].as_of));
     picked
 }
 

@@ -319,6 +319,8 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/memory-ask", post(memory_ask_dev))
         .route("/internal/last-chat-request", get(last_chat_request_dev))
         .route("/internal/memory-check", post(memory_check_dev))
+        .route("/internal/memory-tidy", post(memory_tidy_dev))
+        .route("/internal/memory-items-near", get(memory_items_near_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -1027,7 +1029,56 @@ async fn memory_check_dev(
             Err(e) => return Json(json!({ "error": e, "runs_done": detail })).into_response(),
         }
     }
-    Json(json!({ "model": model, "steady": crate::memory_check::steady(&verdicts), "seconds": started.elapsed().as_secs(), "runs": detail })).into_response()
+    // A whole check (three runs or more) is kept as this model's result,
+    // as the app's own check keeps it.
+    let kept = match (&model, verdicts.len() >= 3) {
+        (Some(m), true) => {
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+            let result = crate::memory_check::settled(&verdicts, crate::model_hash::get(&app, m), at);
+            if let Some(r) = &result {
+                crate::memory_check::store(&app, m, r.clone());
+            }
+            result
+        }
+        _ => None,
+    };
+    Json(json!({ "model": model, "steady": crate::memory_check::steady(&verdicts), "seconds": started.elapsed().as_secs(), "runs": detail, "kept": kept })).into_response()
+}
+
+/// Dev builds only: how alike each kept item is to a question (`q`), the
+/// closest first: what the note after a question is chosen by.
+async fn memory_items_near_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let question = q.get("q").cloned().unwrap_or_default();
+    let Ok(v) = crate::inference_memory::embed_for_search(&app, &question).await else {
+        return Json(json!({ "error": "the question could not be embedded (is the memory model installed and running?)" })).into_response();
+    };
+    let mut near: Vec<(String, f32)> = crate::memory_reading::item_vectors(&app).into_iter().map(|(id, (_, vector))| (id, crate::memory_index::likeness(&v, &vector))).collect();
+    near.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    Json(json!({ "near": near.into_iter().map(|(id, score)| json!({ "id": id, "score": score })).collect::<Vec<_>>(), "floor": crate::memory_block::NOTE_FLOOR })).into_response()
+}
+
+/// Dev builds only: one pass of the tidying job, now. `force=1` runs it
+/// whatever the computer is doing and whatever the loaded model's check
+/// result (a test's way to see a judgment applied); `queue=<item id>`
+/// has that item wait for the pass, as a newly kept one does.
+async fn memory_tidy_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let force = q.get("force").is_some_and(|f| f == "1");
+    if let Some(id) = q.get("queue").filter(|id| !id.is_empty()) {
+        crate::memory_tidying::kept(&app, id);
+    }
+    Json(json!({ "report": crate::memory_tidying::pass(&app, force).await })).into_response()
 }
 
 /// Dev builds only: the last request the chat page sent to a model, as it

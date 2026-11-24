@@ -94,8 +94,8 @@ pub(crate) fn verdict(set: u32, answers: &[Answered]) -> Verdict {
     Verdict { set, may_tidy: passed(Part::Judge), may_keep: passed(Part::Gate), may_close: passed(Part::Done), parts }
 }
 
-/// The shipped examples, version 2: made-up conversations of one shop,
-/// each passage as long and as messy as a real one.
+/// The shipped examples: made-up conversations of one shop, each passage
+/// as long and as messy as a real one. The set carries its own version.
 pub(crate) const SET: &str = include_str!("memory_check_set.json");
 
 /// One side of an example: a dated passage of a conversation.
@@ -141,6 +141,87 @@ pub(crate) struct CheckSet {
 
 pub(crate) fn shipped_set() -> CheckSet {
     serde_json::from_str(SET).expect("the shipped check set parses")
+}
+
+/// The shipped set's version.
+pub(crate) fn set_version() -> u32 {
+    static V: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *V.get_or_init(|| shipped_set().v)
+}
+
+// ── what a model was found able to do, kept on this computer ────────────
+
+const VERDICTS_FILE: &str = "memory-check.json";
+
+/// A model's result on this computer: what it may do for memory.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Stored {
+    /// The set's version the result is for.
+    pub set: u32,
+    /// The model file's hash when it was checked: a replaced file under
+    /// the same name is checked again.
+    #[serde(default)]
+    pub sha256: Option<String>,
+    pub may_tidy: bool,
+    pub may_keep: bool,
+    pub may_close: bool,
+    /// Right answers on the judging part, in its worst run: between two
+    /// of the person's devices, the better judge tidies.
+    pub judge_right: u32,
+    /// The marks of each run, as they are shown.
+    #[serde(default)]
+    pub runs: Vec<serde_json::Value>,
+    pub at: i64,
+}
+
+/// What several runs of the check let a model do: only what every run
+/// allowed, and nothing at all unless the runs agree (three at least).
+pub(crate) fn settled(runs: &[Verdict], sha256: Option<String>, at: i64) -> Option<Stored> {
+    let first = runs.first()?;
+    let agree = steady(runs);
+    let all = |f: fn(&Verdict) -> bool| agree && runs.iter().all(f);
+    let judge_right = runs.iter().filter_map(|v| v.parts.iter().find(|p| p.part == Part::Judge).map(|p| p.right as u32)).min().unwrap_or(0);
+    Some(Stored {
+        set: first.set,
+        sha256,
+        may_tidy: all(|v| v.may_tidy),
+        may_keep: all(|v| v.may_keep),
+        may_close: all(|v| v.may_close),
+        judge_right,
+        runs: runs.iter().map(|v| serde_json::to_value(v).unwrap_or_default()).collect(),
+        at,
+    })
+}
+
+fn verdicts_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join(VERDICTS_FILE))
+}
+
+fn all_stored(app: &tauri::AppHandle) -> std::collections::HashMap<String, Stored> {
+    verdicts_path(app).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+}
+
+/// Is a kept result still good? For this version of the set, and for the
+/// file as it is now.
+pub(crate) fn still_good(s: &Stored, set: u32, sha256_now: Option<&str>) -> bool {
+    s.set == set && s.sha256.as_deref() == sha256_now
+}
+
+/// The result kept for a model, when it is for the shipped set and the
+/// file as it is now.
+pub(crate) fn stored(app: &tauri::AppHandle, model: &str) -> Option<Stored> {
+    let s = all_stored(app).remove(model)?;
+    still_good(&s, set_version(), crate::model_hash::get(app, model).as_deref()).then_some(s)
+}
+
+/// Keep a model's result.
+pub(crate) fn store(app: &tauri::AppHandle, model: &str, result: Stored) {
+    let mut all = all_stored(app);
+    all.insert(model.to_string(), result);
+    if let (Some(p), Ok(json)) = (verdicts_path(app), serde_json::to_vec_pretty(&all)) {
+        let _ = std::fs::write(p, json);
+    }
 }
 
 // ── the questions, in their fixed form ──────────────────────────────────
@@ -221,6 +302,165 @@ pub(crate) async fn run(state: &crate::llm::LLMState, seed: u64) -> Result<(Verd
         answers.push(Answered { part: a.part, expected_yes: a.expected_yes, said_yes });
     }
     Ok((verdict(set.v, &answers), said))
+}
+
+// ── the check, run by the app while the computer is idle ────────────────
+
+const PROGRESS_FILE: &str = "memory-check-progress.json";
+/// The job's name in the machine's list of held work.
+const JOB: &str = "checking a model for memory work";
+/// A whole check is this many runs of the set, each in another order.
+pub(crate) const RUNS: usize = 3;
+
+/// One answer of a check in progress.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Got {
+    pub part: Part,
+    pub expected_yes: bool,
+    pub said_yes: Option<bool>,
+}
+
+/// A check that is under way: kept after every answer, so a computer
+/// that is rarely idle still finishes it, a few examples at a time.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct Progress {
+    pub model: String,
+    pub set: u32,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// The answers so far of each run, in the order that run asks.
+    pub runs: Vec<Vec<Got>>,
+}
+
+/// Which example comes next: the run (0 to 2) and the place in its order.
+/// `None` when every run is whole.
+pub(crate) fn next_to_ask(p: &Progress, per_run: usize) -> Option<(usize, usize)> {
+    (0..RUNS).find_map(|run| {
+        let done = p.runs.get(run).map_or(0, Vec::len);
+        (done < per_run).then_some((run, done))
+    })
+}
+
+/// Examples answered so far, and how many a whole check asks.
+pub(crate) fn asked_so_far(p: &Progress, per_run: usize) -> (usize, usize) {
+    (p.runs.iter().take(RUNS).map(|r| r.len().min(per_run)).sum(), RUNS * per_run)
+}
+
+/// The result of a check whose runs are whole.
+pub(crate) fn result_of(p: &Progress, at: i64) -> Option<Stored> {
+    let runs: Vec<Verdict> = p.runs.iter().take(RUNS).map(|r| verdict(p.set, &r.iter().map(|g| Answered { part: g.part, expected_yes: g.expected_yes, said_yes: g.said_yes }).collect::<Vec<_>>())).collect();
+    settled(&runs, p.sha256.clone(), at)
+}
+
+fn progress_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app.path().app_data_dir().ok().map(|d| d.join(PROGRESS_FILE))
+}
+
+fn read_progress(app: &tauri::AppHandle) -> Option<Progress> {
+    progress_path(app).and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok())
+}
+
+fn write_progress(app: &tauri::AppHandle, p: &Progress) {
+    if let (Some(path), Ok(json)) = (progress_path(app), serde_json::to_vec(p)) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// What the check line shows.
+#[derive(Serialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckStatus {
+    /// The model that is loaded on this computer, when one is.
+    pub model: Option<String>,
+    /// Its result, when it has been checked.
+    pub result: Option<Stored>,
+    /// A check under way for it: answers so far, and how many there are.
+    pub done: usize,
+    pub total: usize,
+}
+
+#[tauri::command]
+pub async fn memory_check_status(app: tauri::AppHandle) -> Result<CheckStatus, String> {
+    use tauri::Manager;
+    let model = app.state::<crate::llm::LLMState>().current_model.lock().await.clone();
+    let Some(m) = model.clone() else { return Ok(CheckStatus::default()) };
+    let per_run = {
+        let set = shipped_set();
+        set.pairs.len() + set.exchanges.len() + set.done.len()
+    };
+    let (done, total) = read_progress(&app).filter(|p| p.model == m && p.set == set_version()).map_or((0, RUNS * per_run), |p| asked_so_far(&p, per_run));
+    Ok(CheckStatus { model, result: stored(&app, &m), done, total })
+}
+
+/// One stretch of the check: as many examples as the computer's idle time
+/// gives. Answers how long to wait before looking again.
+async fn stretch(app: &tauri::AppHandle) -> std::time::Duration {
+    use std::time::Duration;
+    use tauri::Manager;
+    let llm = app.state::<crate::llm::LLMState>();
+    let Some(model) = llm.current_model.lock().await.clone() else { return Duration::from_secs(300) };
+    // Only a model that runs on this computer is checked, or ever judges.
+    if !model.to_lowercase().ends_with(".gguf") || stored(app, &model).is_some() {
+        return Duration::from_secs(600);
+    }
+    if !crate::machine::may_run(crate::machine::Work::Heavy, JOB) {
+        return Duration::from_secs(120);
+    }
+    let set = shipped_set();
+    let per_run = set.pairs.len() + set.exchanges.len() + set.done.len();
+    let sha256 = crate::model_hash::get(app, &model);
+    let mut progress = read_progress(app).filter(|p| p.model == model && p.set == set.v && p.sha256 == sha256).unwrap_or_else(|| Progress { model: model.clone(), set: set.v, sha256: sha256.clone(), runs: Vec::new() });
+    let mut order: Option<(usize, Vec<Asked>)> = None;
+    while let Some((run, at)) = next_to_ask(&progress, per_run) {
+        // The person is back, or another model was loaded: the rest waits.
+        if !crate::machine::would_run(crate::machine::Work::Heavy) || llm.current_model.lock().await.as_deref() != Some(model.as_str()) {
+            break;
+        }
+        if order.as_ref().is_none_or(|(r, _)| *r != run) {
+            order = Some((run, asked(&set, run as u64 + 1)));
+        }
+        let Some(a) = order.as_ref().and_then(|(_, all)| all.get(at)) else { break };
+        let Ok(reply) = crate::llm::fixed_form_once(&llm, a.system, &a.user, schema(a.part), 0.2, 300, Some(run as u64 + 1)).await else { break };
+        while progress.runs.len() <= run {
+            progress.runs.push(Vec::new());
+        }
+        progress.runs[run].push(Got { part: a.part, expected_yes: a.expected_yes, said_yes: read_answer(a.part, &reply) });
+        write_progress(app, &progress);
+    }
+    crate::machine::done(JOB);
+    if next_to_ask(&progress, per_run).is_some() {
+        return Duration::from_secs(60);
+    }
+    let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    if let Some(result) = result_of(&progress, at) {
+        log::info!("[memory check] {model}: may tidy {}, may keep {}, may close {}", result.may_tidy, result.may_keep, result.may_close);
+        store(app, &model, result);
+        if let Some(p) = progress_path(app) {
+            let _ = std::fs::remove_file(p);
+        }
+        // What waited for a checked model can go on.
+        crate::memory_tidying::wake();
+    }
+    Duration::from_secs(600)
+}
+
+/// Start the standing job: the loaded model is checked once, in idle time.
+pub fn start(app: &tauri::AppHandle) {
+    // A development build runs it only when asked to (`YOAI_MEMORY_CHECK`
+    // set, by a test of the check itself): three runs of sixty judgments
+    // would sit in the middle of whatever else is being measured.
+    if cfg!(debug_assertions) && std::env::var("YOAI_MEMORY_CHECK").is_err() {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+        loop {
+            let wait = stretch(&app).await;
+            tokio::time::sleep(wait).await;
+        }
+    });
 }
 
 /// Is the check itself steady for a model? The same verdict in every run
@@ -306,6 +546,61 @@ mod tests {
         assert!(steady(&[verdict(2, &good), verdict(2, &shuffled), verdict(2, &good)]));
         assert!(!steady(&[verdict(2, &good), verdict(2, &weak), verdict(2, &good)]), "a verdict that changes between runs is not a measure");
         assert!(!steady(&[verdict(2, &good), verdict(2, &good)]), "three runs at least");
+    }
+
+    #[test]
+    fn a_model_may_do_only_what_every_run_allowed_and_only_when_the_runs_agree() {
+        let good = verdict(3, &[answers(Part::Judge, 12, 12, 18, 0), answers(Part::Gate, 10, 9, 10, 1), answers(Part::Done, 5, 5, 5, 0)].concat());
+        let fewer = verdict(3, &[answers(Part::Judge, 12, 10, 18, 1), answers(Part::Gate, 10, 9, 10, 1), answers(Part::Done, 5, 5, 5, 0)].concat());
+        let no_judge = verdict(3, &[answers(Part::Judge, 12, 12, 18, 4), answers(Part::Gate, 10, 9, 10, 1), answers(Part::Done, 5, 5, 5, 0)].concat());
+        let s = settled(&[good.clone(), fewer.clone(), good.clone()], Some("abc".into()), 5).unwrap();
+        assert_eq!((s.set, s.may_tidy, s.may_keep, s.may_close, s.runs.len(), s.at), (3, true, true, true, 3, 5));
+        assert_eq!(s.judge_right, 27, "the worst run's count: 10 caught and 17 left alone");
+        // Runs that disagree settle nothing, on any part.
+        let s = settled(&[good.clone(), no_judge.clone(), good.clone()], None, 5).unwrap();
+        assert_eq!((s.may_tidy, s.may_keep, s.may_close), (false, false, false));
+        // Runs that agree on failing the judging still allow what passed.
+        let s = settled(&[no_judge.clone(), no_judge.clone(), no_judge.clone()], None, 5).unwrap();
+        assert_eq!((s.may_tidy, s.may_keep, s.may_close), (false, true, true));
+        // Fewer than three runs settle nothing; no run at all is no result.
+        assert!(!settled(&[good.clone(), good.clone()], None, 5).unwrap().may_tidy);
+        assert!(settled(&[], None, 5).is_none());
+        // A result is for one version of the set and one file.
+        let s = settled(&[good.clone(), good.clone(), good], Some("abc".into()), 5).unwrap();
+        assert!(still_good(&s, 3, Some("abc")));
+        assert!(!still_good(&s, 4, Some("abc")), "another set: checked again");
+        assert!(!still_good(&s, 3, Some("def")), "another file under the same name: checked again");
+        assert!(!still_good(&s, 3, None));
+        assert_eq!(set_version(), shipped_set().v);
+    }
+
+    #[test]
+    fn a_check_goes_on_from_where_it_stopped_and_ends_in_a_result() {
+        let got = |part, expected_yes, said: bool| Got { part, expected_yes, said_yes: Some(said) };
+        // A set of 4 examples a run: two pairs, one exchange, one done-pair.
+        let run = |wrong_replaces: bool| vec![got(Part::Judge, true, true), got(Part::Judge, false, wrong_replaces), got(Part::Gate, true, true), got(Part::Done, false, false)];
+        let mut p = Progress { model: "m.gguf".into(), set: 3, sha256: Some("abc".into()), runs: Vec::new() };
+        assert_eq!(next_to_ask(&p, 4), Some((0, 0)));
+        assert_eq!(asked_so_far(&p, 4), (0, 12));
+        p.runs.push(run(false)[..3].to_vec());
+        assert_eq!(next_to_ask(&p, 4), Some((0, 3)), "stopped mid-run: the next example of that run");
+        p.runs[0] = run(false);
+        assert_eq!(next_to_ask(&p, 4), Some((1, 0)));
+        p.runs.push(run(false));
+        p.runs.push(run(false)[..1].to_vec());
+        assert_eq!((next_to_ask(&p, 4), asked_so_far(&p, 4)), (Some((2, 1)), (9, 12)));
+        p.runs[2] = run(false);
+        assert_eq!(next_to_ask(&p, 4), None);
+        // What was kept reads back the same.
+        let back: Progress = serde_json::from_slice(&serde_json::to_vec(&p).unwrap()).unwrap();
+        assert_eq!(back, p);
+        let r = result_of(&p, 9).unwrap();
+        assert_eq!((r.set, r.sha256.as_deref(), r.runs.len(), r.at), (3, Some("abc"), 3, 9));
+        assert!(r.may_keep && r.may_close);
+        // A run that disagrees with the others settles nothing.
+        p.runs[1] = vec![got(Part::Judge, true, true), got(Part::Judge, false, false), got(Part::Gate, true, false), got(Part::Done, false, false)];
+        let r = result_of(&p, 9).unwrap();
+        assert!(!r.may_keep && !r.may_tidy && !r.may_close);
     }
 
     #[test]

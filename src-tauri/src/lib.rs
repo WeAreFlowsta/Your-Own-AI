@@ -26,6 +26,8 @@ mod memory_block;         // the search results placed ahead of the question: ex
 mod memory_quotes;        // the quote check, and which line shows under a reply
 mod memory_items;         // the memory item: what was kept, its state, who may use it, and the log of changes
 mod memory_tidy;          // tidying's rules: which pairs are judged, what a verdict changes, undo, the pause
+mod memory_state;         // what memory holds to be true now beside a question: the note, and what is left out as replaced
+mod memory_tidying;       // the tidying job: judges queued pairs in idle time, on a model that passed the check
 mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
 mod memory_migrate;       // the update path: what the older stores become
 mod memory_use;           // who may draw on what: audiences, private conversations, forget and delete
@@ -893,6 +895,13 @@ pub fn run() {
             memory_items::memory_item_change,
             memory_items::memory_changes,
             memory_items::memory_undo,
+            memory_items::memory_not_replaced,
+            memory_items::memory_keep_quoted,
+            memory_items::memory_keep_message,
+            memory_check::memory_check_status,
+            memory_tidying::memory_tidy_status,
+            memory_tidying::memory_tidy_set,
+            memory_tidying::memory_tidy_start_again,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
@@ -1156,6 +1165,8 @@ pub fn run() {
                 llm::start_idle_unload(&link_app_handle);
                 dreaming::start_dreaming(&link_app_handle);
                 memory_reading::start(&link_app_handle);
+                memory_tidying::start(&link_app_handle);
+                memory_check::start(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);

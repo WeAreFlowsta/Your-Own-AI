@@ -20,6 +20,15 @@ interface Passage {
   quoted: boolean;
 }
 
+/** A found passage that was left out because memory holds something newer. */
+interface LeftOut extends Omit<Passage, "state"> {
+  state: "left-out";
+  /** The replaced item it was left out for. */
+  item: string;
+  replacedOn: string | null;
+  stillReplaced: boolean;
+}
+
 interface Panel {
   checked: "exact" | "some-gone" | "differs" | "no-record";
   passages: Passage[];
@@ -27,6 +36,7 @@ interface Panel {
   notHere: number;
   lines: string[];
   instruction: string | null;
+  leftOut: LeftOut[];
 }
 
 interface Props {
@@ -43,6 +53,8 @@ export default component$<Props>((props) => {
   const failed = useSignal("");
   const all = useSignal(false);
   const exact = useSignal(false);
+  // Items the person has just said are not replaced, by id.
+  const putBack = useSignal<string[]>([]);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async () => {
@@ -110,6 +122,46 @@ export default component$<Props>((props) => {
               <LiquidMetalButton variant="secondary" class="px-3 py-1 text-xs" testId="given-show-all" onClick$={() => { all.value = true; }}>
                 Show all {total}
               </LiquidMetalButton>
+            )}
+            {p.leftOut.length > 0 && (
+              <div data-testid="given-left-out">
+                <div class="text-xs text-[var(--text-muted)] mb-1">Left out</div>
+                <ul class="space-y-2 text-xs">
+                  {p.leftOut.map((x, i) => {
+                    const back = putBack.value.includes(x.item) || !x.stillReplaced;
+                    const said = x.lines[0]?.[1];
+                    const item = x.item;
+                    return (
+                      <li key={`left-${x.seq}-${i}`} data-testid="given-left-out-row" data-item={x.item}>
+                        <p>
+                          {dayWords(x.day)}
+                          {said ? `: "${said}"` : ""}{" "}
+                          {back
+                            ? "This is current again, so it will be given next time."
+                            : `Replaced${x.replacedOn ? ` on ${dayWords(x.replacedOn)}` : ""}, so it was left out of what ${props.ai} was given.`}
+                        </p>
+                        {!back && (
+                          <LiquidMetalButton
+                            variant="secondary"
+                            class="mt-1 px-3 py-1 text-xs"
+                            testId="given-not-replaced"
+                            onClick$={async () => {
+                              try {
+                                await invoke("memory_not_replaced", { id: item });
+                                putBack.value = [...putBack.value, item];
+                              } catch (e) {
+                                failed.value = String(e);
+                              }
+                            }}
+                          >
+                            Not replaced
+                          </LiquidMetalButton>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             )}
             <div>
               <div class="text-xs text-[var(--text-muted)] mb-1">Also given</div>
