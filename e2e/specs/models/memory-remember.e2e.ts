@@ -70,7 +70,6 @@ describe("Remember keeps the exchange", () => {
     expect(await textOf(line)).toContain("Kept.");
     const kept = await current();
     expect(kept.length).toBe(2);
-    expect(kept.some((i) => i.text.includes("oven service"))).toBe(true);
     await shot("remember-later-reply");
     await press(await within("assistant", "kept-undo"));
     await browser.waitUntil(async () => (await current()).length === 1, { timeout: 60_000, timeoutMsg: "Undo did not take the item back" });

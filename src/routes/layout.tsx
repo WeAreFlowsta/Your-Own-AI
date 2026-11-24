@@ -304,15 +304,6 @@ export default component$(() => {
 
   const projectMemoryFolder = useSignal<string | null>(null);
   useContextProvider(ProjectMemoryContext, projectMemoryFolder);
-  // "Project memory" opens Memory with that project chosen.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track }) => {
-    const folder = track(() => projectMemoryFolder.value);
-    if (!folder) return;
-    projectMemoryFolder.value = null;
-    await openProjectMemory(folder);
-    await nav("/your-memory/");
-  });
 
   // UI-stall watchdog. CSS spinners animate on the compositor thread, so
   // the app can look alive while the main thread - which handles every
@@ -354,6 +345,18 @@ export default component$(() => {
   // yourownai:// links ("Add to Your Own AI" on the site). The path maps
   // onto the app's own routes; a skills link carries the source to add.
   const nav = useNavigate();
+  // "Project memory" opens Memory with that project chosen.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(
+    async ({ track }) => {
+      const folder = track(() => projectMemoryFolder.value);
+      if (!folder) return;
+      projectMemoryFolder.value = null;
+      await openProjectMemory(folder);
+      await nav("/your-memory/");
+    },
+    { strategy: "document-ready" },
+  );
 
   // The Vault moved to another Flowsta identity while the app runs: this
   // window still shows the previous identity's AIs; a restart opens the new
