@@ -1,5 +1,6 @@
-import { component$, useSignal, type QRL } from "@builder.io/qwik";
-import { LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
+import { component$, useSignal, useVisibleTask$, $, type QRL } from "@builder.io/qwik";
+import { LuEyeOff, LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
+import { CONV_USE_EVENT, conversationsNotUsed, setPrivate } from "../utils/memoryUse";
 import { lastActiveAt, type ConversationListItem } from "../utils/conversationResume";
 import { useTurns } from "../contexts/TurnsContext";
 import { isLive } from "../utils/turns";
@@ -68,6 +69,26 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
     // Rows drawn so far: the first screens at once, more as the list scrolls
     // near its end. Drawing a thousand rows held the drawer for seconds.
     const drawn = useSignal(ROWS_FIRST);
+    // The conversations kept out of memory, by their start.
+    const keptOut = useSignal<number[]>([]);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(({ track, cleanup }) => {
+      track(() => open);
+      if (!open) return;
+      const load = async () => {
+        keptOut.value = (await conversationsNotUsed()).filter((u) => u.private).map((u) => u.started_at);
+      };
+      void load();
+      window.addEventListener(CONV_USE_EVENT, load);
+      cleanup(() => window.removeEventListener(CONV_USE_EVENT, load));
+    });
+    const togglePrivate = $(async (startedAt: number) => {
+      const on = !keptOut.value.includes(startedAt);
+      keptOut.value = on ? [...keptOut.value, startedAt] : keptOut.value.filter((s) => s !== startedAt);
+      await setPrivate(startedAt, on).catch(() => {
+        keptOut.value = on ? keptOut.value.filter((s) => s !== startedAt) : [...keptOut.value, startedAt];
+      });
+    });
     if (!open) return null;
     // The AIs that have conversations, in list order - the filter row.
     const ais: { id: string; label: string; imageUrl?: string | null }[] = [];
@@ -275,6 +296,23 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                   class="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-transparent border-none cursor-pointer"
                 >
                   <LuPencil class="h-3.5 w-3.5" />
+                </button>
+                <button
+                  data-testid="conversation-private"
+                  data-on={keptOut.value.includes(item.conversation.started_at) ? "1" : "0"}
+                  onClick$={() => togglePrivate(item.conversation.started_at)}
+                  title={
+                    keptOut.value.includes(item.conversation.started_at)
+                      ? "Kept out of memory. Press to let your AIs use this conversation again."
+                      : "Keep this conversation out of memory: it is never searched and nothing is kept from it"
+                  }
+                  class={`shrink-0 bg-transparent border-none cursor-pointer hover:text-[var(--text-primary)] ${
+                    keptOut.value.includes(item.conversation.started_at)
+                      ? "text-[var(--text-secondary)]"
+                      : "opacity-0 group-hover:opacity-60 hover:!opacity-100 text-[var(--text-muted)]"
+                  }`}
+                >
+                  <LuEyeOff class="h-3.5 w-3.5" />
                 </button>
                 {item.folderPath && (
                   <LuFolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />
