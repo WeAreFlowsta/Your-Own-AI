@@ -425,6 +425,7 @@ export default component$<ProfileMemoryProps>(
               </div>
               {addPredicate.value === "note" ? (
                 <textarea
+                  data-testid="memory-add-note"
                   value={addValue.value}
                   rows={2}
                   placeholder={
@@ -472,6 +473,7 @@ export default component$<ProfileMemoryProps>(
                   Cancel
                 </LiquidMetalButton>
                 <LiquidMetalButton
+                  testId="memory-add-save"
                   onClick$={doAddFact}
                   disabled={!addValue.value.trim()}
                   class="px-4 py-2 text-sm"

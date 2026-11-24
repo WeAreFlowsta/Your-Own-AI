@@ -477,6 +477,9 @@ pub struct PanelPassage {
     /// sequence: where "Open this in the conversation" goes.
     pub conversation_id: String,
     pub seq: u32,
+    /// The conversation's start: its name on every device, which "Do not
+    /// use this" is recorded under.
+    pub started_at: i64,
     /// The lines as the AI saw them, each `[by the person, text]`.
     pub lines: Vec<(bool, String)>,
     pub quoted: bool,
@@ -543,7 +546,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
     let mut exchanges: Vec<Exchange> = Vec::new();
     let (mut deleted, mut not_here) = (0u32, 0u32);
     for g in &record.exchanges {
-        let gone = |state: &'static str| PanelPassage { state, day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, lines: Vec::new(), quoted: g.quoted, score: g.score };
+        let gone = |state: &'static str| PanelPassage { state, day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, started_at: g.hit.c, lines: Vec::new(), quoted: g.quoted, score: g.score };
         match at(&g.hit) {
             Now::Deleted => {
                 deleted += 1;
@@ -578,7 +581,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
                     not_here += 1;
                 }
                 let lines = lines.into_iter().map(|(p, t)| (p, t.trim_start_matches(if p { "They said: " } else { "AI: " }).to_string())).collect();
-                passages.push(PanelPassage { state: "shown", day: day(g.hit.t), title, ai_name, conversation_id, seq: g.hit.s, lines, quoted: g.quoted, score: g.score });
+                passages.push(PanelPassage { state: "shown", day: day(g.hit.t), title, ai_name, conversation_id, seq: g.hit.s, started_at: g.hit.c, lines, quoted: g.quoted, score: g.score });
                 exchanges.push(e);
             }
         }
@@ -603,7 +606,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
         .left_out
         .iter()
         .map(|g| {
-            let gone = PanelPassage { state: "left-out", day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, lines: Vec::new(), quoted: false, score: g.score };
+            let gone = PanelPassage { state: "left-out", day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, started_at: g.hit.c, lines: Vec::new(), quoted: false, score: g.score };
             match at(&g.hit) {
                 Now::Here { by_person, text, title, ai_name, conversation_id, .. } => {
                     let shown = line(&Said { by_person, text, seq: g.hit.s, at: g.hit.t }, false).0;

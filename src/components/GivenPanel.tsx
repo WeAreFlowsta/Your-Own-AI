@@ -4,10 +4,11 @@
  * the reply's record (pointers, never a second copy of the text) and
  * checked against the fingerprint kept with it.
  */
-import { component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
+import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { invoke } from "@tauri-apps/api/core";
 import LiquidMetalButton from "./LiquidMetalButton";
 import { dayWords } from "../utils/givenLine";
+import { setMessageUsed } from "../utils/memoryUse";
 
 interface Passage {
   state: "shown" | "deleted" | "not-here";
@@ -16,6 +17,7 @@ interface Passage {
   aiName: string | null;
   conversationId: string;
   seq: number;
+  startedAt: number;
   lines: [boolean, string][];
   quoted: boolean;
 }
@@ -53,6 +55,17 @@ export default component$<Props>((props) => {
   const failed = useSignal("");
   const all = useSignal(false);
   const exact = useSignal(false);
+  // Passages the person has just said not to use, as "start-sequence".
+  const notUsed = useSignal<string[]>([]);
+  const useMessage = $(async (startedAt: number, seq: number, used: boolean) => {
+    const key = `${startedAt}-${seq}`;
+    try {
+      await setMessageUsed(startedAt, seq, used);
+      notUsed.value = used ? notUsed.value.filter((k) => k !== key) : [...notUsed.value, key];
+    } catch {
+      /* the passage stays as it was */
+    }
+  });
   // Items the person has just said are not replaced, by id.
   const putBack = useSignal<string[]>([]);
 
@@ -99,8 +112,21 @@ export default component$<Props>((props) => {
                           </p>
                         ))}
                       </blockquote>
-                      <p class="mt-1 text-xs text-[var(--text-muted)]">
-                        From "{x.title || "a conversation"}"{x.aiName ? `, with ${x.aiName}` : ""}.
+                      <p class="mt-1 text-xs text-[var(--text-muted)] flex flex-wrap items-center gap-x-3">
+                        <span>From "{x.title || "a conversation"}"{x.aiName ? `, with ${x.aiName}` : ""}.</span>
+                        {x.startedAt > 0 &&
+                          (notUsed.value.includes(`${x.startedAt}-${x.seq}`) ? (
+                            <>
+                              <span data-testid="given-not-used">Not used from now on.</span>
+                              <button type="button" class="underline" data-testid="given-use-again" onClick$={() => useMessage(x.startedAt, x.seq, true)}>
+                                Use again
+                              </button>
+                            </>
+                          ) : (
+                            <button type="button" class="underline" data-testid="given-do-not-use" onClick$={() => useMessage(x.startedAt, x.seq, false)}>
+                              Do not use this
+                            </button>
+                          ))}
                       </p>
                     </>
                   ) : (
