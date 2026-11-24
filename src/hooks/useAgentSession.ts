@@ -16,6 +16,7 @@
  */
 
 import { skillNameFromPath } from "../utils/skills";
+import { maskText } from "../utils/secretMask";
 import { invoke } from "@tauri-apps/api/core";
 import { describeAction, subjectOfLabel, errorOf } from "../utils/actionLabels";
 import { MCP_PRESETS } from "../utils/mcp";
@@ -420,8 +421,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
   /** Distill a session digest into the project's memory (cheap routed
    *  model call, fire-and-forget - never blocks the UI). Clears the
    *  project's pending-digest safety copy on success or no-change. */
-  const distillMemory$ = $(async (folderPath: string, digest: string) => {
+  const distillMemory$ = $(async (folderPath: string, rawDigest: string) => {
     const ai = props.selectedAi.value;
+    // What is kept from a session is kept without its secrets.
+    const digest = await maskText(rawDigest);
     if (!ai.aiConfig?.agentPubKey || !digest) return;
     const clearPending = () => clearWaitingNotes(folderPath, ai.aiConfig?.agentPubKey);
     // Raw capture first (the memory design §5.5): one episode row per
@@ -834,7 +837,8 @@ export function useAgentSession(props: UseAgentSessionProps) {
       digestPending.value = false;
       // Exclude the just-asked question + its loading bubble (appended by
       // startTurnBubble before dispatch on every path).
-      const digest = buildResumeDigest(props.chatState.messages.slice(0, -2));
+      // The digest goes to a new session: secrets in it are hidden first.
+      const digest = await maskText(buildResumeDigest(props.chatState.messages.slice(0, -2)));
       if (digest) wire = digest + text;
     }
     if (memoryPending.value) {

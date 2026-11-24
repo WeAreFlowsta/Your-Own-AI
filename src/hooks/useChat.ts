@@ -1775,7 +1775,8 @@ export function useChat(props: UseChatProps) {
         {
           const lastUser = chatHistory[chatHistory.length - 1];
           const shown = typeof lastUser?.content === "string" ? lastUser.content : JSON.stringify(lastUser?.content ?? null);
-          uiLog(`[web] last user message on the wire (${shown.length} chars): ${JSON.stringify(shown.slice(0, 160))}`);
+          // Lengths only: a log never carries what a person wrote.
+          uiLog(`[web] last user message on the wire: ${shown.length} chars`);
         }
         // Write the user's side now (see recordCtx above). Not awaited: the
         // request below goes out immediately; the assistant record awaits

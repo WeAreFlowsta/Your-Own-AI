@@ -19,6 +19,7 @@ mod model_stats;         // per-machine measured tok/s + load time, shared by ro
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records
 mod memory_prompt;        // everything memory adds to a request, built in one place
+mod secret_mask;          // passwords and keys are hidden before text leaves its conversation
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
@@ -870,6 +871,7 @@ pub fn run() {
             commands_holochain::save_text_download,
             memory::get_memory_facts,
             memory_prompt::memory_for_turn,
+            secret_mask::mask_text,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
