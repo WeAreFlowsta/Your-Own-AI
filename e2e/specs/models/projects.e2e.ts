@@ -250,6 +250,10 @@ describe("projects: the agent in a project", () => {
     const person = [...(request?.messages ?? [])].reverse().find((m) => m.role === "user" && text(m.content).includes("<user_query>"));
     console.log(`e2e: the person's prompt as sent: ${JSON.stringify(text(person?.content).slice(0, 1500))}`);
     expect(shape.some((x) => x.endsWith("*"))).toBe(true);
+    // The rule rides beside the person's prompt too, under its heading.
+    expect(text(person?.content)).toContain("Rules for this project:");
+    expect(text(person?.content)).toContain(DEPLOY);
+    console.log(`e2e: the reply holds the project's command: ${reply.text.includes(DEPLOY)}`);
     expect(reply.text).toContain(DEPLOY);
   });
 
