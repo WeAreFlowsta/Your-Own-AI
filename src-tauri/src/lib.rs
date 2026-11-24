@@ -29,6 +29,7 @@ mod memory_tidy;          // tidying's rules: which pairs are judged, what a ver
 mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
 mod memory_migrate;       // the update path: what the older stores become
 mod memory_use;           // who may draw on what: audiences, private conversations, forget and delete
+mod memory_rules;         // when an instruction becomes an offer to keep it as a rule
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
