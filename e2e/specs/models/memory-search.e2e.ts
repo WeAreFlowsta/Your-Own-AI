@@ -190,8 +190,11 @@ describe("memory's search, on the made-up history", () => {
     await shot("memory-given-panel");
     expect(await checked.getAttribute("data-checked")).toBe("exact");
     expect(await checked.getText()).toContain("This is exactly what");
+    // The first three are shown; the rest are one press away.
+    const more = await $('[data-testid="given-show-all"]');
+    if (await more.isExisting()) await more.click();
     const passages = await $$('[data-testid="given-passage"]');
-    expect(passages.length).toBeGreaterThanOrEqual(1);
+    expect(passages.length).toBeGreaterThanOrEqual(4);
     const text = await browser.execute(() => (document.querySelector('[data-testid="given-panel"]') as HTMLElement).innerText);
     expect(text).toContain("$60");
     expect(text).toContain("Also given");
