@@ -94,6 +94,135 @@ pub(crate) fn verdict(set: u32, answers: &[Answered]) -> Verdict {
     Verdict { set, may_tidy: passed(Part::Judge), may_keep: passed(Part::Gate), may_close: passed(Part::Done), parts }
 }
 
+/// The shipped examples, version 2: made-up conversations of one shop,
+/// each passage as long and as messy as a real one.
+pub(crate) const SET: &str = include_str!("memory_check_set.json");
+
+/// One side of an example: a dated passage of a conversation.
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct Passage {
+    pub date: String,
+    pub text: String,
+}
+
+/// An earlier and a later passage: does the later replace the earlier?
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct PairExample {
+    pub id: String,
+    pub expect: String,
+    pub earlier: Passage,
+    pub later: Passage,
+}
+
+/// One exchange: was something settled in it?
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct ExchangeExample {
+    pub id: String,
+    pub expect: String,
+    pub exchange: Passage,
+}
+
+/// An open thing and a later passage: was it done?
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct DoneExample {
+    pub id: String,
+    pub expect: String,
+    pub open: Passage,
+    pub later: Passage,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub(crate) struct CheckSet {
+    pub v: u32,
+    pub pairs: Vec<PairExample>,
+    pub exchanges: Vec<ExchangeExample>,
+    pub done: Vec<DoneExample>,
+}
+
+pub(crate) fn shipped_set() -> CheckSet {
+    serde_json::from_str(SET).expect("the shipped check set parses")
+}
+
+// ── the questions, in their fixed form ──────────────────────────────────
+
+/// The replacement judgment. The words are measured: answers were read
+/// with exactly this text.
+pub(crate) const JUDGE_SYSTEM: &str = "You keep a person's memory tidy. You are shown an EARLIER passage and a LATER passage from their conversations, each dated. Decide whether the later passage changes what was true in the earlier one.\nverdict REPLACES: the later passage changes, reverses, closes or updates something stated in the earlier one.\nverdict BOTH STAND: they are about different things, or the later one does not change the earlier one.\n\"now\": one sentence, what is true now.";
+
+/// "Was something settled": measured text.
+pub(crate) const GATE_SYSTEM: &str = "You are shown one dated exchange between a person and their AI. Answer one question: by the END of this exchange, has something been settled that will still matter in a month?\n\"settled\": the person made a choice, or work was reported finished, or a name, number, path or setting was established, or the person stated how they want things done.\n\"in_progress\": the AI is still checking, proposing, asking or working; or the person only asked for something; or it is a log, a test message or passing talk.\nGive the verdict and, if settled, the short quote that settles it.";
+
+/// "Done by later work": the same shape as the replacement judgment.
+pub(crate) const DONE_SYSTEM: &str = "You keep a person's memory tidy. You are shown something they LEFT OPEN in an earlier passage, and a LATER passage from their conversations, each dated. Decide whether the later passage shows that the open thing was finished.\nverdict DONE: the later passage says or shows that the open thing itself was done.\nverdict STILL OPEN: it was only planned, promised, asked about or chased; or only part of it was done; or it was dropped; or the later passage is about something else.\n\"quote\": the short quote from the later passage that shows it, or an empty string.";
+
+pub(crate) fn judge_user(earlier: &Passage, later: &Passage) -> String {
+    format!("EARLIER passage, {}:\n{}\n\nLATER passage, {}:\n{}", earlier.date, earlier.text, later.date, later.text)
+}
+
+pub(crate) fn gate_user(exchange: &Passage) -> String {
+    format!("Exchange, {}:\n{}", exchange.date, exchange.text)
+}
+
+pub(crate) fn done_user(open: &Passage, later: &Passage) -> String {
+    format!("LEFT OPEN, {}:\n{}\n\nLATER passage, {}:\n{}", open.date, open.text, later.date, later.text)
+}
+
+/// The form a reply is held to, per part.
+pub(crate) fn schema(part: Part) -> serde_json::Value {
+    let (verdicts, other) = match part {
+        Part::Judge => (["REPLACES", "BOTH STAND"], "now"),
+        Part::Gate => (["settled", "in_progress"], "quote"),
+        Part::Done => (["DONE", "STILL OPEN"], "quote"),
+    };
+    serde_json::json!({ "type": "object", "properties": { "verdict": { "type": "string", "enum": verdicts }, other: { "type": "string" } }, "required": ["verdict", other] })
+}
+
+/// One example as it is asked: its id, its part, what is expected, and
+/// the two texts of the request.
+pub(crate) struct Asked {
+    pub id: String,
+    pub part: Part,
+    pub expected_yes: bool,
+    pub system: &'static str,
+    pub user: String,
+}
+
+/// Every example of a set, in an order that depends on `seed` only (each
+/// run shuffles, so a verdict that depends on the order shows itself).
+pub(crate) fn asked(set: &CheckSet, seed: u64) -> Vec<Asked> {
+    let mut all: Vec<Asked> = Vec::new();
+    for p in &set.pairs {
+        all.push(Asked { id: p.id.clone(), part: Part::Judge, expected_yes: p.expect == "REPLACES", system: JUDGE_SYSTEM, user: judge_user(&p.earlier, &p.later) });
+    }
+    for e in &set.exchanges {
+        all.push(Asked { id: e.id.clone(), part: Part::Gate, expected_yes: e.expect == "settled", system: GATE_SYSTEM, user: gate_user(&e.exchange) });
+    }
+    for d in &set.done {
+        all.push(Asked { id: d.id.clone(), part: Part::Done, expected_yes: d.expect == "DONE", system: DONE_SYSTEM, user: done_user(&d.open, &d.later) });
+    }
+    let mut state = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    for i in (1..all.len()).rev() {
+        state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        all.swap(i, ((state >> 33) % (i as u64 + 1)) as usize);
+    }
+    all
+}
+
+/// One run of the check on the loaded model: every example asked once.
+/// Answers with the verdict and, per example, what was said.
+pub(crate) async fn run(state: &crate::llm::LLMState, seed: u64) -> Result<(Verdict, Vec<serde_json::Value>), String> {
+    let set = shipped_set();
+    let mut answers = Vec::new();
+    let mut said = Vec::new();
+    for a in asked(&set, seed) {
+        let reply = crate::llm::fixed_form_once(state, a.system, &a.user, schema(a.part), 0.2, 300, Some(seed)).await?;
+        let said_yes = read_answer(a.part, &reply);
+        said.push(serde_json::json!({ "id": a.id, "part": a.part, "expected_yes": a.expected_yes, "said_yes": said_yes, "reply": reply.chars().take(300).collect::<String>() }));
+        answers.push(Answered { part: a.part, expected_yes: a.expected_yes, said_yes });
+    }
+    Ok((verdict(set.v, &answers), said))
+}
+
 /// Is the check itself steady for a model? The same verdict in every run
 /// (the examples shuffled each time), or it is not a measure.
 pub(crate) fn steady(runs: &[Verdict]) -> bool {
@@ -177,6 +306,69 @@ mod tests {
         assert!(steady(&[verdict(2, &good), verdict(2, &shuffled), verdict(2, &good)]));
         assert!(!steady(&[verdict(2, &good), verdict(2, &weak), verdict(2, &good)]), "a verdict that changes between runs is not a measure");
         assert!(!steady(&[verdict(2, &good), verdict(2, &good)]), "three runs at least");
+    }
+
+    #[test]
+    fn the_shipped_set_is_the_size_and_shape_the_marks_assume() {
+        let set = shipped_set();
+        assert_eq!(set.v, 2);
+        assert_eq!((set.pairs.len(), set.exchanges.len(), set.done.len()), (30, 20, 10));
+        assert_eq!(set.pairs.iter().filter(|p| p.expect == "REPLACES").count(), 12);
+        assert_eq!(set.pairs.iter().filter(|p| p.expect == "BOTH STAND").count(), 18);
+        assert_eq!(set.exchanges.iter().filter(|e| e.expect == "settled").count(), 10);
+        assert_eq!(set.exchanges.iter().filter(|e| e.expect == "in_progress").count(), 10);
+        assert!(set.done.iter().all(|d| d.expect == "DONE" || d.expect == "STILL OPEN"));
+        // Every expected answer is one the reader understands, and ids are not repeated.
+        for p in &set.pairs {
+            assert!(read_answer(Part::Judge, &format!("{{\"verdict\":\"{}\"}}", p.expect)).is_some(), "{}", p.id);
+        }
+        for e in &set.exchanges {
+            assert!(read_answer(Part::Gate, &format!("{{\"verdict\":\"{}\"}}", e.expect)).is_some(), "{}", e.id);
+        }
+        for d in &set.done {
+            assert!(read_answer(Part::Done, &format!("{{\"verdict\":\"{}\"}}", d.expect)).is_some(), "{}", d.id);
+        }
+        let mut ids: Vec<&str> = set.pairs.iter().map(|p| p.id.as_str()).chain(set.exchanges.iter().map(|e| e.id.as_str())).chain(set.done.iter().map(|d| d.id.as_str())).collect();
+        let n = ids.len();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), n);
+        // As long as real passages are: a side of a pair 600 characters or more, an exchange 800 or more.
+        for p in &set.pairs {
+            for side in [&p.earlier, &p.later] {
+                assert!(side.text.chars().count() >= 600, "{}: {} characters", p.id, side.text.chars().count());
+                assert!(side.date.len() == 10 && side.text.contains("They said: "));
+            }
+            assert!(p.earlier.date < p.later.date, "{}: the earlier passage is the earlier one", p.id);
+        }
+        for e in &set.exchanges {
+            assert!(e.exchange.text.chars().count() >= 800, "{}", e.id);
+        }
+        // Two languages.
+        assert!(set.exchanges.iter().filter(|e| e.exchange.text.contains("español") || e.exchange.text.contains("verano") || e.exchange.text.contains("festivo")).count() >= 3);
+        // Made-up text only: nothing in it is taken for a password or key.
+        for text in set.pairs.iter().flat_map(|p| [&p.earlier.text, &p.later.text]).chain(set.exchanges.iter().map(|e| &e.exchange.text)) {
+            assert_eq!(crate::secret_mask::hand_on(text).hidden, 0, "{}", &text[..80.min(text.len())]);
+        }
+    }
+
+    #[test]
+    fn every_example_is_asked_once_in_an_order_the_seed_sets() {
+        let set = shipped_set();
+        let (a, b, c) = (asked(&set, 1), asked(&set, 1), asked(&set, 2));
+        assert_eq!(a.len(), 60);
+        assert_eq!(a.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), b.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), "the same seed, the same order");
+        assert_ne!(a.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), c.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), "another seed, another order");
+        let mut ids: Vec<&str> = c.iter().map(|x| x.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 60);
+        // The parts are mixed together, not asked in blocks.
+        assert!(a.windows(2).filter(|w| w[0].part != w[1].part).count() > 15);
+        let one = a.iter().find(|x| x.id == "R-labour-rate").unwrap();
+        assert!(one.expected_yes && one.user.starts_with("EARLIER passage, 2025-11-14:\n") && one.user.contains("\n\nLATER passage, 2026-03-02:\n"));
+        assert_eq!(schema(Part::Judge)["properties"]["verdict"]["enum"], serde_json::json!(["REPLACES", "BOTH STAND"]));
+        assert_eq!(schema(Part::Gate)["required"], serde_json::json!(["verdict", "quote"]));
     }
 
     #[test]

@@ -40,6 +40,7 @@ const REPLIES = path.join(OUT, "replies.jsonl");
 const READ = !!process.env.YOAI_MEMORY_READ;
 const READ_MINUTES = Number(process.env.YOAI_MEMORY_READ_MINUTES ?? 30);
 const LOAD_AT_A_TIME = 40;
+const SETTLE_MS = 4000;
 
 type Asked = { n: number; question: string };
 
@@ -123,7 +124,14 @@ describe("memory, asked a question set", () => {
       fs.rmSync(part, { force: true });
       console.log(`e2e: history: ${total.conversations} conversation(s), ${total.messages} message(s) written, ${total.skipped} already there, ${Math.round((Date.now() - started) / 1000)} s`);
     }
-    const stores = STORES ? await dev("POST", "memory-stores", { do: "seed", path: path.resolve(STORES), all: ai.id }) : {};
+    // Every AI the stores file names stands for the AI being asked: a
+    // profile AI that happens to share a name must not take its index.
+    const named = STORES ? ((JSON.parse(fs.readFileSync(path.resolve(STORES), "utf8")).recall ?? []) as { ai: string }[]).map((r) => `${r.ai}:${ai.id}`).join(",") : "";
+    const stores = STORES ? await dev("POST", "memory-stores", { do: "seed", path: path.resolve(STORES), all: ai.id, ...(named ? { map: named } : {}) }) : {};
+    if (STORES) {
+      const held = await invoke<unknown[]>("get_transcript_embeddings", { aiId: ai.id }).catch(() => []);
+      console.log(`e2e: the asked AI's index of earlier turns holds ${held.length} entr(ies)`);
+    }
     console.log(`e2e: memory stores: ${JSON.stringify(stores)}`);
     const kept = await dev("POST", "memory-stores", { do: "keep" });
     console.log(`e2e: ${kept.kept} store file(s) kept as the starting state`);
@@ -166,6 +174,7 @@ describe("memory, asked a question set", () => {
     it(`question ${q.n}`, async () => {
       const have = done();
       if (PATHS.includes("chat") && !have.has(`${q.n}|${SETUP}-chat`)) {
+        await browser.pause(SETTLE_MS);
         await dev("POST", "memory-stores", { do: "back" });
         await waitForChat();
         const started = Date.now();
@@ -187,6 +196,10 @@ describe("memory, asked a question set", () => {
         save({ n: q.n, setup: `${SETUP}-chat`, question: q.question, answer: (body ?? r.text).trim(), ms: Date.now() - started, request });
       }
       if (PATHS.includes("port") && !have.has(`${q.n}|${SETUP}-port`)) {
+        // What the chat turn writes after its reply (the turn's own entry
+        // in an index, a fact taken from it) lands first, then the stores
+        // go back, so the next ask never finds this one.
+        await browser.pause(SETTLE_MS);
         await dev("POST", "memory-stores", { do: "back" });
         const started = Date.now();
         const r = await dev("POST", "memory-ask", {}, { ai: ai.id, question: q.question });

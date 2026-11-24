@@ -318,6 +318,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/memory-assemble", post(memory_assemble_dev))
         .route("/internal/memory-ask", post(memory_ask_dev))
         .route("/internal/last-chat-request", get(last_chat_request_dev))
+        .route("/internal/memory-check", post(memory_check_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -994,6 +995,39 @@ async fn memory_ask_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -
         Ok((request, reply)) => Json(json!({ "ai": ai.name, "path": "port", "question": question, "request": request, "reply": reply })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: run the built-in check on the loaded model, `runs`
+/// times (3 unless given), the examples shuffled each time. Answers with
+/// each run's marks and answers, and whether the verdict held steady.
+async fn memory_check_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let runs = q.get("runs").and_then(|r| r.parse::<u64>().ok()).unwrap_or(3).clamp(1, 9);
+    // `seed`: one run with that shuffle (a caller that asks run by run).
+    let seeds: Vec<u64> = match q.get("seed").and_then(|s| s.parse::<u64>().ok()) {
+        Some(seed) => vec![seed],
+        None => (1..=runs).collect(),
+    };
+    let state = app.state::<crate::llm::LLMState>();
+    let model = state.current_model.lock().await.clone();
+    let mut verdicts = Vec::new();
+    let mut detail = Vec::new();
+    let started = std::time::Instant::now();
+    for seed in seeds {
+        match crate::memory_check::run(&state, seed).await {
+            Ok((v, said)) => {
+                detail.push(json!({ "seed": seed, "verdict": v, "said": said }));
+                verdicts.push(v);
+            }
+            Err(e) => return Json(json!({ "error": e, "runs_done": detail })).into_response(),
+        }
+    }
+    Json(json!({ "model": model, "steady": crate::memory_check::steady(&verdicts), "seconds": started.elapsed().as_secs(), "runs": detail })).into_response()
 }
 
 /// Dev builds only: the last request the chat page sent to a model, as it

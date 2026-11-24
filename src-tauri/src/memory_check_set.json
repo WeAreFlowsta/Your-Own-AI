@@ -1,0 +1,710 @@
+{
+ "v": 2,
+ "note": "Made-up examples. No real person, business or conversation.",
+ "pairs": [
+  {
+   "id": "R-workshop-hours",
+   "expect": "REPLACES",
+   "why": "one of several facts changes: Saturday closing time",
+   "earlier": {
+    "date": "2026-01-08",
+    "text": "They said: morning. two things before I forget. first the till roll order came and it's the wrong width again, 57mm not 80, can you draft a note to the supplier. second, hours. I've been thinking about it over the break and we'll open the workshop 9 to 5 Tuesday to Saturday from next week, closed Sunday and Monday. put that on the site and on the door sign template\nAI: Good morning. I drafted the note about the till rolls: \"The delivery of 6 January contained 57 mm rolls. Our order was for 80 mm. Please collect and replace.\" It is in your drafts. For the hours I updated the site footer and the door sign template to: Workshop open Tuesday to Saturday, 9 am to 5 pm. Closed Sunday and Monday. The Google listing still shows the old hours; I can't change that from here, you will need to do it from the owner account.\nThey said: ok will do the listing tonight. thanks"
+   },
+   "later": {
+    "date": "2026-04-20",
+    "text": "They said: hi, quick one. since Jo went down to three days I can't cover Saturdays alone, so from May the workshop shuts at 1 on Saturdays. weekdays stay as they are. also the stand pump by the door is leaking again\nAI: Understood. From 2 May the Saturday hours are 9 am to 1 pm; Tuesday to Friday stay 9 am to 5 pm. I changed the site footer and the door sign template and added a line to the booking page so nobody books a Saturday afternoon slot. About the stand pump: the last time it leaked it was the hose washer, part of the service kit you ordered in November. There should be two washers left in the drawer under the truing stand.\nThey said: found them, cheers"
+   }
+  },
+  {
+   "id": "R-labour-rate",
+   "expect": "REPLACES",
+   "why": "same subject, a number changes",
+   "earlier": {
+    "date": "2025-11-14",
+    "text": "They said: need to settle the labour rate before the winter service offer goes out. I looked at what the two shops in town charge and I think 48 an hour is right for us, standard service stays a flat 60. can you put 48/hr into the quote template and the price list pdf\nAI: Done. The quote template now calculates labour at $48 per hour, and the price list PDF shows \"Workshop labour: $48 per hour\" under the flat-rate services. The standard service line is unchanged at $60. One thing to check: the template rounds labour to the nearest quarter hour, so a 20 minute job is billed as 15 minutes. Do you want it to round up instead?\nThey said: round up. nobody does 20 min jobs for 12 dollars\nAI: Changed. Labour now rounds up to the next quarter hour."
+   },
+   "later": {
+    "date": "2026-03-02",
+    "text": "They said: rent went up 9% this month, I did the sums on the back of an envelope and we can't hold the rate. Make it fifty-four from the first of April. Flat services I'll look at separately, leave them\nAI: I updated the quote template and the price list: workshop labour is $54 per hour from 1 April, still rounded up to the next quarter hour. Flat-rate services are unchanged. Quotes already sent at the old rate keep it; there are three open ones (Okafor, the school fleet, and the cargo bike rebuild). Shall I add a line to new quotes saying the rate applies to work booked from 1 April?\nThey said: yes add that"
+   }
+  },
+  {
+   "id": "R-supplier-switch",
+   "expect": "REPLACES",
+   "why": "loose: the later passage never names the earlier supplier",
+   "earlier": {
+    "date": "2026-02-03",
+    "text": "They said: ok decision time on tubes and tyres. after the mess in January I'm done waiting three weeks for basics. we order consumables from Brightwheel Wholesale from now on, account's open, min order is 150. keep the old supplier for frames only\nAI: Noted. Consumables (tubes, tyres, cables, brake pads) are ordered from Brightwheel Wholesale, minimum order $150. Frames stay with the old supplier. I moved the reorder sheet's supplier column for the 41 consumable lines to Brightwheel and set the reorder reminder to trigger when the basket would pass $150. The first basket is at $212 if you want to send it today.\nThey said: send it\nAI: Sent. Order reference BW-10442, delivery estimated Thursday."
+   },
+   "later": {
+    "date": "2026-05-11",
+    "text": "They said: so, the rep from Tallis Cycle Supply came by Friday. free delivery over 80, next day, and they match prices on the lot. I signed. everything we were getting off the wholesale account goes to them now, I'll let the other account lapse. log from their portal for the first order below\n\norder TCS-88120 created 2026-05-09 16:02\nlines 14 subtotal 196.40 delivery 0.00\nstatus: picking\n\nAI: Understood. Consumables now come from Tallis Cycle Supply: free delivery over $80, next day. I moved the 41 consumable lines on the reorder sheet to Tallis and changed the reminder threshold from $150 to $80. Frames stay where they were. I left the previous wholesale account details in the sheet's history tab in case you need a past invoice.\nThey said: good"
+   }
+  },
+  {
+   "id": "R-booking-deposit",
+   "expect": "REPLACES",
+   "why": "the earlier rule is narrowed",
+   "earlier": {
+    "date": "2025-12-01",
+    "text": "They said: people keep booking a full service and not turning up. I want a deposit. 20 dollars to book any service, comes off the bill, refunded if they cancel 24h before. set it up on the booking form\nAI: The booking form now takes a $20 deposit for every service. It is deducted from the final bill and refunded automatically if the booking is cancelled at least 24 hours before the slot. I added the sentence \"A $20 deposit secures your slot\" above the pay button, and the confirmation email states the refund rule. The payment provider takes its fee on the deposit, about 60 cents each.\nThey said: fine. worth it"
+   },
+   "later": {
+    "date": "2026-02-17",
+    "text": "They said: update on no-shows, they're down to almost nothing which is great but two regulars complained about paying to book a puncture repair. fair enough. I don't want to take anything up front for quick jobs any more, only for the full service and the overhaul.\nAI: Changed. The booking form now asks for the $20 deposit only on Full service and Overhaul. Puncture repair, brake adjust, gear tune and safety check can be booked with no payment. The sentence above the pay button now appears only for the two deposit services, and I updated the confirmation emails to match. The refund rule for the two deposit services is unchanged.\nThey said: perfect thanks"
+   }
+  },
+  {
+   "id": "R-loan-bike",
+   "expect": "REPLACES",
+   "why": "something is withdrawn rather than changed",
+   "earlier": {
+    "date": "2026-01-22",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: can you write down how the loan bike works because Jo keeps asking. it's the grey hybrid, anyone having an overhaul can take it, free, max 3 days, we take a card imprint. key is on the hook by the till\nAI: Written into the staff notes under \"Loan bike\": The grey hybrid is lent free to customers whose bike is in for an overhaul, for up to 3 days. Take a card imprint before handing it over. The lock key hangs on the hook by the till. I also added a line to the overhaul confirmation email offering it.\nThey said: great"
+   },
+   "later": {
+    "date": "2026-06-03",
+    "text": "They said: bad news the grey hybrid got written off, customer's fault, insurance is paying. I'm not replacing it. tell people we can't lend one any more and take it out of the emails please. on a different note the new truing stand arrived and it's lovely\nAI: Sorry to hear that. I removed the loan bike offer from the overhaul confirmation email and from the services page, and I changed the staff note to: \"No loan bike is available. The grey hybrid was written off in June 2026 and is not being replaced.\" Glad the truing stand arrived. Do you want its calibration date recorded in the tools sheet?\nThey said: yes today's date"
+   }
+  },
+  {
+   "id": "R-newsletter-day",
+   "expect": "REPLACES",
+   "why": "day and time change; frequency is restated",
+   "earlier": {
+    "date": "2025-10-06",
+    "text": "They said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch\nThey said: let's do the newsletter monthly. first Monday, 8am, to the whole list. you draft it the Friday before and I approve over the weekend\nAI: Set. The newsletter goes out on the first Monday of each month at 8 am to the full list. I will have a draft ready each preceding Friday for you to approve. The next one would be Monday 3 November; the draft will be ready on Friday 31 October.\nThey said: 👍"
+   },
+   "later": {
+    "date": "2026-01-30",
+    "text": "They said: open rate on the Monday sends is rubbish, 19%. the one we accidentally sent on a Thursday evening got 41. so, Thursdays. six in the evening. still once a month, first Thursday\nAI: Changed. The newsletter now goes out on the first Thursday of each month at 6 pm. I will have the draft ready on the Monday of that week instead of the Friday before, so you still have a few days to approve. The next send is Thursday 5 February; the draft will be ready Monday 2 February.\nThey said: good, and add the open rate to the top of each draft so I see how the last one did\nAI: I will include the previous send's open rate at the top of each draft."
+   }
+  },
+  {
+   "id": "R-warranty",
+   "expect": "REPLACES",
+   "why": "a number changes and a new case is added",
+   "earlier": {
+    "date": "2025-09-19",
+    "text": "They said: what do we say about warranty on repairs? I don't think we ever wrote it down\nAI: There is nothing in the staff notes or on the site. Many small workshops give 30 days on labour and pass on the manufacturer's warranty for parts.\nThey said: 30 days on labour sounds right. parts whatever the maker gives. write that on the invoice footer and the site\nAI: Done. The invoice footer and the services page now read: \"Repairs are guaranteed for 30 days on labour. Parts carry the manufacturer's warranty.\"\nThey said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it"
+   },
+   "later": {
+    "date": "2026-04-02",
+    "text": "They said: I had a long chat with the trade association person. they say ninety days is becoming normal and it's a selling point, and honestly if my wheel build fails in two months that's on me. so let's go to that for labour. wheels I'll guarantee for a year, I'm that confident\nAI: Updated. The invoice footer and the services page now read: \"Repairs are guaranteed for 90 days on labour. Hand-built wheels are guaranteed for 12 months. Parts carry the manufacturer's warranty.\" Invoices issued before today keep the wording they were printed with. Do you want the new terms to apply to repairs done in the last 30 days as well?\nThey said: yes, be generous\nAI: I added a staff note: repairs invoiced from 3 March 2026 are covered by the 90 day term."
+   }
+  },
+  {
+   "id": "R-parking",
+   "expect": "REPLACES",
+   "why": "loose: no shared key word with 'yard' except in passing; a fact stops being true",
+   "earlier": {
+    "date": "2026-02-10",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: for the directions page: customers can park in the yard behind the shop, entrance from Kiln Lane, three spaces, free while their bike is being looked at\nAI: Added to the directions page: \"Free customer parking in the yard behind the shop, entrance from Kiln Lane (three spaces).\" I also put it in the booking confirmation email.\nThey said: thanks"
+   },
+   "later": {
+    "date": "2026-05-26",
+    "text": "They said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: landlord's letting the yard to the cafe for their bins and a delivery bay, so that's gone as of June. street's 2 hour limit, there's the pay and display on Marsh Road about 3 min walk. sigh\nAI: That's a shame. I replaced the parking sentence on the directions page and in the booking confirmation email with: \"There is no parking at the shop. Street parking nearby is limited to 2 hours; the Marsh Road pay and display car park is a 3 minute walk.\" If you want, I can add a note that bikes can be dropped at the door and the car moved afterwards.\nThey said: yes add that"
+   }
+  },
+  {
+   "id": "R-apprentice-days",
+   "expect": "REPLACES",
+   "why": "two facts stated together, both change",
+   "earlier": {
+    "date": "2026-01-05",
+    "text": "They said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: Sam starts Monday as the apprentice. Mondays and Wednesdays in the shop, college on Fridays. pay is sorted with the scheme. can you make a rota that shows it and remind me the day before each of Sam's days for the first month\nAI: Welcome to Sam. The rota now shows Sam in the workshop on Mondays and Wednesdays, with college on Fridays. I set reminders for you at 5 pm on each Sunday and Tuesday through the end of January. I also added Sam to the staff notes with the scheme's contact number.\nThey said: ta"
+   },
+   "later": {
+    "date": "2026-03-16",
+    "text": "They said: college moved Sam's block. it's Tuesdays there now so Sam's with us Wednesday Thursday Friday, three days, started this week. rota please. and Sam did the first solo brake bleed on Friday, went fine!\nAI: Congratulations to Sam. The rota now shows Sam in the workshop Wednesday, Thursday and Friday, with college on Tuesdays. I removed the Monday entry. Because the shop is closed on Mondays anyway from the January hours, nothing else moves. Do you want me to note the solo brake bleed in Sam's training log?\nThey said: yes with the date\nThey said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice."
+   }
+  },
+  {
+   "id": "R-card-minimum",
+   "expect": "REPLACES",
+   "why": "a rule is lifted",
+   "earlier": {
+    "date": "2025-10-28",
+    "text": "They said: the card fees on tiny sales are silly. put a sign text together: card payments over 5 dollars only, cash for anything under\nAI: Here is the sign text: \"Card payments accepted for purchases of $5 or more. Cash only under $5. Thank you.\" I also set the till to warn when a card sale under $5 is started.\nThey said: print it A5\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it"
+   },
+   "later": {
+    "date": "2026-02-24",
+    "text": "They said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again\nThey said: three people walked out this week because they had no coins for a valve cap. it's not worth it. take the sign down, take cards for anything\nAI: Done. I removed the warning from the till, so card sales of any amount go through, and I deleted the sign file from the print folder. For reference, last month there were 46 sales under $5, so the extra card fees should be about $7 a month.\nThey said: I can live with seven dollars"
+   }
+  },
+  {
+   "id": "R-two-facts",
+   "expect": "REPLACES",
+   "why": "of two facts stated together, one changes and one is restated",
+   "earlier": {
+    "date": "2026-03-09",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: for the spring flyer. the tune-up offer is 45 dollars and it runs until the end of April. call it the Spring Spin offer\nAI: Drafted. Headline: \"Spring Spin tune-up, $45.\" Body: \"Gears, brakes and a safety check. Offer runs until 30 April.\" The flyer file is in the print folder as spring-flyer-v1.\nThey said: looks good print 200"
+   },
+   "later": {
+    "date": "2026-04-27",
+    "text": "They said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: the offer's gone really well, 61 booked. I want to keep it going through May, same price. can you fix the flyer and the site banner. also unrelated, where did we put the receipt for the compressor?\nAI: I changed the flyer and the site banner to say the offer runs until 31 May; the price stays $45. The new flyer file is spring-flyer-v2. The compressor receipt is in the Purchases folder, file \"compressor-2025-08.pdf\", $389 from Harrow Tools.\nThey said: found it, thanks"
+   }
+  },
+  {
+   "id": "R-collection-shelf",
+   "expect": "REPLACES",
+   "why": "loose wording: 'the done ones', 'up front'",
+   "earlier": {
+    "date": "2025-12-12",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: note for whoever's on the till. finished bikes waiting for collection go on the rack by the back door, tag on the bars with name and amount owing\nAI: Added to the till notes: \"Finished bikes awaiting collection go on the rack by the back door. Tie a tag to the handlebars with the customer's name and the amount owing.\"\nThey said: 👍"
+   },
+   "later": {
+    "date": "2026-05-05",
+    "text": "They said: after the break-in attempt I'm not leaving anything by that door overnight. we keep the done ones up front now, the row under the window where I can see them from the bench, and lock the row with the long cable at close. tags stay the same\nAI: Updated the till notes: \"Finished bikes awaiting collection are kept in the front row under the window. At closing, lock the row with the long cable. Tag the handlebars with the customer's name and the amount owing, as before.\" I also added \"lock the collection row\" to the closing checklist.\nThey said: good call on the checklist\nThey said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last"
+   }
+  },
+  {
+   "id": "B-same-product-other-attribute",
+   "expect": "BOTH STAND",
+   "why": "same product, price then location",
+   "earlier": {
+    "date": "2026-01-15",
+    "text": "They said: stock question. the commuter tyre we sell most of, the 700x35 with the reflective strip, what are we charging?\nAI: The 700x35 reflective commuter tyre is $34 each on the shelf and on the site.\nThey said: keep it at 34. it's the one thing people compare prices on\nAI: Noted. The 700x35 reflective commuter tyre stays at $34.\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch"
+   },
+   "later": {
+    "date": "2026-03-19",
+    "text": "They said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it\nThey said: the 700x35 reflective, where do we keep the spares now? I looked in the usual bay and it's all inner tubes\nAI: Since the February tidy the 700x35 reflective tyres are on the top shelf of bay 4, behind the till, because the bay by the door got damp. There are 11 in stock.\nThey said: right. bay 4 top shelf. I'll move a few down so Sam can reach\nAI: I'll note in the stock sheet that some are on the lower shelf of bay 4 once you tell me how many."
+   }
+  },
+  {
+   "id": "B-restates",
+   "expect": "BOTH STAND",
+   "why": "the later passage restates the earlier fact",
+   "earlier": {
+    "date": "2026-02-02",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: we close for stocktake the last Sunday of the financial year, so 28 June. shop shut all day. put it on the calendar and the site\nAI: Added. The shop is closed on Sunday 28 June for stocktake. It is on the shared calendar and in the site's notices."
+   },
+   "later": {
+    "date": "2026-06-10",
+    "text": "They said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: reminder to self really, stocktake's the 28th, we're shut that day, can you check the notice is still on the site because someone said they couldn't see it\nAI: The notice is still on the site, under Notices: \"Closed Sunday 28 June for stocktake.\" It sits below the spring offer banner, which may be why it was missed. I can move it above the banner until the 28th.\nThey said: yes move it up"
+   }
+  },
+  {
+   "id": "B-later-question",
+   "expect": "BOTH STAND",
+   "why": "a later question about the earlier fact, plus an addition",
+   "earlier": {
+    "date": "2025-11-03",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: for the record the alarm code changed, new one's with me and Jo only, it's not going in any file. the alarm company's number is on the panel. service visit is every October\nAI: Understood. I recorded only that the alarm code changed on 3 November 2025, that you and Jo hold it, and that the alarm is serviced every October. The code itself is not stored anywhere I can see."
+   },
+   "later": {
+    "date": "2026-04-14",
+    "text": "They said: when's the alarm service due? insurance form is asking\nAI: The alarm is serviced every October. The last recorded note about it is from 3 November 2025, when the code was changed. I have no record of the exact date of the October 2025 visit; the alarm company's sticker on the panel usually shows it.\nThey said: sticker says 14 Oct. put that down\nAI: Recorded: last alarm service 14 October 2025, next due October 2026.\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it"
+   }
+  },
+  {
+   "id": "B-addition-also",
+   "expect": "BOTH STAND",
+   "why": "an addition; the earlier fact carries on",
+   "earlier": {
+    "date": "2026-01-12",
+    "text": "They said: we do the group ride from the shop every Saturday at 8, easy pace, about 30k, coffee after. put it on the site\nAI: Added to the site under Events: \"Shop ride every Saturday, 8 am from the shop. Easy pace, about 30 km, coffee afterwards.\"\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   },
+   "later": {
+    "date": "2026-04-08",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: clocks have changed so let's add a midweek one. Wednesdays at six in the evening, shorter, 20k. the Saturday one carries on as is\nAI: Added a second event: \"Midweek ride every Wednesday, 6 pm from the shop. About 20 km.\" The Saturday ride entry is unchanged. Do you want the Wednesday ride to stop when the clocks go back in autumn?\nThey said: yes end of September\nAI: I set the Wednesday entry to show until the last Wednesday of September."
+   }
+  },
+  {
+   "id": "B-same-word-other-thing",
+   "expect": "BOTH STAND",
+   "why": "'stand' means two different things",
+   "earlier": {
+    "date": "2025-12-08",
+    "text": "They said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: the stand by the door is wobbling. the display stand I mean, the one with the helmets. can you find the invoice so I know who made it\nAI: The helmet display stand was bought from Corvin Shopfitting on 2 March 2024, invoice CS-2291, $240. Their warranty was 12 months, so it has expired. The invoice notes that the feet are adjustable with a 13 mm spanner.\nThey said: adjustable feet, that'll be it"
+   },
+   "later": {
+    "date": "2026-02-27",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: I'm ordering a second work stand for Sam. same as mine, the folding one with the long clamp. which model was it?\nAI: Your work stand is the Halden FS-2 folding repair stand, bought in May 2023 for $189. The current listing for the FS-2 is $205. A wall-mounted clamp would be cheaper at about $90 if floor space is tight.\nThey said: floor one, Sam needs to move it around. order the FS-2\nAI: I added the Halden FS-2 to the Tallis basket."
+   }
+  },
+  {
+   "id": "B-proposal-not-agreed",
+   "expect": "BOTH STAND",
+   "why": "the AI proposes a change and the person does not agree",
+   "earlier": {
+    "date": "2026-03-04",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: the standard service is 60 and has been for two years\nAI: That's right, the standard service has been $60 since March 2024. In that time the labour rate went from $42 to $48. If you want the service to keep pace it would be about $69 now.\nThey said: hm"
+   },
+   "later": {
+    "date": "2026-03-11",
+    "text": "They said: been looking at the numbers again\nAI: If it helps: at the current labour rate a standard service takes about 75 minutes, so $60 covers the labour and nothing else. I would suggest raising it to $70 from April and saying so on the price list now, so regulars are not surprised. Shall I make that change?\nThey said: not yet. I want to see what April's rent letter says first. leave it at 60\nAI: Understood. The standard service stays at $60; I have changed nothing.\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch"
+   }
+  },
+  {
+   "id": "B-different-customers",
+   "expect": "BOTH STAND",
+   "why": "two jobs, nothing in common but the form",
+   "earlier": {
+    "date": "2026-02-18",
+    "text": "They said: note on the Okafor cargo bike. customer wants the hub gear serviced not replaced, quote was 140, he's approved it by text. needs it back before the 28th\nAI: Recorded on the job card: Okafor, cargo bike, hub gear service (not replacement), quoted $140, approved by text on 18 February, needed before 28 February.\nThey said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it"
+   },
+   "later": {
+    "date": "2026-02-20",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: note on the school fleet job. they want all twelve bikes done over half term, replace brake pads on every one regardless, quote 38 a bike, the bursar approved by email\nAI: Recorded on the job card: school fleet, 12 bikes, brake pads replaced on all, $38 per bike ($456 total), approved by the bursar by email on 20 February, to be done over half term.\nThey said: half term is the week of the 23rd\nAI: Added: work scheduled for the week of 23 February."
+   }
+  },
+  {
+   "id": "B-thinking-aloud-later",
+   "expect": "BOTH STAND",
+   "why": "the person thinks aloud and decides nothing",
+   "earlier": {
+    "date": "2026-01-20",
+    "text": "They said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: we take trade-ins on kids bikes only, up to 20 inch wheels, credit against a new one, never cash. that's the rule\nAI: Recorded in the staff notes: trade-ins are accepted on children's bikes up to 20 inch wheels, for credit against a new bike, never for cash."
+   },
+   "later": {
+    "date": "2026-05-02",
+    "text": "They said: someone came in with a lovely old steel tourer wanting to trade it. it did make me wonder if we should take adult bikes, there's clearly a market, we could do them up over winter... but where would I put them. I don't know. told him no anyway\nAI: The staff note still says trade-ins are for children's bikes up to 20 inch wheels only. If you do want to try adult bikes, storage is the constraint: the back room holds about six frames once the winter tyres go out in October. I can keep a list of people who ask, so you know the demand when you decide.\nThey said: yes keep a list. that's all for now\nAI: Started a list, \"Adult trade-in enquiries\", with today's steel tourer as the first entry."
+   }
+  },
+  {
+   "id": "B-one-off-vs-rule",
+   "expect": "BOTH STAND",
+   "why": "a one-off request beside a standing rule",
+   "earlier": {
+    "date": "2025-10-13",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: always put the job number at the top of every invoice, bold, before the customer's name. I'm sick of hunting for it\nAI: Done. The invoice template now shows the job number in bold on the first line, above the customer's name. This applies to all invoices from now on.\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it"
+   },
+   "later": {
+    "date": "2026-03-23",
+    "text": "They said: for the council invoice only, they want their purchase order number first and our job number underneath. just this one, their system rejects it otherwise\nAI: I made a copy of the invoice for the council with their purchase order number PO-77154 on the first line and our job number on the second. The standard template is unchanged: every other invoice still starts with the job number in bold.\nThey said: perfect\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "B-pasted-decision-of-others",
+   "expect": "BOTH STAND",
+   "why": "a pasted text states a decision someone else made",
+   "earlier": {
+    "date": "2026-02-06",
+    "text": "They said: we don't sell e-bike batteries, we don't store them, we don't charge customer batteries in the shop. insurance. that's final\nAI: Recorded in the staff notes: the shop does not sell or store e-bike batteries and does not charge customers' batteries on the premises, for insurance reasons.\nThey said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then"
+   },
+   "later": {
+    "date": "2026-04-29",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: fyi this came round from the trade association, pasting it so it's on file:\n\n\"The board has resolved that from 1 July member shops offering battery charging must fit a certified charging cabinet. Members who already charge batteries on site should book an inspection.\"\n\ndoesn't affect us but keep it\nAI: Filed under Trade association notices, dated 29 April 2026. As you say it does not change anything here: the shop does not charge batteries on the premises, so no cabinet or inspection is needed."
+   }
+  },
+  {
+   "id": "B-ill-do-it",
+   "expect": "BOTH STAND",
+   "why": "an intention about the same machine changes nothing",
+   "earlier": {
+    "date": "2026-03-30",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch\nThey said: the workshop compressor gets drained every Friday at close. whoever's last out. it's on the closing checklist\nAI: Confirmed: \"Drain the compressor\" is on the Friday closing checklist, for whoever closes."
+   },
+   "later": {
+    "date": "2026-04-17",
+    "text": "They said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it\nThey said: I'll get round to servicing the compressor properly at some point, the belt's squealing. maybe after the bank holiday. remind me if I haven't mentioned it by June\nAI: I set a reminder for 1 June: \"Compressor service: belt squealing since April.\" The Friday draining stays on the closing checklist as it is.\nThey said: ta"
+   }
+  },
+  {
+   "id": "B-two-topics",
+   "expect": "BOTH STAND",
+   "why": "clarifies without changing; a second, unrelated topic",
+   "earlier": {
+    "date": "2025-11-21",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: gift vouchers. we sell them in 25 and 50, they last 12 months from purchase, no cash back. print the terms on the back\nAI: The voucher design now has the terms on the back: \"Valid for 12 months from the date of purchase. Not exchangeable for cash.\" Vouchers are offered in $25 and $50."
+   },
+   "later": {
+    "date": "2026-01-09",
+    "text": "They said: couple of things. one, a customer asked if she can use her voucher on labour not just parts, I said of course, it's money. two, completely different, the heating engineer is coming Tuesday at 10, I need the back room clear\nAI: On the voucher: nothing in the printed terms limits it to parts, so using it for labour is consistent with what's written. I added a line to the till notes so staff give the same answer: \"Vouchers can be used for anything the shop sells, including labour.\" On Tuesday: I put \"Heating engineer 10 am, clear the back room\" in the calendar with a reminder on Monday at 4 pm.\nThey said: good"
+   }
+  },
+  {
+   "id": "B-seasonal-instance",
+   "expect": "BOTH STAND",
+   "why": "the rule plays out as stated",
+   "earlier": {
+    "date": "2025-09-29",
+    "text": "They said: winter hours. from the last Sunday in October to the last Sunday in March we shut at 4 not 5. every year. same days\nAI: Recorded as a standing rule: between the last Sunday of October and the last Sunday of March the workshop closes at 4 pm instead of 5 pm, on the usual opening days. I set the site to switch automatically on those dates.\nThey said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now"
+   },
+   "later": {
+    "date": "2026-03-27",
+    "text": "They said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: we're back to 5pm closing from Sunday right?\nAI: Yes. The last Sunday of March is 29 March, so from Tuesday 31 March (the next opening day) the workshop closes at 5 pm again. The site switches by itself on Sunday. The winter rule comes back on the last Sunday of October.\nThey said: good, I always forget which way round it is"
+   }
+  },
+  {
+   "id": "B-contact-details",
+   "expect": "BOTH STAND",
+   "why": "the same list, another person",
+   "earlier": {
+    "date": "2026-01-27",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it\nThey said: Jo's new mobile for the emergency list: ends 4417. old one's dead\nAI: Updated the emergency contact list: Jo's mobile now ends in 4417. I removed the old number."
+   },
+   "later": {
+    "date": "2026-03-06",
+    "text": "They said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again\nThey said: add Sam to the emergency list. mobile ends 9063, and Sam's mum as next of kin, ends 2250\nAI: Added Sam to the emergency contact list: mobile ending 9063, next of kin (mother) ending 2250. Jo's entry is unchanged.\nThey said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too"
+   }
+  },
+  {
+   "id": "B-unrelated-a",
+   "expect": "BOTH STAND",
+   "why": "nothing in common",
+   "earlier": {
+    "date": "2025-12-18",
+    "text": "They said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: the Christmas window: fairy lights on the timer 4 till 10, the red bike in the middle, no prices in the window this year\nAI: Noted for the window display: fairy lights on the timer from 4 pm to 10 pm, the red bike as the centrepiece, and no price tags in the window."
+   },
+   "later": {
+    "date": "2026-02-12",
+    "text": "They said: can you find out what the business rates bill is likely to be next year, the revaluation letter came\nAI: The revaluation letter gives a new rateable value of $14,250, up from $12,900. At the current multiplier that is about $7,110 a year before small business relief. With relief at the present taper you would pay roughly $2,370. The council's final bill arrives in March.\nThey said: ok not as bad as I feared\nThey said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it"
+   }
+  },
+  {
+   "id": "B-unrelated-b",
+   "expect": "BOTH STAND",
+   "why": "nothing in common",
+   "earlier": {
+    "date": "2026-03-12",
+    "text": "They said: tubeless sealant, we use the orange one, 60ml per tyre for road, 90 for mountain. write it on the bench card\nAI: Added to the bench card: \"Tubeless sealant (orange): 60 ml per road tyre, 90 ml per mountain bike tyre.\"\nThey said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch"
+   },
+   "later": {
+    "date": "2026-03-18",
+    "text": "They said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it\nThey said: what's the wifi password for customers again\nAI: The customer wifi network is \"Spoke-Guest\". I don't have the password stored; it's printed on the card by the coffee machine.\nThey said: oh yes"
+   }
+  },
+  {
+   "id": "B-same-subject-progress",
+   "expect": "BOTH STAND",
+   "why": "a later step of the same decision",
+   "earlier": {
+    "date": "2026-04-06",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: decided. we're getting the shop repainted, outside only, the dark green from the swatch card, quote from Marlow Decorators accepted at 1,850. they start when the weather allows\nAI: Recorded: exterior repaint in dark green, Marlow Decorators, quote accepted at $1,850, start date to be confirmed by them depending on the weather."
+   },
+   "later": {
+    "date": "2026-05-13",
+    "text": "They said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: Marlow rang, they can start Monday week, three days, they need the bike racks moved off the front\nAI: Added to the calendar: exterior repaint Monday 25 to Wednesday 27 May, Marlow Decorators. I added a task for Saturday 23 May: \"Move the front bike racks inside.\" The colour and the price are as agreed in April.\nThey said: thanks"
+   }
+  },
+  {
+   "id": "B-correction-of-ai-not-fact",
+   "expect": "BOTH STAND",
+   "why": "the person corrects the AI; the fact is unchanged",
+   "earlier": {
+    "date": "2026-02-09",
+    "text": "They said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: our returns policy is 14 days, unused, with receipt. parts fitted by us can't be returned\nAI: Recorded: returns within 14 days, unused and with the receipt. Parts fitted by the workshop cannot be returned.\nThey said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice."
+   },
+   "later": {
+    "date": "2026-04-22",
+    "text": "They said: you wrote 30 days in that reply to the customer, where did that come from? it's 14\nAI: You're right, and I'm sorry. The policy on file is 14 days, unused, with the receipt. I wrote 30 days in the draft by mistake; it was not sent. I corrected the draft to 14 days.\nThey said: ok good that it didn't go\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it"
+   }
+  }
+ ],
+ "exchanges": [
+  {
+   "id": "S-choice",
+   "expect": "settled",
+   "why": "a choice with its reason",
+   "exchange": {
+    "date": "2026-02-03",
+    "text": "They said: right I've read both quotes for the card reader. the Northpay one is cheaper per sale but there's a monthly fee, Lumen has no monthly. we do about 300 card sales a month. which is less overall\nAI: At 300 sales a month averaging $31: Northpay is 1.2% plus $19 a month, about $130.60. Lumen is 1.69% with no monthly fee, about $157.20. Northpay is cheaper by roughly $27 a month at your volume, and the gap grows if sales rise.\nThey said: Northpay then. sign us up, 12 month term is fine\nAI: I completed the Northpay application with a 12 month term. The reader ships in 3 to 5 working days; the confirmation is in your inbox.\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "S-finished",
+   "expect": "settled",
+   "why": "work reported finished",
+   "exchange": {
+    "date": "2026-03-14",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: is the booking page fix live? two people rang this morning saying it showed no slots\nAI: Yes, it has been live since 9:40. The cause was the calendar feed timing out, so the page showed no slots instead of an error. I changed the page to keep the last good copy of the slots for up to an hour and I raised the timeout from 5 to 15 seconds. I booked and cancelled a test slot at 9:45 and again at 11:00; both worked.\nThey said: great, thanks for sorting it"
+   }
+  },
+  {
+   "id": "S-number",
+   "expect": "settled",
+   "why": "a number established",
+   "exchange": {
+    "date": "2026-01-19",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: what's our VAT number, the wholesaler form wants it. and the company number while you're there\nAI: I don't have either on file. They are usually on your registration certificate or any invoice you have issued.\nThey said: found the cert. VAT is 448 2210 77, company number 09913345. keep them somewhere sensible\nAI: Saved in the business details sheet: VAT number 448 2210 77, company number 09913345. I filled both into the wholesaler form."
+   }
+  },
+  {
+   "id": "S-how-they-want-it",
+   "expect": "settled",
+   "why": "a standing way of working",
+   "exchange": {
+    "date": "2025-12-02",
+    "text": "They said: when you write to customers don't say \"Dear valued customer\", it makes me cringe. first name, straight to the point, sign off with my name not \"the team\"\nAI: Understood. Customer emails will open with the first name, get to the point in the first sentence, and be signed with your name. I updated the three templates (booking confirmation, ready for collection, quote) to match.\nThey said: much better\nThey said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch"
+   }
+  },
+  {
+   "id": "S-path",
+   "expect": "settled",
+   "why": "a location established",
+   "exchange": {
+    "date": "2026-04-09",
+    "text": "They said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it\nThey said: where are we keeping the scanned receipts now, I can never find them\nAI: They were in two places: the Downloads folder and a folder called \"scans new\". I moved everything into Accounts/Receipts/2026, one subfolder per month, and renamed the files to date-supplier-amount.\nThey said: good. that's the place from now on, Accounts/Receipts/ then the year\nAI: Noted: receipts go in Accounts/Receipts/<year>/<month>. I set the scanner's default folder to this year's."
+   }
+  },
+  {
+   "id": "S-middle",
+   "expect": "settled",
+   "why": "the fact that matters is in the middle",
+   "exchange": {
+    "date": "2026-02-25",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: morning! hope you're well. so the rep was late AGAIN, forty minutes, I nearly gave up. anyway we had a proper look at the helmet range and I've decided we're dropping the kids' range from Corvid entirely, the returns were awful, and taking the Alder ones instead, two sizes, three colours. first order's 24. oh and he left a box of sample bells which are quite nice actually\nAI: Good morning. Recorded: the Corvid children's helmets are discontinued, replaced by Alder in two sizes and three colours, first order 24. I marked the remaining Corvid stock (7 helmets) as clearance in the stock sheet. Do you want the sample bells added to stock or kept as giveaways?\nThey said: giveaways"
+   }
+  },
+  {
+   "id": "S-typo",
+   "expect": "settled",
+   "why": "typing slips",
+   "exchange": {
+    "date": "2026-03-03",
+    "text": "They said: ok so afetr all that the anwser is we dont do home colection any more. to much time. peopel bring bikes in or we dont do the job. take it of the site\nAI: Understood: home collection is no longer offered. I removed it from the services page and from the booking form. Two bookings this month had collection selected (Friday the 6th and Tuesday the 10th). Do you want to honour those or contact the customers?\nThey said: honour those 2 then thats it\nAI: Kept those two; no new collection bookings can be made.\nThey said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now"
+   }
+  },
+  {
+   "id": "S-with-log",
+   "expect": "settled",
+   "why": "a pasted log around a decision",
+   "exchange": {
+    "date": "2026-05-07",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: the label printer died mid-run, this is what it said\n\n[14:02:11] job 0041 start\n[14:02:13] ERR head temp 0x3F\n[14:02:13] job 0041 abort\n[14:02:20] ERR head temp 0x3F\n\nI've had enough of it. ordering the Brandt LP-40 today, the old one goes to recycling\nAI: That error repeats on every job, which points at the print head rather than the labels. The Brandt LP-40 uses the same 62 mm labels, so your stock is still usable. I added the LP-40 to today's order ($129) and put \"recycle old label printer\" on Saturday's list.\nThey said: ordered. done"
+   }
+  },
+  {
+   "id": "S-second-language",
+   "expect": "settled",
+   "why": "second language: a standing instruction",
+   "exchange": {
+    "date": "2026-04-16",
+    "text": "They said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it\nThey said: para los clientes que escriben en español: contestamos en español, siempre. y la lista de precios también la quiero en español, mismo formato\nAI: Entendido. A partir de ahora las respuestas a clientes que escriben en español se redactan en español. He creado la lista de precios en español con el mismo formato que la inglesa; está en la carpeta de impresión como \"lista-de-precios-es\".\nThey said: perfecto, gracias\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "S-second-language-2",
+   "expect": "settled",
+   "why": "second language: a decision",
+   "exchange": {
+    "date": "2026-05-19",
+    "text": "They said: el taller cierra el lunes 25 por el festivo, ya está decidido. ponlo en la web en los dos idiomas\nAI: Hecho. Aviso publicado en la web: \"Cerrado el lunes 25 de mayo por festivo\" y \"Closed Monday 25 May for the bank holiday\".\nThey said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then"
+   }
+  },
+  {
+   "id": "P-still-checking",
+   "expect": "in_progress",
+   "why": "the AI is still checking",
+   "exchange": {
+    "date": "2026-02-10",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: can you find out whether we can claim the workshop heater on the energy grant\nAI: I am checking. The grant's guidance lists \"space heating for commercial premises under 200 square metres\" as eligible, which would cover the workshop, but there is a clause about heaters bought before the application date that I have not been able to confirm. I have written to the grant helpline and will tell you what they say.\nThey said: ok let me know"
+   }
+  },
+  {
+   "id": "P-proposal",
+   "expect": "in_progress",
+   "why": "a proposal, nothing chosen",
+   "exchange": {
+    "date": "2026-03-20",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: the workshop's too cramped with three of us\nAI: One option is to move the wheel truing station into the back room, which frees about two metres of bench. Another is a fold-down bench on the east wall. I could sketch both layouts with measurements if you tell me the room's dimensions.\nThey said: hm. I'll measure up at the weekend\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch"
+   }
+  },
+  {
+   "id": "P-thinking-aloud",
+   "expect": "in_progress",
+   "why": "thinking aloud",
+   "exchange": {
+    "date": "2026-04-30",
+    "text": "They said: we could close on Saturdays over the summer. I don't know. it's our busiest day but it's also the day I'm most tired. maybe alternate Saturdays. or get a Saturday person\nAI: Those are three different shapes. Closing every Saturday would lose roughly a quarter of weekly takings on last summer's figures. Alternate Saturdays halves that. A Saturday person at 6 hours would cost about $110 a week. I can lay the three out side by side.\nThey said: yes do that, I'll think about it\nThey said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it"
+   }
+  },
+  {
+   "id": "P-only-asked",
+   "expect": "in_progress",
+   "why": "the person only asked for something",
+   "exchange": {
+    "date": "2026-01-28",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: draft me an email to the landlord about the leak in the back room ceiling. firm but polite\nAI: Here is a draft: \"Dear Mr Hale, the ceiling in the back room has been leaking since Monday's rain, above the storage shelving. I have moved stock and put a bucket under it. Please arrange for the roof to be inspected this week. I am at the shop Tuesday to Saturday.\" Tell me if you want it firmer.\nThey said: that'll do for now, I'll read it properly later"
+   }
+  },
+  {
+   "id": "P-ill-do-it",
+   "expect": "in_progress",
+   "why": "'I'll do it' is not done",
+   "exchange": {
+    "date": "2026-03-05",
+    "text": "They said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now\nThey said: the PAT testing is overdue isn't it\nAI: The last portable appliance test on file was March 2024, so yes, by a year on a two-year cycle it is due now.\nThey said: I'll ring the electrician this week\nAI: I can remind you on Friday if it helps.\nThey said: go on then\nThey said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice."
+   }
+  },
+  {
+   "id": "P-log-only",
+   "expect": "in_progress",
+   "why": "a pasted log, no outcome",
+   "exchange": {
+    "date": "2026-05-12",
+    "text": "They said: this is what the backup thing printed, is it bad?\n\nbackup started 02:00:01\nscanned 18,442 files\nuploaded 212 files (1.4 GB)\nwarning: 3 files skipped (in use)\nbackup finished 02:17:48\n\nAI: No, that is a normal run. The three skipped files were open at the time, most likely the till database and its two journal files; they are picked up on the next run once the till is closed.\nThey said: ok\nThey said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "P-test-message",
+   "expect": "in_progress",
+   "why": "a test message and passing talk",
+   "exchange": {
+    "date": "2026-02-01",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: test\nAI: I'm here. What would you like to do?\nThey said: just checking the new keyboard works. the e key was sticking on the old one\nAI: It is coming through fine."
+   }
+  },
+  {
+   "id": "P-question-about-fact",
+   "expect": "in_progress",
+   "why": "a question about something settled earlier",
+   "exchange": {
+    "date": "2026-04-03",
+    "text": "They said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it\nThey said: remind me what we decided about gift vouchers, do they expire?\nAI: Yes. Vouchers are valid for 12 months from the date of purchase and cannot be exchanged for cash. That was set in November.\nThey said: right, that's what I told her\nThey said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last"
+   }
+  },
+  {
+   "id": "P-waiting-on-someone",
+   "expect": "in_progress",
+   "why": "waiting on someone else",
+   "exchange": {
+    "date": "2026-03-25",
+    "text": "They said: any word from the sign maker about the new fascia?\nAI: Not yet. They said they would send the proof by Wednesday; I chased this morning and the reply says the designer is off sick and the proof will come early next week.\nThey said: typical. ok\nThey said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch\nThey said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it"
+   }
+  },
+  {
+   "id": "P-second-language",
+   "expect": "in_progress",
+   "why": "second language: thinking aloud",
+   "exchange": {
+    "date": "2026-05-21",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: estoy pensando en abrir los domingos por la mañana en verano, no sé, a lo mejor solo julio y agosto\nAI: Puedo preparar una estimación con las ventas de los domingos del mercado del año pasado para ver si compensa. ¿Quieres que la haga?\nThey said: sí, luego lo miro"
+   }
+  }
+ ],
+ "done": [
+  {
+   "id": "D-email-sent",
+   "expect": "DONE",
+   "why": "reported done in other words",
+   "open": {
+    "date": "2026-01-28",
+    "text": "They said: draft me an email to the landlord about the leak in the back room ceiling, I need to send it this week\nAI: Draft ready in your drafts folder. It asks for the roof to be inspected this week.\nThey said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now"
+   },
+   "later": {
+    "date": "2026-02-02",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: sent the landlord email on Friday and he's already replied, roofer's coming Wednesday\nAI: Good. I put \"Roofer, back room ceiling\" in the calendar for Wednesday 4 February."
+   }
+  },
+  {
+   "id": "D-other-words",
+   "expect": "DONE",
+   "why": "no shared key word: 'green stickers'",
+   "open": {
+    "date": "2026-03-05",
+    "text": "They said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it\nThey said: the PAT testing is overdue. I'll ring the electrician this week\nAI: I'll remind you on Friday."
+   },
+   "later": {
+    "date": "2026-03-19",
+    "text": "They said: all the plugs have got their green stickers now, electrician was in and out in an hour, 85 dollars\nAI: Recorded: portable appliance testing done 19 March 2026, $85. Next due March 2028.\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "D-partial",
+   "expect": "STILL OPEN",
+   "why": "one of two things done; the other is still open",
+   "open": {
+    "date": "2026-04-06",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: need to move the front bike racks inside before the painters come, and take the hanging baskets down\nAI: Added both to Saturday's list."
+   },
+   "later": {
+    "date": "2026-05-23",
+    "text": "They said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: racks are in. didn't get to the baskets, the ladder's at home\nAI: I ticked off the racks and left \"take the hanging baskets down\" on the list for Monday morning before the painters arrive."
+   }
+  },
+  {
+   "id": "D-intends",
+   "expect": "STILL OPEN",
+   "why": "an intention, not done",
+   "open": {
+    "date": "2026-02-10",
+    "text": "They said: must get the workshop heater claim in for the energy grant before the deadline\nAI: The deadline is 30 April. I'll keep the form ready.\nThey said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it"
+   },
+   "later": {
+    "date": "2026-03-30",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: I'm going to sit down with the grant form on Sunday, promise\nAI: I'll have the heater invoice and the floor plan attached to the form by then."
+   }
+  },
+  {
+   "id": "D-someone-else",
+   "expect": "STILL OPEN",
+   "why": "still waiting on someone",
+   "open": {
+    "date": "2026-03-25",
+    "text": "They said: before anything else, the kettle's furred up and the tea tastes of it. what do I use\nAI: Fill it halfway with equal parts white vinegar and water, boil, leave it for an hour, then rinse twice and boil fresh water once to clear the taste.\nThey said: will do at lunch\nThey said: we need the proof for the new fascia from the sign maker so I can approve it\nAI: They said Wednesday."
+   },
+   "later": {
+    "date": "2026-04-01",
+    "text": "They said: sign maker says the proof is \"nearly there\". heard that before\nAI: I'll chase again on Friday if nothing has arrived.\nThey said: also the printer in the office said this when I tried the price labels\n\n[09:14:02] spooler: job 17 queued\n[09:14:03] spooler: job 17 paper size mismatch (A4 expected, Letter loaded)\n[09:14:03] spooler: job 17 held\n\nAI: It is holding the job because the tray is set to Letter. Open the tray, move the blue guide to the A4 mark, and press Resume; the held job prints by itself.\nThey said: that did it"
+   }
+  },
+  {
+   "id": "D-different-thing",
+   "expect": "STILL OPEN",
+   "why": "a similar-sounding thing arrived, not the open one",
+   "open": {
+    "date": "2026-01-12",
+    "text": "They said: unrelated but did the weather warning get lifted? I've got the gazebo booked for the market stall\nAI: The yellow wind warning for the county ends at 6 pm today. Tomorrow's forecast is dry with a light westerly, so the gazebo should be fine with the leg weights on.\nThey said: good. weights are in the van\nThey said: order a new chain checker, the old one's worn\nAI: Added to the next Tallis basket."
+   },
+   "later": {
+    "date": "2026-01-20",
+    "text": "They said: oh and the delivery driver left a card, says parcel's with the neighbour at number 9. which one is that, the florist?\nAI: Number 9 is the picture framer two doors down; the florist is number 5. The framer closes at 4 on weekdays.\nThey said: right I'll pop round now\nThey said: the chain whip arrived, good quality for the money\nAI: Noted. The chain checker is still in the basket; that order has not gone yet because the basket is under the free delivery threshold."
+   }
+  },
+  {
+   "id": "D-done-plainly",
+   "expect": "DONE",
+   "why": "said plainly",
+   "open": {
+    "date": "2026-04-17",
+    "text": "They said: I'll get round to servicing the compressor, the belt's squealing\nAI: Reminder set for 1 June.\nThey said: one more thing my office chair's sinking again, every ten minutes I'm an inch lower\nAI: That is the gas cylinder failing. A replacement cylinder for most office chairs is about $20 and fits with a rubber mallet; a short piece of plastic pipe clamped round the column is the free fix until then.\nThey said: pipe it is for now"
+   },
+   "later": {
+    "date": "2026-05-30",
+    "text": "They said: sorry for the typos by the way, new phoen and the keybaord is tiny\nAI: No trouble at all, everything has been clear.\nThey said: ha ok. and thanks for yesterday's help with the spreadsheet, the totals finally add up\nAI: Glad it worked. The fix was the hidden row 14, which was being counted twice.\nThey said: compressor's done, new belt on, oil changed, it purrs\nAI: Recorded in the tools sheet: compressor serviced 30 May 2026, new belt and oil. I cleared the 1 June reminder."
+   }
+  },
+  {
+   "id": "D-cancelled",
+   "expect": "STILL OPEN",
+   "why": "not done: no longer needed (the person closes it, the judge does not)",
+   "open": {
+    "date": "2026-02-03",
+    "text": "They said: while I think of it, what was the name of that podcast about frame building you mentioned\nAI: I mentioned two: \"Lugged\" for traditional steel, about forty minutes an episode, and \"The Jig\" for interviews with small builders. The first is the one with the episode on fork rake.\nThey said: Lugged, that's it\nThey said: book the stand at the spring fair, deadline's the 20th\nAI: I'll prepare the form."
+   },
+   "later": {
+    "date": "2026-02-18",
+    "text": "They said: don't bother with the spring fair, it clashes with Sam's college assessment and I can't staff it\nAI: Understood. I have not sent the form and removed the fair from the calendar.\nThey said: fyi the shutter stuck halfway this morning, had to hand-crank it\nAI: The override crank is the right thing. If the motor hums and stops, the usual cause is the limit switch; if it is silent, check the isolator by the fuse board first. I can find the installer's number if it happens again.\nThey said: it hummed. leave it for now see if it does it again"
+   }
+  },
+  {
+   "id": "D-question",
+   "expect": "STILL OPEN",
+   "why": "a question about the open thing",
+   "open": {
+    "date": "2026-03-12",
+    "text": "They said: a customer brought her dog in today, enormous thing, sat on the workshop mat the whole time like he owned the place\nAI: A good shop dog is hard to find. Did he supervise the repair?\nThey said: more or less. she's coming back Thursday so he'll be back too\nThey said: update the bench card with the new sealant amounts when the new stock comes\nAI: Will do when it arrives."
+   },
+   "later": {
+    "date": "2026-03-26",
+    "text": "They said: can you check when the software for the till last updated, it's nagging me\n\ntill-os 4.2.1 (build 8813)\nlast update check: never\nupdate available: 4.2.3\n\nAI: It has never checked by itself, which is why it nags. 4.2.3 is a small fix release; it takes about five minutes and the till restarts once. Best done after closing.\nThey said: after closing then\nThey said: did the new sealant come yet?\nAI: Not yet. Tallis shows it as back-ordered until 2 April."
+   }
+  },
+  {
+   "id": "D-second-language",
+   "expect": "DONE",
+   "why": "second language",
+   "open": {
+    "date": "2026-04-16",
+    "text": "They said: hay que traducir la lista de precios al español\nAI: La preparo esta semana.\nThey said: lastly I keep meaning to ask, the plant by the window is going yellow\nAI: Yellowing lower leaves on a plant by a window in a workshop is most often overwatering or cold draughts from the door. Let the top few centimetres of soil dry out before watering, and move it a metre from the door if you can.\nThey said: it's right by the door. moving it"
+   },
+   "later": {
+    "date": "2026-04-18",
+    "text": "They said: morning. radio's stuck on that station again, the one with the adverts every four minutes. can you remind me how to retune it\nAI: Good morning. On that model, hold the Scan button for three seconds until the display flashes, then press Scan once more to move to the next station. Press Preset 1 to keep it.\nThey said: got it, peace at last\nThey said: ya vi la lista en español en la carpeta, quedó muy bien, la imprimo mañana\nAI: Me alegro. Está como \"lista-de-precios-es\" en la carpeta de impresión."
+   }
+  }
+ ]
+}

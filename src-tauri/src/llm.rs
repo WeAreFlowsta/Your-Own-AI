@@ -6541,6 +6541,45 @@ pub(crate) async fn chat_turn_once(state: &LLMState, messages: Vec<serde_json::V
     Ok((body, parsed["choices"][0]["message"].clone()))
 }
 
+/// One fixed-form answer from the loaded local model: the reply is held
+/// to a JSON schema, with no thinking. Answers with the reply's text (the
+/// content, or what the engine filed as reasoning when a template that
+/// always thinks left the content empty). For memory's own judging.
+pub(crate) async fn fixed_form_once(state: &LLMState, system: &str, user: &str, schema: serde_json::Value, temperature: f64, max_tokens: u32, seed: Option<u64>) -> Result<String, String> {
+    let model = state.current_model.lock().await.clone().ok_or("no model is loaded")?;
+    if !our_chat_server_is_up() {
+        return Err("the local engine is not running".into());
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "system", "content": system }, { "role": "user", "content": user }],
+        "stream": false,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": 0.9,
+        "response_format": { "type": "json_schema", "json_schema": { "name": "v", "schema": schema } },
+        "stop": chat_stop_strings(&model),
+    });
+    if let Some(s) = seed {
+        body["seed"] = serde_json::json!(s);
+    }
+    apply_no_think_here(&mut body, &model);
+    let _turn = CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
+    let resp = local_http()
+        .post(format!("http://localhost:{}/v1/chat/completions", chat_port()))
+        .bearer_auth(local_api_key())
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("the local engine did not answer: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("the local engine answered {}", resp.status()));
+    }
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| format!("the local engine's answer did not parse: {e}"))?;
+    Ok(completion_text(&parsed))
+}
+
 #[derive(serde::Deserialize, Clone, Copy, Default)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
