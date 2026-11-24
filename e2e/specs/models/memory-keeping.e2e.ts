@@ -67,7 +67,7 @@ describe("what an exchange settled is kept in idle time", () => {
       console.log("e2e: the model kept nothing from the decision; the Recently step has nothing to show");
       return;
     }
-    await browser.url("tauri://localhost/your-memory/");
+    await browser.url("tauri://localhost/your-memory/#recently");
     const row = await $('[data-testid="recently-row"][data-what="kept"]');
     await row.waitForExist({ timeout: 60_000 });
     const words = (await browser.execute((e) => (e as HTMLElement).innerText, row)) as string;

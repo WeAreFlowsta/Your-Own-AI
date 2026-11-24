@@ -1419,7 +1419,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           )}
           {/* As typed: the person's line breaks are theirs (a pasted
               multi-line prompt read as one paragraph, 09-24). */}
-          <span class="whitespace-pre-wrap">{props.message.content}</span>
+          <span class="whitespace-pre-wrap" data-testid="own-message-text">{props.message.content}</span>
         </div>
       </div>
       {/* One line, never a modal: the offer for an instruction, or what was

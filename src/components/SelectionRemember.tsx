@@ -97,7 +97,9 @@ export default component$(() => {
     } catch {
       state.value = 'error';
     }
-    if (state.value === 'saved') setTimeout(() => (visible.value = false), 900);
+    // Gone a moment after it says "Kept", unless a new selection took its place.
+    const kept = text.value;
+    if (state.value === 'saved') setTimeout(() => state.value === 'saved' && text.value === kept && (visible.value = false), 900);
   });
 
   if (!visible.value) return null;

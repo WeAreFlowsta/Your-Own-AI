@@ -114,20 +114,11 @@ describe("Remember keeps the exchange", () => {
   it("on selected words in the person's own message: the same, under that message", async () => {
     const picked = (await browser.execute((xpath) => {
       const host = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
-      if (!host) return "";
-      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-      let node: Node | null = null;
-      while ((node = walker.nextNode())) {
-        const t = node.textContent ?? "";
-        const inBar = (node.parentElement as HTMLElement | null)?.closest("button, [data-testid='kept-line']");
-        if (!inBar && t.trim().length >= 12) break;
-      }
+      const node = host?.querySelector('[data-testid="own-message-text"]')?.firstChild;
       if (!node) return "";
-      const t = node.textContent ?? "";
-      const start = t.length - t.trimStart().length;
       const range = document.createRange();
-      range.setStart(node, start);
-      range.setEnd(node, Math.min(t.length, start + 24));
+      range.setStart(node, 0);
+      range.setEnd(node, Math.min((node.textContent ?? "").length, 24));
       const sel = window.getSelection()!;
       sel.removeAllRanges();
       sel.addRange(range);
@@ -174,9 +165,11 @@ describe("Remember keeps the exchange", () => {
   });
 
   it("Recently lists every change, with the tidying line at its top, and Undo works there", async () => {
-    await browser.url("tauri://localhost/your-memory/");
+    await browser.url("tauri://localhost/your-memory/#recently");
     const board = await $('[data-testid="recently-board"]');
     await board.waitForExist({ timeout: 60_000 });
+    // The list fills when it comes into view.
+    await browser.execute((e) => (e as HTMLElement).scrollIntoView({ block: "start" }), board);
     await browser.waitUntil(async () => (await $$('[data-testid="recently-row"]').length) >= 4, { timeout: 60_000, timeoutMsg: "Recently did not list the changes" });
     const rows = (await browser.execute(() => Array.from(document.querySelectorAll('[data-testid="recently-row"]')).map((r) => `${r.getAttribute("data-what")}: ${(r as HTMLElement).innerText.split(/\s+/).join(" ")}`))) as string[];
     console.log(`e2e: recently: ${JSON.stringify(rows)}`);

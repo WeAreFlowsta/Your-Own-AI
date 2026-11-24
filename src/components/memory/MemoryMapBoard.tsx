@@ -13,6 +13,7 @@ import type { KeptItem } from '../../utils/memoryKeep';
 import { dayOf } from '../../utils/memoryKeep';
 
 interface Ai {
+  id: string;
   name: string;
   founding: string;
 }
@@ -20,7 +21,9 @@ interface Ai {
 const LIVE = ['current', 'open', 'done'];
 const PANEL_ITEMS = 6;
 
-export const MemoryMapBoard = component$(() => {
+/** `aiId`: the AI whose view is shown (its id on this device), chosen with
+ *  the faces above the Map; absent or "you" for all the person's AIs. */
+export const MemoryMapBoard = component$<{ aiId?: string }>((props) => {
   const data = useSignal<MemoryMapData | null>(null);
   const failed = useSignal('');
   const ais = useSignal<Ai[]>([]);
@@ -49,11 +52,22 @@ export const MemoryMapBoard = component$(() => {
   useVisibleTask$(async ({ cleanup }) => {
     const [{ getLocalCustomAis }, { foundingOf }] = await Promise.all([import('../../utils/localAiStorage'), import('../../utils/lookalikes')]);
     const list = await getLocalCustomAis().catch(() => []);
-    ais.value = list.filter((a) => a.status !== 'archived' && foundingOf(a)).map((a) => ({ name: a.name, founding: foundingOf(a) }));
+    ais.value = list.filter((a) => a.status !== 'archived' && foundingOf(a)).map((a) => ({ id: a.id, name: a.name, founding: foundingOf(a) }));
+    viewAi.value = ais.value.find((a) => a.id === props.aiId)?.founding ?? '';
     await load();
     const again = () => void load();
     window.addEventListener('yoai-memory-changed', again);
     cleanup(() => window.removeEventListener('yoai-memory-changed', again));
+  });
+
+  // The face chosen above the Map changes whose view is shown.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const id = track(() => props.aiId);
+    const founding = ais.value.find((a) => a.id === id)?.founding ?? '';
+    if (founding === viewAi.value) return;
+    viewAi.value = founding;
+    void load();
   });
 
   // The drawing, mounted once.
@@ -140,25 +154,10 @@ export const MemoryMapBoard = component$(() => {
 
   return (
     <section data-testid="memory-map" data-subjects={subjects.length}>
-      {/* The two rows of choices stay hidden until there is something to pick from. */}
-      {(ais.value.length > 1 || (d?.projects.length ?? 0) > 0) && (
+      {/* Whose view is chosen with the faces above. The row of projects stays hidden until there is one. */}
+      {(d?.projects.length ?? 0) > 0 && (
         <div class="flex flex-col gap-2 mb-3">
-          {ais.value.length > 1 && (
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-xs text-[var(--text-secondary)]">Show what can be used by</span>
-              <div class={group}>
-                <button type="button" class={pill(!viewAi.value)} data-testid="map-view-ai" data-ai="" onClick$={() => ((viewAi.value = ''), load())}>
-                  All my AIs
-                </button>
-                {ais.value.map((a) => (
-                  <button key={a.founding} type="button" class={pill(viewAi.value === a.founding)} data-testid="map-view-ai" data-ai={a.founding} onClick$={() => ((viewAi.value = a.founding), load())}>
-                    {a.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-          {(d?.projects.length ?? 0) > 0 && (
+          {(
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-xs text-[var(--text-secondary)]">Show</span>
               <div class={group}>

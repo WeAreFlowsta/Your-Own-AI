@@ -70,12 +70,32 @@ describe("the Map", () => {
     // A real press on the circle, where it is drawn.
     await browser.pause(4_000); // the circles settle
     const at = (await placed()).find((p) => p.id === subject.id)!;
-    await browser.action("pointer").move({ x: Math.round(at.x), y: Math.round(at.y) }).down().up().perform();
-    const pressed = await browser
-      .waitUntil(async () => (await (await $('[data-testid="map-panel"]')).getAttribute("data-subject")) === subject.id, { timeout: 10_000 })
-      .then(() => true)
-      .catch(() => false);
-    console.log(`e2e: a pointer press on the circle opened it: ${pressed}`);
+    const opened = () =>
+      browser
+        .waitUntil(async () => (await (await $('[data-testid="map-panel"]')).getAttribute("data-subject")) === subject.id, { timeout: 8_000 })
+        .then(() => true)
+        .catch(() => false);
+    await browser.action("pointer").move({ x: Math.round(at.x), y: Math.round(at.y) }).down().up().perform().catch(() => undefined);
+    let pressed = await opened();
+    console.log(`e2e: the driver's pointer press on the circle opened it: ${pressed}`);
+    if (!pressed) {
+      // The same press as the page's own pointer events, through the drawing's own hit test.
+      await browser.execute((x: number, y: number) => {
+        const c = document.querySelector('[data-testid="memory-map-stage"] canvas') as HTMLCanvasElement;
+        const ev = (type: string) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: type === "pointerdown" ? 1 : 0, view: window }));
+        ev("pointermove");
+        return new Promise<void>((done) =>
+          setTimeout(() => {
+            ev("pointerdown");
+            ev("pointerup");
+            c.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y, view: window }));
+            done();
+          }, 400),
+        );
+      }, at.x, at.y);
+      pressed = await opened();
+      console.log(`e2e: pointer events at the circle's place opened it: ${pressed}`);
+    }
     if (!pressed) await browser.execute((id) => (window as any).__yoaiMap.select(id), subject.id);
     await browser.waitUntil(async () => (await textOf('[data-testid="map-panel-name"]')) === subject.name, { timeout: 20_000, timeoutMsg: "the panel did not open on the subject" });
     await (await $('[data-testid="map-panel-item"]')).waitForExist({ timeout: 20_000 });

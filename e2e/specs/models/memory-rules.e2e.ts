@@ -23,8 +23,8 @@ async function mcpCall(name: string, args: Record<string, unknown>, headers: Rec
 }
 
 async function yourMemory() {
-  await browser.url("tauri://localhost/your-memory/");
-  await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
+  await browser.url("tauri://localhost/your-memory/#rules");
+  await (await $('[data-testid="rule-add"]')).waitForDisplayed({ timeout: 60_000 });
 }
 
 describe("memory rules", () => {
@@ -34,16 +34,12 @@ describe("memory rules", () => {
     await browser.waitUntil(async () => {
       try { await invoke("list_memory_rows", { agentKey: null, scope: "person" }); return true; } catch { return false; }
     }, { timeout: 180_000, timeoutMsg: "the person's memory rows never answered" });
-    await (await $('[data-testid="memory-add"]')).click();
-    await (await $('[data-testid="memory-add-kind"]')).click();
-    await (await $('[data-testid="memory-add-option"][data-kind="rule"]')).click();
-    const input = await $('[data-testid="memory-add-value"]');
     await browser.execute((t: string) => {
-      const el = document.querySelector('[data-testid="memory-add-value"]') as HTMLInputElement;
+      const el = document.querySelector('[data-testid="rule-add"]') as HTMLInputElement;
       el.focus(); el.value = t;
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }, RULE);
-    await browser.keys("Enter");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="rule-add-save"]'));
     const rule = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
     await rule.waitForDisplayed({ timeout: 60_000 });
     await shot("memory-rule-added");

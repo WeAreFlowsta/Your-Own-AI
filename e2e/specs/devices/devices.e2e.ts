@@ -210,7 +210,7 @@ describe(`devices, phase ${PHASE}`, () => {
       const aiCached = await invoke<{ kind: string; text: string }[]>("list_memory_rows_cached", { scope: `ai:${renamedB!.founding}` });
       console.log(`e2e: B's cached AI notes ${JSON.stringify(aiCached.map((r) => r.text))}`);
       expect(aiCached.some((r) => r.text === AI_NOTE)).toBe(true);
-      await browser.url("tauri://localhost/your-memory/");
+      await browser.url("tauri://localhost/your-memory/#rules");
       const ruleEl = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
       await ruleEl.waitForDisplayed({ timeout: 60_000 });
       await shot("devices-b-rule-from-a");

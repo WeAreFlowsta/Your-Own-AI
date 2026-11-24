@@ -16,6 +16,9 @@ interface Props {
   selected: string;
   /** On an AI's memory page: switch in place. Elsewhere the row navigates. */
   onPick$?: QRL<(aiId: string, agentKey: string) => void>;
+  /** The faces choose whose view of memory is shown, in place: the first
+   *  face stands for all the person's AIs, and pressing it calls this. */
+  onAll$?: QRL<() => void>;
 }
 
 export default component$<Props>((props) => {
@@ -51,17 +54,19 @@ export default component$<Props>((props) => {
       <button
         type="button"
         class="group flex flex-col items-center gap-1 shrink-0 bg-transparent border-none cursor-pointer p-0"
-        title="Your Memory - what every AI knows about you"
+        title={props.onAll$ ? "What all your AIs can use" : "Your Memory - what every AI knows about you"}
         data-testid="memory-owner-you"
         data-selected={props.selected === "you" ? "yes" : "no"}
-        onClick$={() => {
-          if (props.selected !== "you") nav("/your-memory/");
+        onClick$={async () => {
+          if (props.selected === "you") return;
+          if (props.onAll$) await props.onAll$();
+          else nav("/your-memory/");
         }}
       >
         <span class={`w-11 h-11 rounded-full flex items-center justify-center bg-gradient-to-br from-purple-500 to-indigo-600 text-white ${ring(props.selected === "you")}`}>
           <LuUsers class="w-5 h-5" />
         </span>
-        <span class={`text-[11px] ${props.selected === "you" ? "text-[var(--text-primary)] font-semibold" : "text-[var(--text-muted)]"}`}>You</span>
+        <span class={`text-[11px] ${props.selected === "you" ? "text-[var(--text-primary)] font-semibold" : "text-[var(--text-muted)]"}`}>{props.onAll$ ? "All my AIs" : "You"}</span>
       </button>
       <span class="self-center h-8 w-px bg-[var(--border-subtle)] shrink-0" aria-hidden="true" />
       {ais.map((ai) => {
@@ -73,7 +78,7 @@ export default component$<Props>((props) => {
             key={ai.id}
             type="button"
             class="group flex flex-col items-center gap-1 shrink-0 bg-transparent border-none cursor-pointer p-0"
-            title={`${ai.name}'s own memory`}
+            title={props.onAll$ ? `What ${ai.name} can use` : `${ai.name}'s own memory`}
             data-testid="memory-owner-ai"
             data-ai-id={ai.id}
             data-selected={on ? "yes" : "no"}

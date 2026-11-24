@@ -417,6 +417,13 @@ pub struct MapSubject {
     pub last_kept: i64,
     /// When it last came up in an answer on this device (ms).
     pub last_came_up: Option<i64>,
+    /// A stretch of a conversation: the conversation's title as it is now
+    /// and the stretch's first and last item (ms). While the person has
+    /// not named the subject, the page names it from these, with the dates
+    /// as the person's own clock has them.
+    pub title: Option<String>,
+    pub first: Option<i64>,
+    pub last: Option<i64>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -487,7 +494,7 @@ fn about_you() -> Subject {
 /// lines between subjects that came up together, and the projects. About
 /// you is always on it; any other subject is on it only while it holds
 /// something.
-pub(crate) fn map_of(all: &[Subject], items: &[crate::memory_items::Item], view: &MapView, came: &CameUp, colors: &std::collections::BTreeMap<String, u8>) -> MemoryMap {
+pub(crate) fn map_of(all: &[Subject], items: &[crate::memory_items::Item], view: &MapView, came: &CameUp, colors: &std::collections::BTreeMap<String, u8>, titles: &std::collections::HashMap<i64, String>) -> MemoryMap {
     use crate::memory_items::{Audience, ItemState};
     let mut all: Vec<Subject> = all.to_vec();
     if !all.iter().any(|s| s.from == MadeFrom::AboutYou) {
@@ -548,6 +555,18 @@ pub(crate) fn map_of(all: &[Subject], items: &[crate::memory_items::Item], view:
             audience,
             last_kept: mine.iter().map(|i| i.row.as_of).max().unwrap_or(0),
             last_came_up: ids.iter().filter_map(|id| came.last.get(id).copied()).max(),
+            title: match &s.from {
+                MadeFrom::Conversation { started_at, .. } => titles.get(started_at).cloned(),
+                _ => None,
+            },
+            first: match s.from {
+                MadeFrom::Conversation { first, .. } => Some(first),
+                _ => None,
+            },
+            last: match s.from {
+                MadeFrom::Conversation { last, .. } => Some(last),
+                _ => None,
+            },
             ids,
         });
     }
@@ -595,14 +614,19 @@ pub async fn memory_map(app: tauri::AppHandle, view: Option<MapView>) -> Result<
     let (all, items, came) = (subjects(&rows), crate::memory_items::items(&rows), read_came_up(&app, &key));
     let view = view.unwrap_or_default();
     let held = colors(&rows);
-    let ranked: Vec<String> = map_of(&all, &items, &MapView::default(), &came, &held).projects.into_iter().map(|p| p.id).collect();
+    let titles: std::collections::HashMap<i64, String> = crate::transcript_search::cached_conversations(&app)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| c.title.filter(|t| !t.trim().is_empty()).map(|t| (c.started_at, t)))
+        .collect();
+    let ranked: Vec<String> = map_of(&all, &items, &MapView::default(), &came, &held, &titles).projects.into_iter().map(|p| p.id).collect();
     let now_colors = color_slots(&held, &ranked);
     if now_colors != held {
         if let Err(e) = crate::memory_rows::save_and_cache(&app, colors_row(&now_colors, crate::memory_items::now_ms())).await {
             log::warn!("[memory] the Map's project colors could not be saved: {e}");
         }
     }
-    Ok(map_of(&all, &items, &view, &came, &now_colors))
+    Ok(map_of(&all, &items, &view, &came, &now_colors, &titles))
 }
 
 /// The person names a subject: the name is theirs from now on and never
@@ -780,7 +804,7 @@ mod tests {
 
     #[test]
     fn about_you_is_on_the_map_before_anything_is_kept() {
-        let map = map_of(&[], &[], &MapView::default(), &CameUp::default(), &Default::default());
+        let map = map_of(&[], &[], &MapView::default(), &CameUp::default(), &Default::default(), &Default::default());
         assert_eq!(map.subjects.len(), 1);
         assert_eq!((map.subjects[0].id.as_str(), map.subjects[0].name.as_str(), map.subjects[0].kind, map.subjects[0].items), (ABOUT_YOU, "About you", "about_you", 0));
         assert!(map.links.is_empty() && map.projects.is_empty());
@@ -795,13 +819,18 @@ mod tests {
             sub("s-empty", "Market stall", MadeFrom::ByHand),
         ];
         let items = vec![item("a", Some("s-host"), Audience::All, 10), item("b", Some("s-dns"), Audience::Ai { ai: "atlas".into() }, 30), item("c", None, Audience::All, 5)];
-        let map = map_of(&all, &items, &MapView::default(), &CameUp::default(), &Default::default());
+        let map = map_of(&all, &items, &MapView::default(), &CameUp::default(), &Default::default(), &Default::default());
         let names: Vec<&str> = map.subjects.iter().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["About you", "Hosting"], "About you first; the merged and the empty subject are not circles");
         let host = &map.subjects[1];
         assert_eq!((host.items, host.audience, host.last_kept), (2, "mixed", 30));
         assert_eq!(host.ids, vec!["s-host".to_string(), "s-dns".to_string()]);
         assert_eq!(map.unplaced, 1, "an item with no subject is counted, not lost");
+        // The page names an unnamed stretch from the conversation's title as it is now.
+        let titles = std::collections::HashMap::from([(5i64, "Hosting move".to_string())]);
+        let titled = map_of(&all, &items, &MapView::default(), &CameUp::default(), &Default::default(), &titles);
+        assert_eq!((titled.subjects[1].title.as_deref(), titled.subjects[1].first, titled.subjects[1].last), (Some("Hosting move"), Some(1), Some(2)));
+        assert_eq!(titled.subjects[0].title, None);
     }
 
     #[test]
@@ -813,11 +842,11 @@ mod tests {
             item("p", Some("s-bakery"), Audience::Project { project: "p1".into() }, 2),
             item("t", Some("s-trip"), Audience::Ai { ai: "atlas".into() }, 3),
         ];
-        let ids = |v: &MapView| map_of(&all, &items, v, &CameUp::default(), &Default::default()).subjects.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        let ids = |v: &MapView| map_of(&all, &items, v, &CameUp::default(), &Default::default(), &Default::default()).subjects.into_iter().map(|s| s.id).collect::<Vec<_>>();
         assert_eq!(ids(&MapView { ai: Some("juno".into()), project: None }), vec![ABOUT_YOU.to_string()], "Juno may use neither Atlas's item nor the project's outside the project");
         assert_eq!(ids(&MapView { ai: Some("atlas".into()), project: None }), vec![ABOUT_YOU.to_string(), "s-trip".to_string()]);
         assert_eq!(ids(&MapView { ai: None, project: Some("p1".into()) }), vec![ABOUT_YOU.to_string(), "s-bakery".to_string()]);
-        let projects = map_of(&all, &items, &MapView { ai: Some("juno".into()), project: None }, &CameUp::default(), &Default::default()).projects;
+        let projects = map_of(&all, &items, &MapView { ai: Some("juno".into()), project: None }, &CameUp::default(), &Default::default(), &Default::default()).projects;
         assert_eq!(projects.iter().map(|p| (p.id.as_str(), p.name.as_str(), p.items)).collect::<Vec<_>>(), vec![("p1", "Bakery site", 1)], "the list of projects does not change with the view");
     }
 
@@ -831,7 +860,7 @@ mod tests {
         let conv = |n: i64| MadeFrom::Conversation { started_at: n, first: 1, last: 2 };
         let all = vec![sub("s-a", "A", conv(1)), sub("s-b", "B", conv(2)), Subject { merged_into: Some("s-a".into()), ..sub("s-c", "C", conv(3)) }];
         let items = vec![item("1", Some("s-a"), Audience::All, 1), item("2", Some("s-b"), Audience::All, 1), item("3", Some("s-c"), Audience::All, 1)];
-        let map = map_of(&all, &items, &MapView::default(), &came, &Default::default());
+        let map = map_of(&all, &items, &MapView::default(), &came, &Default::default(), &Default::default());
         assert_eq!(map.links, vec![MapLink { a: "s-a".into(), b: "s-b".into(), times: 3 }], "C was merged into A: its turn with B counts for A, and its turn with A joins nothing");
         assert_eq!(map.subjects.iter().find(|s| s.id == "s-a").unwrap().last_came_up, Some(200));
     }

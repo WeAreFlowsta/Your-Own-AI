@@ -91,10 +91,13 @@ interface ProfileMemoryProps {
   readOnly?: boolean;
   /** Where the "Manage →" link points in read-only mode. */
   manageHref?: string;
+  /** False where rules have a board of their own: no list of rules here,
+   *  and Add does not offer one. */
+  rules?: boolean;
 }
 
 export default component$<ProfileMemoryProps>(
-  ({ readOnly = false, manageHref = "/your-memory/" }) => {
+  ({ readOnly = false, manageHref = "/your-memory/", rules = true }) => {
     const facts = useSignal<Fact[]>([]);
     const factsLoading = useSignal(true);
     /** Bumped when this page adds a rule, so the rows panel reloads. */
@@ -307,7 +310,7 @@ export default component$<ProfileMemoryProps>(
             )}
           </div>
         )}
-        <MemoryRowsPanel scope={personScope} readOnly={readOnly} refresh={rulesRefresh.value} />
+        {rules && <MemoryRowsPanel scope={personScope} readOnly={readOnly} refresh={rulesRefresh.value} />}
         {/* Header + controls */}
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
           <p class="text-sm text-[var(--text-secondary)] flex items-center gap-1.5">
@@ -400,7 +403,7 @@ export default component$<ProfileMemoryProps>(
                       onClick$={() => (relOpen.value = false)}
                     />
                     <div class="absolute left-0 top-full mt-1 w-full min-w-[150px] max-h-60 overflow-auto z-50 rounded-lg bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] shadow-xl py-1">
-                      {RELATION_OPTIONS.map((o) => (
+                      {RELATION_OPTIONS.filter((o) => rules || o.predicate !== "rule").map((o) => (
                         <button
                           key={o.predicate}
                           type="button"

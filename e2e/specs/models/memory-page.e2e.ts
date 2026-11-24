@@ -57,8 +57,11 @@ describe("the Memory page", () => {
     expect(kept.item.confirmed ?? null).not.toBe(null);
     expect(kept.item.source?.kind).toBe("note");
     // Recently lists it, with Undo.
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="recently"]'));
     await browser.waitUntil(async () => ((await browser.execute(() => Array.from(document.querySelectorAll('[data-testid="recently-row"]')).map((r) => (r as HTMLElement).innerText).join("\n"))) as string).includes("rye sourdough with caraway"), { timeout: 30_000, timeoutMsg: "Recently did not list what was kept" });
     await shot("memory-page-kept-words");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="map"]'));
+    await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
 
     // A note, in free words.
     await add("note", "My oven is a Rofco B40, bought in 2024.");
@@ -88,7 +91,7 @@ describe("the Memory page", () => {
     const set = await invoke<{ private: boolean }>("memory_conversation_use_set", { change: { startedAt: started, private: true } });
     expect(set.private).toBe(true);
     await browser.url("tauri://localhost/chat/");
-    await browser.url("tauri://localhost/your-memory/");
+    await browser.url("tauri://localhost/your-memory/#recently");
     const row = await $('[data-testid="not-used-row"]');
     await row.waitForDisplayed({ timeout: 60_000 });
     const words = (await browser.execute((e) => (e as HTMLElement).innerText, row)) as string;
