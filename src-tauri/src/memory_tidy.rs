@@ -191,6 +191,122 @@ pub(crate) fn left_today(ledger: &[Judged], day_start: i64) -> usize {
     CHANGES_A_DAY.saturating_sub(made)
 }
 
+// ── open items that later work may have finished ────────────────────────
+
+/// What the judging model said of an open item and a later one.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum DoneVerdict {
+    Done,
+    StillOpen,
+}
+
+/// What a verdict on an open item leads to: the ledger entry. A "done"
+/// verdict never closes the item: it is put to the person ("May already
+/// be done", with both quotes), who answers or leaves it. "Still open" is
+/// remembered, so the same pair is not judged, or asked, again.
+pub(crate) fn done_judged(open: &Item, later: &Item, verdict: &DoneVerdict, now: i64) -> Judged {
+    Judged { pair: pair_of(&open.row.id, &later.row.id), outcome: match verdict { DoneVerdict::Done => "may_be_done", DoneVerdict::StillOpen => "still_open" }.to_string(), at: now, of: None }
+}
+
+/// The open items that later work may have finished, each with the later
+/// item that suggests it: what "May already be done" lists. An item the
+/// person has since closed or reopened by hand is not listed.
+pub(crate) fn may_be_done<'a>(held: &'a [Item], ledger: &[Judged]) -> Vec<(&'a Item, &'a Item)> {
+    ledger
+        .iter()
+        .filter(|j| j.outcome == "may_be_done")
+        .filter_map(|j| {
+            let (a, b) = (held.iter().find(|i| i.row.id == j.pair.0)?, held.iter().find(|i| i.row.id == j.pair.1)?);
+            let (open, later) = if a.meta.state == ItemState::Open { (a, b) } else { (b, a) };
+            (open.meta.state == ItemState::Open).then_some((open, later))
+        })
+        .collect()
+}
+
+// ── one device tidies at a time ─────────────────────────────────────────
+
+/// Which of the person's devices tidies, until when. A mechanism only:
+/// nothing shows it, names its holder, or lets anyone change it.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Lease {
+    pub device: String,
+    /// How its best passing model did on the check (right answers on the
+    /// judging part): the better judge tidies.
+    pub score: u32,
+    /// The lease runs out by itself (ms), so a device that is switched off
+    /// or offline is replaced without anyone being asked.
+    pub until: i64,
+}
+
+/// How long a lease runs before it must be renewed.
+pub(crate) const LEASE_MS: i64 = 6 * 60 * 60 * 1000;
+
+/// The lease as the one row that is saved.
+pub(crate) fn lease_row(l: &Lease, now: i64) -> MemoryRow {
+    MemoryRow { id: "sys-lease".to_string(), structured: Some(serde_json::json!({ "sys": "lease", "lease": l })), ..ledger_row(&Judged { pair: (String::new(), String::new()), outcome: String::new(), at: now, of: None }) }
+}
+
+fn sys<T: serde::de::DeserializeOwned>(rows: &[MemoryRow], kind: &str, key: &str) -> Option<T> {
+    rows.iter().filter(|r| !r.deleted).find_map(|r| {
+        let s = r.structured.as_ref()?;
+        (s.get("sys")?.as_str()? == kind).then(|| serde_json::from_value(s.get(key)?.clone()).ok()).flatten()
+    })
+}
+
+pub(crate) fn lease(rows: &[MemoryRow]) -> Option<Lease> {
+    sys(rows, "lease", "lease")
+}
+
+/// What this device does about the lease. `my_score`: how this device's
+/// best passing model did; `None` when it has none (then it never holds
+/// the lease).
+#[derive(Debug, PartialEq)]
+pub(crate) enum LeaseMove {
+    /// Write this lease (taken, or renewed).
+    Hold(Lease),
+    /// Another device holds it: apply what arrives, judge nothing.
+    Leave,
+}
+
+pub(crate) fn lease_move(current: Option<&Lease>, device: &str, my_score: Option<u32>, now: i64) -> LeaseMove {
+    let Some(score) = my_score else { return LeaseMove::Leave };
+    let mine = Lease { device: device.to_string(), score, until: now + LEASE_MS };
+    match current {
+        // Mine already: renewed when it is past half its time.
+        Some(l) if l.device == device => {
+            if l.until - now < LEASE_MS / 2 || l.score != score { LeaseMove::Hold(mine) } else { LeaseMove::Hold(l.clone()) }
+        }
+        // Another device's, still valid: taken only by a better judge. A tie stays with the holder.
+        Some(l) if l.until > now => {
+            if score > l.score { LeaseMove::Hold(mine) } else { LeaseMove::Leave }
+        }
+        // None, or run out.
+        _ => LeaseMove::Hold(mine),
+    }
+}
+
+/// May this device judge now? Only the holder of a valid lease.
+pub(crate) fn judges_here(current: Option<&Lease>, device: &str, now: i64) -> bool {
+    current.is_some_and(|l| l.device == device && l.until > now)
+}
+
+/// Does any of the person's devices tidy? (The one thing a screen reads
+/// from the lease: which form the tidying line takes.)
+pub(crate) fn some_device_tidies(current: Option<&Lease>, now: i64) -> bool {
+    current.is_some_and(|l| l.until > now)
+}
+
+/// Tidying and AI keeping turned off, for all the person's devices: one
+/// row, so it travels and comes back with a restore. Turning it on again
+/// writes a newer revision that clears it.
+pub(crate) fn tidy_off_row(off: bool, now: i64) -> MemoryRow {
+    MemoryRow { id: "sys-tidy-off".to_string(), structured: Some(serde_json::json!({ "sys": "tidy_off", "off": off })), ..ledger_row(&Judged { pair: (String::new(), String::new()), outcome: String::new(), at: now, of: None }) }
+}
+
+pub(crate) fn tidy_is_off(rows: &[MemoryRow]) -> bool {
+    sys::<bool>(rows, "tidy_off", "off").unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +489,76 @@ mod tests {
         // And A is not paired with B again; with C it can still be judged (they were never a pair).
         let led = vec![Judged { pair: pair_of("it-a", "it-b"), outcome: "replaced".into(), at: NOW, of: None }, undone(&a_by_b, NOW + 20).unwrap()];
         assert!(!may_judge(&led, "it-a", "it-b") && may_judge(&led, "it-a", "it-c"));
+    }
+
+    #[test]
+    fn done_verdict_only_proposes() {
+        use crate::memory_items::{keep, Keep};
+        use crate::memory_block::Ptr;
+        let (row, _) = keep(&[], Keep { id: "it-open".into(), text: "Ask the fitter about a second deck.", item_type: ItemType::Open, ptr: Ptr { c: 1, s: 0, t: 1, a: 0, b: 5 }, as_of: NOW - 9 * DAY, by: "ai:juno", audience: None, kind: "exchange", why: "settled", quote: None, subject: None, now: NOW - 9 * DAY }).ok().unwrap();
+        let open = as_item(row);
+        let later = item("it-later", "The fitter quoted for the second deck on Tuesday.", NOW - DAY, "ai:juno");
+        let judged = done_judged(&open, &later, &DoneVerdict::Done, NOW);
+        assert_eq!(judged.outcome, "may_be_done");
+        // The item itself is untouched: still open, still given.
+        assert_eq!(open.meta.state, ItemState::Open);
+        let held = vec![open.clone(), later.clone()];
+        let listed = may_be_done(&held, &[judged.clone()]);
+        assert_eq!(listed.iter().map(|(o, l)| (o.row.id.as_str(), l.row.id.as_str())).collect::<Vec<_>>(), vec![("it-open", "it-later")], "listed with the later item that suggests it");
+        // It does not use up the day's changes, and does not count toward the pause.
+        assert_eq!(left_today(&[judged.clone()], NOW - (NOW % DAY)), CHANGES_A_DAY);
+        assert!(!paused(&[judged.clone()], None));
+        // Once the person closes it, it is no longer listed.
+        let (closed, _) = crate::memory_items::close(&open, true, "person", NOW + 5);
+        assert!(may_be_done(&[as_item(closed), later], &[judged]).is_empty());
+    }
+
+    #[test]
+    fn still_waiting_is_remembered_so_the_same_pair_is_not_asked_again() {
+        let open = item("it-open", "Ask the fitter about a second deck.", NOW - 9 * DAY, "ai:juno");
+        let later = item("it-later", "The fitter is on holiday until May.", NOW - DAY, "ai:juno");
+        let judged = done_judged(&open, &later, &DoneVerdict::StillOpen, NOW);
+        assert_eq!(judged.outcome, "still_open");
+        let led = ledger(&[ledger_row(&judged)]);
+        assert!(!may_judge(&led, "it-open", "it-later"));
+        assert!(may_be_done(&[open.clone(), later], &led).is_empty());
+        // Another later item can still suggest it.
+        assert!(may_judge(&led, "it-open", "it-newer"));
+    }
+
+    #[test]
+    fn one_device_tidies_at_a_time_and_nobody_is_asked() {
+        // No lease: a device with a passing model takes it; one without never does.
+        let LeaseMove::Hold(first) = lease_move(None, "desktop", Some(27), NOW) else { panic!() };
+        assert_eq!((first.device.as_str(), first.score, first.until), ("desktop", 27, NOW + LEASE_MS));
+        assert_eq!(lease_move(None, "old-laptop", None, NOW), LeaseMove::Leave);
+        assert!(judges_here(Some(&first), "desktop", NOW + 5) && !judges_here(Some(&first), "laptop", NOW + 5));
+        // A tie stays with the holder; a better judge takes it; a worse one leaves it.
+        assert_eq!(lease_move(Some(&first), "laptop", Some(27), NOW + 5), LeaseMove::Leave);
+        assert_eq!(lease_move(Some(&first), "laptop", Some(25), NOW + 5), LeaseMove::Leave);
+        assert!(matches!(lease_move(Some(&first), "laptop", Some(29), NOW + 5), LeaseMove::Hold(l) if l.device == "laptop"));
+        // The holder renews past half its time, and not before.
+        assert_eq!(lease_move(Some(&first), "desktop", Some(27), NOW + 5), LeaseMove::Hold(first.clone()));
+        assert!(matches!(lease_move(Some(&first), "desktop", Some(27), NOW + LEASE_MS / 2 + 1), LeaseMove::Hold(l) if l.until == NOW + LEASE_MS / 2 + 1 + LEASE_MS));
+        // The desktop is switched off: the lease runs out and the laptop takes it, with the same or a worse model.
+        let after = NOW + LEASE_MS + 1;
+        assert!(!judges_here(Some(&first), "desktop", after) && !some_device_tidies(Some(&first), after));
+        assert!(matches!(lease_move(Some(&first), "laptop", Some(20), after), LeaseMove::Hold(l) if l.device == "laptop"));
+        // It travels as one row; the newer revision is the lease.
+        let LeaseMove::Hold(second) = lease_move(Some(&first), "laptop", Some(29), NOW + 5) else { panic!() };
+        let rows = crate::memory_rows::reduce(vec![lease_row(&first, NOW), lease_row(&second, NOW + 5)]);
+        assert_eq!((rows.len(), lease(&rows)), (1, Some(second)));
+        assert!(crate::memory_items::items(&rows).is_empty());
+    }
+
+    #[test]
+    fn turning_tidying_off_is_one_row_for_all_devices() {
+        assert!(!tidy_is_off(&[]));
+        let off = tidy_off_row(true, NOW);
+        assert!(tidy_is_off(&[off.clone()]));
+        // Turned on again on another device: the newer revision clears it everywhere.
+        let rows = crate::memory_rows::reduce(vec![off, tidy_off_row(false, NOW + 9)]);
+        assert_eq!((rows.len(), tidy_is_off(&rows)), (1, false));
     }
 
     #[test]
