@@ -347,6 +347,177 @@ pub(crate) fn still_to_write(wanted: Vec<MemoryRow>, held: &[MemoryRow]) -> Vec<
     wanted.into_iter().filter(|w| !held.iter().any(|h| h.id == w.id)).collect()
 }
 
+/// The old stores of one profile, as data.
+#[derive(Default)]
+pub(crate) struct Stores {
+    pub facts: Vec<MemoryFact>,
+    /// The person's rows and each AI's rows (not memory's own scope).
+    pub rows: Vec<MemoryRow>,
+    /// What the person gave each AI by hand: (the AI's founding key, its entries).
+    pub knowledge: Vec<(String, Vec<TranscriptEmbedding>)>,
+    /// Each project's memory text: (identity, name, text, when written in ms).
+    pub projects: Vec<(String, String, String, i64)>,
+}
+
+/// Where each old thing went, in counts: the page "What changed in the
+/// update" reads this.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Report {
+    /// Saved by the person before the update, carried over and used.
+    pub kept_by_you: u32,
+    /// Learned by an AI, set aside and used by no AI.
+    pub set_aside: u32,
+    /// The person's name goes on being used.
+    pub name: bool,
+    /// Lines of project memory texts, now items of their projects.
+    pub project_lines: u32,
+    pub projects: u32,
+    /// The short description of the person was in the old store.
+    pub portrait_retired: bool,
+    /// Rows written by this run (0 on a second run).
+    pub written: u32,
+    /// Tidying starts off because learning was paused before.
+    pub tidying_starts_off: bool,
+    /// When the update's pass finished on this device (ms).
+    pub done_at: i64,
+}
+
+/// Every row the update wants written, the subjects they sit in, and the
+/// counts. No reading and no writing here.
+pub(crate) fn plan(stores: &Stores) -> (Vec<MemoryRow>, Vec<Subject>, Report) {
+    let mut rows = from_facts(&all_facts(&stores.facts, &stores.rows));
+    for (founding, entries) in &stores.knowledge {
+        rows.extend(from_knowledge(founding, entries));
+    }
+    rows.extend(from_rows(&stores.rows));
+    let mut report = Report::default();
+    for (project, _, text, at) in &stores.projects {
+        let lines = from_project_text(project, text, *at);
+        if !lines.is_empty() {
+            report.projects += 1;
+            report.project_lines += lines.len() as u32;
+        }
+        rows.extend(lines);
+    }
+    // One item per id: the same save can be read from two stores.
+    let mut seen = std::collections::HashSet::new();
+    rows.retain(|r| seen.insert(r.id.clone()));
+    for r in &rows {
+        let Some(meta) = crate::memory_items::meta_of(r) else { continue };
+        match meta.state {
+            ItemState::SetAside => report.set_aside += 1,
+            _ if r.id == "mig-name" => report.name = true,
+            _ if matches!(meta.audience, Audience::Project { .. }) && r.provenance == "migrated:project" => {}
+            _ => report.kept_by_you += 1,
+        }
+    }
+    report.portrait_retired = stores.facts.iter().any(|f| f.entry_kind == "synthesis" && f.valid_to.is_none());
+    let names: Vec<(String, String)> = stores.projects.iter().map(|(id, name, _, _)| (id.clone(), name.clone())).collect();
+    let subjects = subjects_for(&rows, &names);
+    (rows, subjects, report)
+}
+
+const REPORT_FILE: &str = "memory-update.json";
+
+fn report_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|r| r.join(REPORT_FILE))
+}
+
+/// Has the update's pass finished on this profile? From then on the
+/// older stores are given to no AI.
+pub(crate) fn update_done(app: &tauri::AppHandle) -> bool {
+    report_path(app).is_some_and(|p| p.exists())
+}
+
+/// Development builds' tests only: put the profile back to before the
+/// update's pass (the rows it wrote stay; a new pass writes none twice).
+pub(crate) fn forget_report(app: &tauri::AppHandle) {
+    if let Some(p) = report_path(app) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// The update's report on this device, once its pass has finished.
+#[tauri::command]
+pub fn memory_update_report(app: tauri::AppHandle) -> Option<Report> {
+    serde_json::from_slice(&std::fs::read(report_path(&app)?).ok()?).ok()
+}
+
+/// One pass of the update. Reads the old stores, writes the rows that are
+/// not written yet, and saves the report. Ids come from the old data, so
+/// a pass that stopped halfway is finished by the next one, a second pass
+/// writes nothing, and two devices write the same rows. The old stores
+/// are left as they are. `learning_was_paused`: the device's old switch.
+pub(crate) async fn run(app: &tauri::AppHandle, learning_was_paused: bool) -> Result<Report, String> {
+    use tauri::Manager;
+    let hc = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().ok_or("the records are not open yet")?;
+    let manager = hc.get()?;
+    let key = manager.data_key()?;
+    let agents: Vec<String> = manager.ai_agents().await;
+    let agent = agents.first().cloned().ok_or("no AI has a place in the records yet")?;
+
+    let mut stores = Stores { facts: crate::memory::read_facts(app, &key).unwrap_or_default(), ..Default::default() };
+    stores.rows = crate::memory_rows::rows_live(app, &manager, &agent, "person").await?;
+    let mut foundings: Vec<String> = Vec::new();
+    for a in &agents {
+        let founding = crate::commands_holochain::founding_key_for(app, a);
+        if !foundings.contains(&founding) {
+            stores.rows.extend(crate::memory_rows::rows_live(app, &manager, a, &format!("ai:{founding}")).await.unwrap_or_default());
+            foundings.push(founding.clone());
+        }
+        stores.knowledge.push((founding, crate::transcript_memory::read_for(app, &key, a).unwrap_or_default()));
+    }
+    for folder in crate::commands_holochain::project_memory_folders(app) {
+        let info = match crate::commands_holochain::project_memory_read_records_info(app, &folder).await {
+            Ok(info) if !info.content.trim().is_empty() => info,
+            Ok(_) => continue,
+            Err(e) => return Err(format!("a project's memory could not be read ({e}); the update tries again later")),
+        };
+        let path = std::path::Path::new(&folder);
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| folder.clone());
+        stores.projects.push((crate::project_identity::project_identity(path), name, info.content, info.updated_at / 1000));
+    }
+
+    let (wanted, subjects, mut report) = plan(&stores);
+    let held = crate::memory_rows::rows_live(app, &manager, &agent, SCOPE).await?;
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let mut to_write = still_to_write(wanted, &held);
+    to_write.extend(still_to_write(subjects.iter().map(|s| crate::memory_subjects::subject_row(s, now)).collect(), &held));
+    // The device's old switch, kept on the safe side for every device: a
+    // row that says tidying is off, unless one was written already.
+    let tidy_row_held = held.iter().any(|r| r.id == "sys-tidy-off");
+    if learning_was_paused && !tidy_row_held {
+        to_write.push(crate::memory_tidy::tidy_off_row(true, now));
+    }
+    report.tidying_starts_off = learning_was_paused || crate::memory_tidy::tidy_is_off(&held);
+    for row in to_write {
+        crate::memory_rows::save_and_cache(app, row).await?;
+        report.written += 1;
+    }
+    if report.written > 0 {
+        // What was carried over is found by meaning like any item.
+        crate::memory_tidying::words_changed(app);
+    }
+    report.done_at = now;
+    if let Some(path) = report_path(app) {
+        // The first pass's count of rows written stays: a later pass writes none.
+        let first = memory_update_report(app.clone());
+        let kept = Report { written: first.as_ref().map_or(report.written, |f| f.written + report.written), done_at: first.as_ref().map_or(now, |f| f.done_at), ..report.clone() };
+        let _ = std::fs::write(path, serde_json::to_vec(&kept).map_err(|e| e.to_string())?);
+        report = kept;
+    }
+    log::info!("[memory] update: {} kept by the person, {} set aside, {} project line(s) in {} project(s), {} row(s) written", report.kept_by_you, report.set_aside, report.project_lines, report.projects, report.written);
+    Ok(report)
+}
+
+/// Run the update's pass now (the page calls it once the records are
+/// open, and again after a restart until a report is saved).
+#[tauri::command]
+pub async fn memory_update_run(app: tauri::AppHandle, learning_was_paused: Option<bool>) -> Result<Report, String> {
+    run(&app, learning_was_paused.unwrap_or(false)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -386,9 +557,10 @@ mod tests {
         assert!(!may_use(&aside.meta, "ai-juno", None, false), "a set-aside fact is given to no AI");
         assert!(!rows.iter().any(|r| r.text.contains("small bakery") || r.text.contains("Dunmore")));
         // Keep on one makes it current and confirmed, and it is used again.
-        let (kept, _) = crate::memory_items::confirm(aside, 9);
-        let mut meta = meta_of(&kept).unwrap();
-        meta.state = ItemState::Current;
+        let (kept, _) = crate::memory_items::keep_set_aside(aside, 9).unwrap();
+        let meta = meta_of(&kept).unwrap();
+        assert_eq!((meta.state, meta.subject.as_deref(), meta.confirmed.as_ref().map(|c| c.how.as_str())), (ItemState::Current, Some(ABOUT_YOU), Some("kept")));
+        assert!(crate::memory_items::keep_set_aside(name, 9).is_none(), "Keep is for what was set aside");
         assert!(may_use(&meta, "ai-atlas", None, false));
     }
 
@@ -478,6 +650,29 @@ mod tests {
         assert_ne!(from_project_text("id:p2", text, 5000)[0].id, rows[0].id);
         let subjects = subjects_for(&rows, &[("id:p1".into(), "Bakery site".into()), ("id:p9".into(), "Unused".into())]);
         assert_eq!(subjects.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), vec!["Bakery site"]);
+    }
+
+    #[test]
+    fn the_report_accounts_for_every_old_thing_once() {
+        let stores = Stores {
+            facts: vec![
+                fact("f1", "name_is", "Marta", "fact", Some("ai-juno")),
+                fact("f2", "runs_business", "Crumb & Kettle, a bakery", "fact", Some("ai-juno")),
+                fact("f3", "lives_in", "Port Albury", "fact", Some("ai-atlas")),
+                fact("f4", "synthesis", "Marta runs a small bakery.", "synthesis", None),
+                fact("n1", "note", "The flour supplier is Mill and Sons.", "note", None),
+            ],
+            projects: vec![("proj-a".into(), "Bakery site".into(), "- Deploy with make ship\n- The menu lives in data/menu.json\n".into(), T / 1000), ("proj-b".into(), "Empty".into(), "\n".into(), T / 1000)],
+            ..Default::default()
+        };
+        let (rows, subjects, report) = plan(&stores);
+        assert_eq!((report.name, report.set_aside, report.kept_by_you, report.project_lines, report.projects, report.portrait_retired), (true, 2, 1, 2, 1, true));
+        assert_eq!(rows.len() as u32, 1 + report.set_aside + report.kept_by_you + report.project_lines, "every row is counted in exactly one place");
+        assert!(subjects.iter().any(|s| s.name == "Bakery site"));
+        // A second device with the same stores plans the same rows.
+        let (again, _, _) = plan(&stores);
+        assert_eq!(rows.iter().map(|r| &r.id).collect::<Vec<_>>(), again.iter().map(|r| &r.id).collect::<Vec<_>>());
+        assert!(still_to_write(again, &rows).is_empty());
     }
 
     #[test]

@@ -203,86 +203,9 @@ export function memoryRows(content: string): string[] {
   return content.split("\n").filter((l) => l.trim() !== "");
 }
 
-/** The block that rides ahead of a project session's first prompt. The
- *  tool hint teaches the agent its deliberate-memory habit - saved notes
- *  land on the chain the moment they are learned, not just at session end. */
-export function memoryPromptBlock(memory: string): string {
-  const hint =
-    "[This project has a shared memory. When you learn something durable - a command that works, a key file location, a convention, a decision, or the person's preference or correction about how to work - save it immediately with the remember_for_project tool. A preference or correction is saved the moment it is said, in the person's words.]\n";
-  if (!memory.trim()) return hint + "\n";
-  return (
-    "[Project memory - durable notes from earlier work. Trust them, but verify anything that looks stale:]\n" +
-    memory.trim() +
-    "\n[End of project memory.]\n" +
-    hint +
-    "\n"
-  );
-}
-
-/** Ask a model (via the local server, unrecorded) for the updated memory
- *  after a session. Returns the new memory, or null when nothing usable
- *  came back. */
-export async function reviseWorkspaceMemory(
-  aiId: string,
-  oldMemory: string,
-  sessionDigest: string,
-): Promise<string | null> {
-  const prompt =
-    "You maintain a compact WORKSPACE MEMORY for a project folder: durable facts that help future sessions (build/deploy/test commands exactly as they work, key file locations, project conventions, decisions, and the person's preferences and corrections about how to work - these are the most durable of all and are kept in the person's words).\n\n" +
-    `CURRENT MEMORY (may be empty):\n${oldMemory || "(empty)"}\n\n` +
-    `WHAT HAPPENED THIS SESSION:\n${sessionDigest}\n\n` +
-    "Return ONLY the COMPLETE updated memory as markdown bullet lines - every line that still holds, not only what changed. Rules: update in place rather than append; drop anything stale or proven wrong - but NEVER drop or reword a preference or correction the person gave; keep commands verbatim; no conversation summaries or one-off details; maximum " +
-    `${MEMORY_MAX_LINES} lines. If nothing durable was learned, return the current memory unchanged.`;
-  try {
-    // The port follows the app's port switch (two instances on one box), never a literal.
-    const inferencePort = await invoke<number>("inference_port").catch(() => 11435);
-    const r = await fetch(`http://127.0.0.1:${inferencePort}/v1/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Your-Own-AI-Memory": "off",
-        "X-Your-Own-AI-Record": "off",
-        // A memory writer never runs online (the memory design §7): the
-        // session digest stays on this machine whatever the AI's own model.
-        "X-Your-Own-AI-Online-Share": "local",
-        "X-Your-Own-AI-Task": "memory-prose",
-      },
-      body: JSON.stringify({
-        model: aiId,
-        stream: true,
-        max_tokens: 1500,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    if (!r.ok) return null;
-    const reader = r.body?.getReader();
-    if (!reader) return null;
-    const dec = new TextDecoder();
-    let buf = "";
-    let content = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line.startsWith("data:")) continue;
-        const p = line.slice(5).trim();
-        if (!p || p === "[DONE]") continue;
-        try {
-          const ev = JSON.parse(p);
-          content += ev.choices?.[0]?.delta?.content ?? "";
-        } catch {
-          /* keep scanning */
-        }
-      }
-    }
-    const cleaned = clampMemory(content);
-    return cleaned || null;
-  } catch (e) {
-    console.warn("[WorkspaceMemory] Revision call failed:", e);
-    return null;
-  }
+/** The line that rides ahead of a project session's first prompt: the AI
+ *  can keep something for this project. What it keeps becomes a memory
+ *  item of the project, shown to the person with an undo. */
+export function memoryPromptBlock(): string {
+  return "[You can keep something for this project with the remember_for_project tool: a command that works, a key file location, a convention, a decision, or the person's preference or correction about how to work, in their words. Keep it the moment it is said. The person sees what you keep and can undo it.]\n\n";
 }

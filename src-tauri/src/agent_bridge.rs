@@ -1219,7 +1219,10 @@ async fn handle_agent_message(
 pub async fn send_agent_prompt(
     state: State<'_, AgentBridgeState>,
     text: String,
+    question: Option<String>,
 ) -> Result<u64, String> {
+    // Which part of the prompt the person typed: memory searches for that.
+    crate::memory_session::note_typed(question);
     let session_id = state
         .session_id
         .lock()

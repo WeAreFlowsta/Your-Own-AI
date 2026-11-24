@@ -15,6 +15,7 @@ import ProfileMemory from "../../components/ProfileMemory";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
 import MemoryOwners from "../../components/MemoryOwners";
 import { RecentlyBoard } from "../../components/memory/RecentlyBoard";
+import { SetAsideList } from "../../components/memory/SetAsideList";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -68,7 +69,17 @@ export default component$(() => {
 
           <ProfileMemory readOnly={false} />
 
+          <div class="mt-6">
+            <SetAsideList />
+          </div>
+
           <ImportHistoryCard />
+
+          <p class="mt-6 text-xs text-[var(--text-muted)]">
+            <button type="button" data-testid="open-memory-update" onClick$={() => nav("/memory-update/")} class="underline hover:text-[var(--text-secondary)]">
+              What changed in the update
+            </button>
+          </p>
         </div>
       </div>
     </div>

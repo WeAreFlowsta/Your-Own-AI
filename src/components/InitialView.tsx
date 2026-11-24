@@ -1,3 +1,4 @@
+import { UpdateLine } from "./memory/UpdateLine";
 import { component$, useSignal, useVisibleTask$, type QRL, type Signal } from '@builder.io/qwik';
 import { LookalikeCard } from "./LookalikeCard";
 import CudaOfferCallout from './CudaOfferCallout';
@@ -135,6 +136,7 @@ export default component$<InitialViewProps>((props) => {
           )}
         </div>
       )}
+      <UpdateLine class="mt-6 text-left" />
       <LookalikeCard />
       <EngineCannotStartCallout />
       <GpuFallbackCallout />

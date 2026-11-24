@@ -643,6 +643,13 @@ pub async fn record_transcript_entry(
     let memory_content: Option<String> = memory_folder.as_ref().map(|_| content.clone());
 
     // Phase A: message content is encrypted with the user data key.
+    // The project a session's turn is in (a tools session has a working
+    // folder and no project).
+    let in_tools_session = {
+        use tauri::Manager as _;
+        app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await
+    };
+    let folder_for_keeping: Option<String> = folder_path.clone().filter(|f| !f.is_empty() && !is_memory_write && !in_tools_session);
     let prov = provenance.unwrap_or_default();
     let (given_for_search, stopped_for_search) = (prov.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), prov.stopped == Some(true));
     let model_hash = crate::model_hash::get(&app, &model);
@@ -730,6 +737,18 @@ pub async fn record_transcript_entry(
     if !is_memory_write {
         crate::memory_reading::note_recorded();
     }
+    // A finished reply: its exchange waits to be looked at in idle time,
+    // for whether it settled something worth keeping.
+    crate::memory_keeping::recorded(
+        &app,
+        &crate::memory_keeping::RecordedTurn { role: &role_for_search, stopped: stopped_for_search, own_write: is_memory_write, content: &content_for_search },
+        crate::memory_keeping::Waiting {
+            conversation: conversation_hash.clone(),
+            seq: seq_for_search,
+            ai: founding_key_for(&app, &agent_key),
+            project: folder_for_keeping.as_deref().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))),
+        },
+    );
     Ok(id)
 }
 
@@ -988,7 +1007,14 @@ fn newest_revision(info: &mut ProjectMemoryInfo, entries: Vec<TranscriptEntryInf
     }
 }
 
-async fn project_memory_read_records_info(
+/// Every folder this device knows a project memory for.
+pub(crate) fn project_memory_folders(app: &tauri::AppHandle) -> Vec<String> {
+    let mut folders: Vec<String> = project_memory_index_load(app).into_iter().filter(|(folder, convs)| folder != INDEX_WALKED && !convs.is_empty()).map(|(folder, _)| folder).collect();
+    folders.sort();
+    folders
+}
+
+pub(crate) async fn project_memory_read_records_info(
     app: &tauri::AppHandle,
     folder: &str,
 ) -> Result<ProjectMemoryInfo, String> {

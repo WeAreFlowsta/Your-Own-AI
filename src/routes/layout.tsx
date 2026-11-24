@@ -24,6 +24,7 @@ import { Callout } from "../components/Callout";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
 import { runPartsJob } from "../utils/partsJob";
+import { runUpdateInBackground } from "../utils/memoryUpdate";
 
 export type AppTheme = "light" | "dark";
 
@@ -51,6 +52,8 @@ export default component$(() => {
   useVisibleTask$(() => {
     // Once per app start: the home offer slot keys off "not the first launch".
     bumpLaunchCount();
+    // The update from the older memory: one pass, in the background.
+    void runUpdateInBackground();
     (async () => {
       try {
         const { Store } = await import("@tauri-apps/plugin-store");
@@ -88,15 +91,6 @@ export default component$(() => {
         /* store unavailable - picks stay webview-only */
       }
     })();
-
-    // Resume an interrupted history-import distill (cursor survives
-    // restarts; no-op when nothing is pending). Delayed so it never
-    // competes with the busy startup window.
-    setTimeout(() => {
-      import("../utils/importDistiller")
-        .then((m) => m.resumeIfPending())
-        .catch(() => {});
-    }, 15_000);
 
     // Finish any adoption (imported archive -> AI's conversations) the
     // last run left mid-write. Waits for the records engine itself;

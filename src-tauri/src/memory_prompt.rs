@@ -294,6 +294,10 @@ pub(crate) struct TurnInput {
     /// made before the model and its window are known).
     #[serde(default)]
     pub skip_search: bool,
+    /// What is found rides beside the question whatever the surface (a
+    /// session's turn, whose block is added at the port).
+    #[serde(default)]
+    pub beside: bool,
 }
 
 /// What memory adds to a turn.
@@ -422,12 +426,24 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         (Some(k), Some(ai)) => Some(crate::transcript_memory::read_for(app, k, ai).unwrap_or_default()),
         _ => None,
     };
+    // Once the update's pass has run on this profile, the older stores
+    // are no longer given: what an AI had guessed about the person is set
+    // aside, the short description of them is retired, and each AI's own
+    // list of earlier turns is gone (whole conversations are searched).
+    // Their name keeps working, and what they kept about themselves is
+    // given as they kept it.
+    let updated = crate::memory_migrate::update_done(app);
+    let (facts, recall) = if updated { (after_update(facts), None) } else { (facts, recall) };
+    let about_you = match (&key, updated) {
+        (Some(k), true) => kept_about_them(&crate::memory_items::items(&crate::memory_rows::read_cache(app, k, crate::memory_items::SCOPE)), input.founding_key.as_deref().unwrap_or(""), input.project.as_deref(), input.online),
+        _ => Vec::new(),
+    };
     let asked = !input.question.trim().is_empty();
     let live_note = |f: &&crate::memory::MemoryFact| f.valid_to.is_none() && f.entry_kind == "note";
     let has_notes = facts.iter().filter(live_note).any(|f| f.embedding.as_ref().is_some_and(|v| !v.is_empty()));
     // A turn typed to an AI gets what memory found beside the question; an
     // agent's step still gets it in the system part.
-    let beside = matches!(input.surface, Surface::Chat | Surface::ApiPersona);
+    let beside = input.beside || matches!(input.surface, Surface::Chat | Surface::ApiPersona);
     let question_vector = match (asked && !beside, input.question_vector.clone()) {
         (false, _) => None,
         (true, Some(v)) => Some(v),
@@ -470,7 +486,7 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         }
     };
     TurnMemory {
-        system_part: format!("{text}\n{today}"),
+        system_part: if about_you.is_empty() { format!("{text}\n{today}") } else { format!("{text}\n{}\n{today}", about_them_text(&about_you)) },
         before_question,
         after_question,
         remember,
@@ -480,6 +496,42 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         given,
         given_texts,
     }
+}
+
+/// The facts file after the update: only the person's name is still read
+/// from it.
+pub(crate) fn after_update(facts: Vec<MemoryFact>) -> Vec<MemoryFact> {
+    facts.into_iter().filter(|f| f.valid_to.is_none() && f.entry_kind != "note" && f.entry_kind != "synthesis" && f.entry_kind != "library" && is_name_predicate(&f.predicate)).collect()
+}
+
+/// How much of what the person kept about themselves a turn carries.
+const ABOUT_THEM_BUDGET: usize = 1500;
+
+/// What the person kept about themselves, for a turn of this AI: current
+/// items of the subject "About you" that they stand behind, newest first,
+/// within the budget. The name has its own line and is not repeated.
+pub(crate) fn kept_about_them(items: &[crate::memory_items::Item], ai: &str, project: Option<&str>, online: bool) -> Vec<String> {
+    let mut mine: Vec<&crate::memory_items::Item> = items
+        .iter()
+        .filter(|i| i.meta.subject.as_deref() == Some(crate::memory_subjects::ABOUT_YOU) && i.meta.state == crate::memory_items::ItemState::Current && i.meta.confirmed.is_some() && i.row.id != "mig-name")
+        .filter(|i| crate::memory_items::may_use(&i.meta, ai, project, online))
+        .collect();
+    mine.sort_by(|a, b| b.row.updated_at.cmp(&a.row.updated_at).then(a.row.id.cmp(&b.row.id)));
+    let mut out = Vec::new();
+    let mut size = 0usize;
+    for i in mine {
+        let line = crate::secret_mask::hand_on(i.row.text.trim()).text;
+        if !out.is_empty() && size + line.len() > ABOUT_THEM_BUDGET {
+            break;
+        }
+        size += line.len() + 3;
+        out.push(line);
+    }
+    out
+}
+
+fn about_them_text(lines: &[String]) -> String {
+    format!("About them, kept by them (use naturally where relevant; do not recite this list):\n{}", lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n"))
 }
 
 /// A question short enough to lean on the one before it is also searched
@@ -703,6 +755,30 @@ impl KeptPart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn old_fact(id: &str, predicate: &str, value: &str, kind: &str) -> MemoryFact {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "subject": "user", "predicate": predicate, "value": value, "confidence": 0.9, "valid_from": 1, "source_ai_id": null,
+            "owner_scope": "personal", "key_scope": "personal", "entry_kind": kind, "provenance": "extracted", "created_at": 1, "updated_at": 2,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn after_the_update_the_name_keeps_working_and_nothing_else_of_the_old_facts_is_given() {
+        let facts = vec![
+            old_fact("f1", "name_is", "Marta", "fact"),
+            old_fact("f2", "runs_business", "Crumb & Kettle", "fact"),
+            old_fact("f3", "synthesis", "Marta runs a small bakery.", "synthesis"),
+            old_fact("f4", "library", "Recipes and letters.", "library"),
+            old_fact("f5", "note", "The flour supplier is Mill and Sons.", "note"),
+        ];
+        let kept = after_update(facts);
+        let (text, counts) = block(&Held { facts: &kept, rows: &[], project_rows: &[], recall: None, question_vector: None, conversation: None });
+        assert_eq!(text, "Their name is Marta.");
+        assert_eq!(counts.facts, 0);
+        assert!(!text.contains("bakery") && !text.contains("Crumb"), "the portrait and the guessed facts are in no prompt");
+    }
 
     /// Made-up profiles, each with the block the chat page's own builder
     /// gave for it before this module replaced that builder.

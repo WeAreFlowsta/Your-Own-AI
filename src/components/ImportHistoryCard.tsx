@@ -292,10 +292,9 @@ export default component$(() => {
       chooserOpen.value = false;
       codingOpen.value = false;
       await refresh();
-      // Learning starts right away and continues in the background - it
-      // survives navigating away and resumes on the next launch if needed.
-      const { startDistill } = await import("../utils/importDistiller");
-      await startDistill(summary.archive_id);
+      // Nothing goes through an import in bulk to guess what matters: its
+      // conversations are read into the search index like any others, and
+      // one is kept when it answers a question or Remember is pressed on it.
     } catch (e) {
       error.value = String(e);
     } finally {

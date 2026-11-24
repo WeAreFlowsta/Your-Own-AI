@@ -54,7 +54,6 @@ const ARRIVAL_POLL_PARTIAL_MS = 20_000;
 const ARRIVAL_GONE_HINT_MS = 10 * 60_000;
 const ARRIVAL_MAX_MS = 2 * 60 * 60_000;
 import ConfirmModal from "../../components/ConfirmModal";
-import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
 import { VisionDownloadCard } from "../../components/VisionDownloadCard";
 import { OcrAttachStatus } from "../../components/OcrAttachStatus";
@@ -1487,28 +1486,10 @@ export default component$(() => {
         void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
       }
 
-      // A local model is now ready — re-run any extraction that was cut off by
-      // an app close last session (e.g. closing right after sending).
-      if (
-        currentModel.value &&
-        !currentModel.value.startsWith("online:") &&
-        !currentModel.value.startsWith("external:")
-      ) {
-        void drainPendingExtractions(currentModel.value);
-      }
-
-      // Pre-warm the on-device utility model (if installed) now that startup +
-      // the chat model have settled — loads it + primes the extraction prompt
-      // cache so the first fact this session isn't a cold ~22s wait. CPU-only,
-      // never touches the chat model (GPU); no-op if the model isn't installed.
-      void prewarmExtractionModel();
       // The tools gate and the documents search both embed the question:
       // warm that small model now, not on the first keystroke.
       void import("../../utils/embeddings").then((m) => m.embedTexts(["warm up"]).catch(() => {}));
-      // A late, quiet consolidation pass catches changes from the previous
-      // session (hash-gated no-op when nothing changed).
       setTimeout(() => {
-        import("../../utils/memoryConsolidation").then((m) => void m.maybeConsolidateMemory());
         // Library cards for documents that have none yet, then the portrait.
         import("../../utils/documentSummaries").then(
           (m) => void m.summarizePendingDocuments().then(() => m.refreshLibraryPortrait()),

@@ -329,6 +329,24 @@ pub(crate) fn confirm(item: &Item, now: i64) -> (MemoryRow, Change) {
     changed(item, None, meta, What::Confirmed, "person", now)
 }
 
+/// Keep, pressed on something an AI had learned before the update and
+/// that was set aside: it is the person's now, current, and used again.
+/// Anything else is left as it is.
+pub(crate) fn keep_set_aside(item: &Item, now: i64) -> Option<(MemoryRow, Change)> {
+    if item.meta.state != ItemState::SetAside {
+        return None;
+    }
+    let meta = ItemMeta {
+        state: ItemState::Current,
+        state_at: now,
+        state_by: "person".into(),
+        confirmed: Some(Confirmed { at: now, how: "kept".into() }),
+        subject: Some(crate::memory_subjects::ABOUT_YOU.to_string()),
+        ..item.meta.clone()
+    };
+    Some(changed(item, None, meta, What::Kept, "person", now))
+}
+
 /// The person corrects an item's words: theirs now, and confirmed.
 pub(crate) fn correct(item: &Item, text: &str, now: i64) -> (MemoryRow, Change) {
     let meta = ItemMeta {
@@ -761,6 +779,8 @@ pub async fn memory_keep_quoted(app: tauri::AppHandle, reply: String, given: cra
 #[serde(tag = "do", rename_all = "snake_case")]
 pub enum ItemEdit {
     Confirm,
+    /// Keep something that was set aside at the update.
+    Keep,
     Correct { text: String },
     Forget,
     Audience { audience: Audience },
@@ -775,6 +795,7 @@ pub async fn memory_item_change(app: tauri::AppHandle, id: String, edit: ItemEdi
     let now = now_ms();
     let (row, change) = match edit {
         ItemEdit::Confirm => confirm(item, now),
+        ItemEdit::Keep => keep_set_aside(item, now).ok_or("only something set aside can be kept this way")?,
         ItemEdit::Correct { text } => correct(item, &crate::secret_mask::hand_on(&text).text, now),
         ItemEdit::Forget => forget(item, now),
         ItemEdit::Audience { audience } => set_audience(item, audience, now),
@@ -784,6 +805,25 @@ pub async fn memory_item_change(app: tauri::AppHandle, id: String, edit: ItemEdi
     // Other words need another vector.
     crate::memory_tidying::words_changed(&app);
     Ok(saved)
+}
+
+/// "Remove all of these", on the list of what was learned before the
+/// update and set aside: every set-aside row is deleted. The person
+/// started it and was asked once. Answers how many were removed.
+#[tauri::command]
+pub async fn memory_set_aside_remove_all(app: tauri::AppHandle) -> Result<u32, String> {
+    let key = data_key(&app)?;
+    let now = now_ms();
+    let mut removed = 0u32;
+    for item in held(&app, &key).into_iter().filter(|i| i.meta.state == ItemState::SetAside) {
+        let mut row = item.row.clone();
+        row.deleted = true;
+        row.updated_at = now;
+        row.action_hash = None;
+        crate::memory_rows::save_and_cache(&app, row).await?;
+        removed += 1;
+    }
+    Ok(removed)
 }
 
 /// "Not replaced", pressed where a reply's panel shows what was left out:

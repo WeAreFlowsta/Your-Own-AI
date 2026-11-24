@@ -23,10 +23,9 @@ import {
 } from "../utils/holochainTranscripts";
 import { uiLog } from "../utils/uiLog";
 import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTurn, requestBoundary, engineHolder, waitForEngine } from "../utils/turns";
-import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
-import { isUtilityModelReady } from "../utils/utilityModel";
+import { nameFromCue } from "../utils/nameCue";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { memoryForTurn, type TurnMemory, type ReplyLine, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
+import { addAuthoredFact, memoryForTurn, type TurnMemory, type ReplyLine, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
 import { assembleUserTurn } from "../utils/turnWire";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -360,10 +359,6 @@ async function turnTokensFor(
   return counted + 1500 + imageCount * 1000;
 }
 
-/** How much of each conversation already has an episode (messages counted at
- *  the last write) - a conversation left again with nothing new writes nothing. */
-const episodeMarks = new Map<string, number>();
-
 // A page's conversation while a turn is still creating it. Creating one can
 // take longer than the reply (a conductor that has just started), and the
 // next message on the same page used to find no conversation yet and start a
@@ -379,33 +374,6 @@ const THREAD_WAIT_MS = 90_000;
  *  character, a space or a digit; anything may follow. (The engine's grammar
  *  format; an online service is sent no grammar.) */
 export const SECOND_ASK_GRAMMAR = "root ::= [^\\x00-\\x200-9] [^\\x00]*";
-
-/** The episode of a conversation being left: the first question and the
- *  latest answer, one row per conversation (a stable id revises it). */
-async function leaveEpisode(hash: string | null, messages: Message[], ai: SelectedAiModel): Promise<void> {
-  if (!hash) return;
-  const users = messages.filter((m) => m.role === "user" && m.content.trim());
-  const answers = messages.filter((m) => m.role === "assistant" && m.content.trim() && !m.error);
-  if (users.length < 2 || answers.length === 0) return;
-  if (episodeMarks.get(hash) === messages.length) return;
-  const founding = ai.aiConfig?.foundingKey ?? ai.aiConfig?.agentPubKey ?? "";
-  if (!founding || !ai.aiConfig?.agentPubKey) return;
-  const cut = (t: string, n: number) => (t.length > n ? t.slice(0, n) + "…" : t);
-  const text = cut(
-    `Conversation: ${cut(users[0].content.trim(), 300)}\nLatest answer: ${cut(answers[answers.length - 1].content.trim(), 700)}\n(${users.length} questions)`,
-    2000,
-  );
-  try {
-    const { saveMemoryRow, newRow, aiScope } = await import("../utils/memoryRows");
-    const row = newRow(aiScope(founding), "episode", text, { saved_by: `ai:${founding}`, provenance: `distilled:chat:${hash}` });
-    row.id = `chat-episode-${hash.slice(0, 16)}`;
-    await saveMemoryRow(row, ai.aiConfig.agentPubKey);
-    episodeMarks.set(hash, messages.length);
-    uiLog(`[memory] episode kept for ${hash.slice(0, 12)}.. (${users.length} questions)`);
-  } catch (e) {
-    console.warn("[Chat] episode row failed:", e);
-  }
-}
 
 export function useChat(props: UseChatProps) {
   const state = useStore<UseChatState>({
@@ -2206,10 +2174,7 @@ export function useChat(props: UseChatProps) {
         // on it - extraction spends seconds generating before it saves, by which
         // time the write has resolved this (or settled it to null if Holochain
         // is down, degrading gracefully to an unlinked fact).
-        let settleUserMsgHash: (h: string | null) => void = () => {};
-        const userMsgHashPromise = new Promise<string | null>((res) => {
-          settleUserMsgHash = res;
-        });
+        const settleUserMsgHash = (_h: string | null) => {};
 
         const localCurrent = props.currentModel.value;
         // Extraction worker (see ON_DEVICE_COMPONENTS.md): the on-device utility
@@ -2226,35 +2191,13 @@ export function useChat(props: UseChatProps) {
                 !localCurrent.startsWith("external:")
               ? localCurrent
               : null;
-        // Remote turns (proxy or the user's own external server) may extract
-        // via the same remote model - the content already went there.
-        let extractionFallback =
-          warmOffline ?? (isOnlineModel || isExternalModel ? preferredModel : null);
-        // gpt-oss speaks its own channel format and fights the extraction
-        // grammar (junk output, then a cancelled task): never use it as the
-        // extraction fallback. With the on-device utility model installed
-        // the fallback is not consulted, so extraction still runs.
-        if (
-          extractionFallback &&
-          /gpt-oss/i.test(extractionFallback) &&
-          !(await isUtilityModelReady())
-        ) {
-          extractionFallback = null;
-        }
-        // Pre-gate: only spend a model call when the message could state a
-        // personal fact (skips pure questions/requests/lookups).
-        if (extractionFallback && looksLikeUserFact(userInput)) {
-          console.log(`[Memory] Extracting facts from turn (fallback: ${extractionFallback})…`);
-          void extractAndStoreFacts({
-            userText: userInput,
-            model: extractionFallback,
-            aiId: selectedAi.id,
-            sourceActionHash: userMsgHashPromise,
-          });
-        } else {
-          console.log(
-            `[Memory] Extraction skipped - ${!extractionFallback ? "no model" : "no personal fact in message"}`,
-          );
+        // No model reads the message for facts about the person any more:
+        // what an exchange settled is looked at in idle time, and kept as
+        // an item the person can see and undo. Their name, said in plain
+        // words, is still taken at once, so every AI goes on using it.
+        const saidName = nameFromCue(userInput);
+        if (saidName) {
+          void addAuthoredFact({ predicate: "name_is", value: saidName }).catch((e) => console.warn("[Memory] the name was not saved:", e));
         }
 
         // Record transcript to Holochain (fire-and-forget)
@@ -2774,13 +2717,7 @@ export function useChat(props: UseChatProps) {
   });
 
   const resetChat = $(() => {
-    // Leaving a conversation is a plain chat's session boundary
-    // (the memory design §5.5): one episode row in the AI's own memory,
-    // raw and deterministic - the question that opened it and the latest
-    // answer - revised in place when the conversation is left again with
-    // more said, never rewritten here (dreaming consolidates later).
     uiLog(`[turns] New: leaving ${state.conversationHash?.slice(0, 12) ?? "no conversation"}, ${state.messages.length} message(s), loading ${state.isLoading}`);
-    void leaveEpisode(state.conversationHash, state.messages, props.selectedAi.value);
     // A reply in flight stays at the app root (utils/turns.ts): the page
     // lets go of it - it finishes and records on its own, Stop reaches it
     // from the tray or when its conversation is opened again.

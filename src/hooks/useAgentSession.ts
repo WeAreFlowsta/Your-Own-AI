@@ -70,10 +70,7 @@ import {
 import { computeLineDiff } from "../utils/lineDiff";
 import { activeTools } from "../utils/carry";
 import {
-  getWorkspaceMemory,
   memoryPromptBlock,
-  reviseWorkspaceMemory,
-  saveWorkspaceMemory,
 } from "../utils/workspaceMemory";
 import type { UseChatState } from "./useChat";
 import { extractOnlineError } from "../utils/onlineErrors";
@@ -404,13 +401,14 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // Workspace memory: loaded from the chain at agent-ready, injected ahead
   // of the session's FIRST prompt, revised at session end when real work
   // happened.
-  const workspaceMemory = useSignal("");
   /** The project's AGENTS.md text, read at session start (empty when none). */
   const agentsMd = useSignal("");
   /** The project's memory rows as layer-1 text (rules/commands/locations). */
   /** The open project's id (`project_identity_for`), empty until known. */
   const projectId = useSignal("");
   const memoryPending = useSignal(false);
+  /** What the person typed in the prompt last handed over. */
+  const lastTyped = useSignal("");
   const toolsPending = useSignal(false);
   const sessionTurns = useSignal(0);
   // Rolling digest refreshed at every turn end - session-end paths (New,
@@ -418,56 +416,15 @@ export function useAgentSession(props: UseAgentSessionProps) {
   // reviser can never rebuild it from live messages.
   const sessionDigest = useSignal("");
 
-  /** Distill a session digest into the project's memory (cheap routed
-   *  model call, fire-and-forget - never blocks the UI). Clears the
-   *  project's pending-digest safety copy on success or no-change. */
-  const distillMemory$ = $(async (folderPath: string, rawDigest: string) => {
-    const ai = props.selectedAi.value;
-    // What is kept from a session is kept without its secrets.
-    const digest = await maskText(rawDigest);
-    if (!ai.aiConfig?.agentPubKey || !digest) return;
-    const clearPending = () => clearWaitingNotes(folderPath, ai.aiConfig?.agentPubKey);
-    // Raw capture first (the memory design §5.5): one episode row per
-    // session in the project's scope - what happened, in the digest's own
-    // words, never rewritten here (dreaming consolidates later).
-    if (projectId.value) {
-      try {
-        const { saveMemoryRow, newRow, projectScope } = await import("../utils/memoryRows");
-        const founding = ai.aiConfig.foundingKey ?? ai.aiConfig.agentPubKey ?? "";
-        await saveMemoryRow(
-          newRow(projectScope(projectId.value), "episode", digest.length > 2000 ? digest.slice(0, 2000) + "…" : digest, {
-            saved_by: founding ? `ai:${founding}` : "person",
-            provenance: "distilled:session",
-          }),
-          ai.aiConfig.agentPubKey,
-        );
-      } catch (e) {
-        console.warn("[WorkspaceMemory] episode row failed (the distillation still runs):", e);
-      }
-    }
-    // Revise what the memory says NOW, not what it said when the session
-    // opened: a note the agent saved during the session (remember_for_project)
-    // is in the records and the copy, not in workspaceMemory - revising the
-    // session-start text wrote over it. The copy answers in milliseconds.
-    const current = (await getWorkspaceMemory(folderPath)).content || workspaceMemory.value;
-    const revised = await reviseWorkspaceMemory(ai.id, current, digest);
-    if (!revised || revised === current.trim()) {
-      clearPending();
-      return;
-    }
-    const ok = await saveWorkspaceMemory(
-      { agentPubKey: ai.aiConfig.agentPubKey, label: ai.label },
-      folderPath,
-      revised,
-    );
-    if (ok) {
-      workspaceMemory.value = revised;
-      clearPending();
-      console.log("[WorkspaceMemory] Revision written for", folderPath);
-    }
+  /** A session ended. Nothing is rewritten here any more: each exchange of
+   *  the session waits, like a chat's, to be looked at in idle time for
+   *  what it settled, and what is kept shows in Memory with an undo. The
+   *  notes an older build left waiting for its rewrite are dropped. */
+  const distillMemory$ = $(async (folderPath: string, _digest: string) => {
+    clearWaitingNotes(folderPath, props.selectedAi.value.aiConfig?.agentPubKey);
   });
 
-  /** Session end housekeeping: when the session did real work, distill it. */
+  /** Session end housekeeping. */
   const reviseMemory$ = $(async (folderPath: string) => {
     if (sessionTurns.value === 0) return;
     sessionTurns.value = 0;
@@ -629,6 +586,29 @@ export function useAgentSession(props: UseAgentSessionProps) {
         ...tail,
       ];
     }
+    // What memory gave this turn (found once, at the port, for the
+    // person's prompt): recorded with the reply as pointers, and the
+    // reply's quotations are checked against it for the line under it.
+    let given: Record<string, unknown> | undefined;
+    try {
+      const turn = await invoke<{ question: string; given: Record<string, unknown> | null; givenTexts: string[] } | null>("memory_session_given");
+      const typed = lastTyped.value.trim();
+      if (turn?.given && typed && turn.question.trim().endsWith(typed)) {
+        given = turn.given;
+        const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: import("../utils/memory").ReplyLine | null }>(
+          "memory_reply_checked",
+          { reply: bubble.content, given, texts: turn.givenTexts },
+        ).catch(() => null);
+        if (checked?.given) given = checked.given;
+        const shown = { given, givenLine: checked?.line ?? undefined, givenLive: turn.givenTexts.length ? turn.givenTexts : undefined, quotesNotGiven: checked?.check.notGiven.length ? checked.check.notGiven : undefined };
+        props.chatState.messages = props.chatState.messages.map((m) => (m.id === bubble.id ? { ...m, ...shown } : m));
+        if (checked?.check.quoted.some(Boolean)) {
+          void invoke("memory_keep_quoted", { reply: bubble.content, given, texts: turn.givenTexts, ai: ai.aiConfig?.foundingKey ?? agentKey }).catch((e) => console.warn("[memory] keeping what was quoted failed:", e));
+        }
+      }
+    } catch (e) {
+      console.warn("[memory] what the session turn was given could not be read:", e);
+    }
     const actionHash = await recordMessage(
       agentKey,
       hash,
@@ -648,8 +628,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
       // exactly like chat turns (the Settings ledger is only a live window).
       // Built from whatever the bubble carries - it used to exist only when
       // there was a routing reason, which would drop everything else.
-      bubble.routingReason || bubble.library?.length || bubble.sources?.length
+      bubble.routingReason || bubble.library?.length || bubble.sources?.length || given
         ? {
+            ...(given ? { given } : {}),
             ...(bubble.routingReason ? { routing_reason: bubble.routingReason, routing_task: "agent" } : {}),
             ...(bubble.library?.length
               ? { library: bubble.library.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best })) }
@@ -843,11 +824,11 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     if (memoryPending.value) {
       memoryPending.value = false;
-      // Workspace memory leads (durable folder truths), then any restored
-      // conversation context, then the question. The project's AGENTS.md
-      // leads all of it: the person's own rules for working here.
-      const block = memoryPromptBlock(workspaceMemory.value);
-      if (block) wire = block + wire;
+      // One line ahead of a project session's first prompt: the AI can
+      // keep something for this project. What the project already holds
+      // reaches the session through its rules, what search finds, and
+      // the note of what holds now.
+      wire = memoryPromptBlock() + wire;
       // AGENTS.md itself is read by the harness (repo root down to the
       // working folder, deeper files first, CLAUDE.md and rules folders too)
       // and put at the start of its context; the app's own copy only feeds
@@ -865,7 +846,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
     }
     try {
       uiLog(`[send] agent: send_agent_prompt (${wire.length} chars)`);
-      await invokeTauri("send_agent_prompt", { text: wire });
+      // The person's own words are named beside the whole prompt: memory
+      // searches for them, not for the guidance joined in front.
+      lastTyped.value = text;
+      await invokeTauri("send_agent_prompt", { text: wire, question: text });
       uiLog("[send] agent: the prompt is with the program");
     } catch (err) {
       state.status = "ready";
@@ -1680,21 +1664,10 @@ export function useAgentSession(props: UseAgentSessionProps) {
             }
           })
           .catch(() => { /* no AGENTS.md here - nothing to follow */ });
-        getWorkspaceMemory(folder)
-          .then((m) => {
-            workspaceMemory.value = m.content;
-            // A leftover pending digest means an earlier session ended
-            // without its memory distillation (cancel, quit, crash) -
-            // catch up now, with the memory freshly loaded.
-            // Only the notes this identity's AI left for the folder.
-            waitingNotes(folder, props.selectedAi.value.aiConfig?.agentPubKey)
-              .then((leftover) => {
-                if (leftover) {
-                  console.log("[WorkspaceMemory] Catching up an undistilled session for", folder);
-                  distillMemory$(folder, leftover).catch(() => {});
-                }
-              })
-              .catch(() => {});
+        // Notes an older build left waiting for its session-end rewrite.
+        waitingNotes(folder, props.selectedAi.value.aiConfig?.agentPubKey)
+          .then((leftover) => {
+            if (leftover) distillMemory$(folder, leftover).catch(() => {});
           })
           .catch(() => {});
       }

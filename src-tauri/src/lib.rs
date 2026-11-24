@@ -26,6 +26,8 @@ mod memory_block;         // the search results placed ahead of the question: ex
 mod memory_quotes;        // the quote check, and which line shows under a reply
 mod memory_items;         // the memory item: what was kept, its state, who may use it, and the log of changes
 mod memory_tidy;          // tidying's rules: which pairs are judged, what a verdict changes, undo, the pause
+mod memory_keeping;       // keeping without being asked: what an exchange settled, looked at in idle time
+mod memory_session;       // memory in a project or tools session: found once per turn, given on each of its steps
 mod memory_state;         // what memory holds to be true now beside a question: the note, and what is left out as replaced
 mod memory_tidying;       // the tidying job: judges queued pairs in idle time, on a model that passed the check
 mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
@@ -896,6 +898,10 @@ pub fn run() {
             memory_items::memory_changes,
             memory_items::memory_undo,
             memory_items::memory_not_replaced,
+            memory_session::memory_session_given,
+            memory_migrate::memory_update_run,
+            memory_migrate::memory_update_report,
+            memory_items::memory_set_aside_remove_all,
             memory_items::memory_questions,
             memory_items::memory_question_answer,
             memory_items::memory_keep_quoted,
@@ -1170,6 +1176,7 @@ pub fn run() {
                 // Memory's own tidying takes its place.
                 memory_reading::start(&link_app_handle);
                 memory_tidying::start(&link_app_handle);
+                memory_keeping::start(&link_app_handle);
                 memory_check::start(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
