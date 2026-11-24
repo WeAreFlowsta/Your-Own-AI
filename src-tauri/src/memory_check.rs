@@ -311,7 +311,7 @@ mod tests {
     #[test]
     fn the_shipped_set_is_the_size_and_shape_the_marks_assume() {
         let set = shipped_set();
-        assert_eq!(set.v, 2);
+        assert_eq!(set.v, 3);
         assert_eq!((set.pairs.len(), set.exchanges.len(), set.done.len()), (30, 20, 10));
         assert_eq!(set.pairs.iter().filter(|p| p.expect == "REPLACES").count(), 12);
         assert_eq!(set.pairs.iter().filter(|p| p.expect == "BOTH STAND").count(), 18);
