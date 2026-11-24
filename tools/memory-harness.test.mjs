@@ -275,3 +275,27 @@ test("the person's turn is put together in one order, with one marker", async ()
   assert.equal(all.split("[User question]").length, 2, "the marker stands once");
   assert.ok(all.indexOf("[From memory. x]") < all.indexOf(q) && all.indexOf(q) < all.indexOf("[note]"));
 });
+
+test("the line under a reply says what happened, in the person's words", async () => {
+  const ts = (await import("typescript")).default;
+  const src = readFileSync(join(repo, "src", "utils", "givenLine.ts"), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: "ESNext", target: "ES2020" } }).outputText;
+  const { givenLineWords, dayWords, whyNotWords } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+  assert.deepEqual(givenLineWords({ kind: "given", passages: 12 }, "Atlas"), { label: "Searched your conversations", text: "Atlas was given 12 passages from your conversations.", show: true, readRest: false });
+  assert.equal(givenLineWords({ kind: "given", passages: 1 }, "Atlas").text, "Atlas was given 1 passage from your conversations.");
+  assert.equal(givenLineWords({ kind: "quoted-none", passages: 9 }, "Atlas").text, "Atlas was given 9 passages and quoted none.");
+  assert.equal(givenLineWords({ kind: "did-not-fit", given: 2, found: 12 }, "Atlas").text, "Atlas was given 2 of 12 passages found; the rest did not fit.");
+  const soFar = givenLineWords({ kind: "read-so-far", found: 4, percent: 62 }, "Atlas");
+  assert.equal(`${soFar.label}. ${soFar.text}`, "Searched what is read so far. 4 found in the 62% of your conversations read so far. The answer may be in the rest.");
+  assert.equal(soFar.readRest, true);
+  assert.equal(givenLineWords({ kind: "no-mention", names: ["Brightloaf"] }, "Atlas").text, 'No conversation Atlas can use mentions "Brightloaf".');
+  assert.equal(givenLineWords({ kind: "no-mention", names: ["Brightloaf", "Crest Bank"] }, "Atlas").text, 'No conversation Atlas can use mentions "Brightloaf" or "Crest Bank".');
+  const notLooked = givenLineWords({ kind: "did-not-look", why: "vault_locked" }, "Atlas");
+  assert.deepEqual([notLooked.label, notLooked.text, notLooked.show], [null, "Atlas answered without looking at your earlier conversations: your Vault is locked.", false]);
+  const causes = ["component_missing", "component_downloading", "not_enough_memory", "did_not_start_in_time", "timed_out", "vault_locked", "index_rebuilding", "switched_off_for_this_ai"];
+  assert.equal(new Set(causes.map(whyNotWords)).size, 8, "one sentence per cause");
+  assert.equal(givenLineWords({ kind: "withheld", conversations: 3 }, "Juno").text, "Juno cannot use 3 conversations you had with another AI that mention this.");
+  assert.equal(dayWords("2026-03-03", 2026), "March 3");
+  assert.equal(dayWords("2025-12-31", 2026), "December 31, 2025");
+  for (const line of [soFar.text, notLooked.text]) assert.ok(!line.includes("—"));
+});
