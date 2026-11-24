@@ -986,6 +986,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     void answerOffer(text, 'declined');
   });
   const keptOwn = useSignal<Kept | null>(null);
+  const keptOwnSelection = useSignal(false);
   const keepFailed = useSignal('');
   // "Remember that", said in the chat, kept this message: the same line.
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -995,6 +996,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       const d = (e as CustomEvent<KeptEventDetail>).detail;
       if (d?.messageId && d.messageId === props.message.id) {
         keptOwn.value = d.kept;
+        keptOwnSelection.value = !!d.selection;
         captureState.value = 'saved-note';
       }
     };
@@ -1427,7 +1429,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           {captureState.value === 'saved-rule' ? (
             <span data-testid="rule-kept" data-for={ruleFor.value}>{ruleKeptWords(ruleFor.value, props.turnAiName || '')}</span>
           ) : captureState.value === 'saved-note' && keptOwn.value ? (
-            <KeptLine kept={keptOwn} aiId={props.turnAiId ?? ''} aiName={props.turnAiName || ''} own />
+            <KeptLine kept={keptOwn} aiId={props.turnAiId ?? ''} aiName={props.turnAiName || ''} own selection={keptOwnSelection.value} />
           ) : captureState.value === 'error' ? (
             <span>{keepFailed.value || 'Could not save it just now.'}</span>
           ) : offeredRule.value ? (
@@ -1514,8 +1516,8 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-error={props.message.error ? "1" : "0"}
       data-served={props.message.servedBy ?? ""}
       data-stopped={props.message.stopped ? "1" : undefined}
-      {...(props.message.role === 'assistant' && props.message.content
-        ? { 'data-remember-aiid': props.message.model, 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
+      {...(props.message.content && (props.message.role === 'assistant' || (props.message.role === 'user' && props.turnAiId))
+        ? { 'data-remember-aiid': props.message.role === 'assistant' ? props.message.model : props.turnAiId, 'data-remember-role': props.message.role, 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
         : {})}
     >
       {renderAvatarContent()}

@@ -1,5 +1,6 @@
-// The one Remember action, on the built app: pressed under a reply, on the
-// person's own message and on selected words, it keeps the exchange as a
+// The one Remember action, on the built app: pressed under a reply, or on
+// selected words in a reply or in the person's own message, it keeps the
+// exchange as a
 // memory item that points at where it was said, and the Kept line shows
 // what was kept, whom it is for, the other audience and Undo. A second
 // press says it is already kept.
@@ -108,6 +109,40 @@ describe("Remember keeps the exchange", () => {
     console.log(`e2e: selection ${JSON.stringify(picked)} kept as ${JSON.stringify(kept.map((i) => i.text))}`);
     expect(kept.some((i) => i.item.source?.kind === "selection" && i.text === picked)).toBe(true);
     await shot("remember-selection");
+  });
+
+  it("on selected words in the person's own message: the same, under that message", async () => {
+    const picked = (await browser.execute((xpath) => {
+      const host = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue as HTMLElement | null;
+      if (!host) return "";
+      const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+      let node: Node | null = null;
+      while ((node = walker.nextNode())) {
+        const t = node.textContent ?? "";
+        const inBar = (node.parentElement as HTMLElement | null)?.closest("button, [data-testid='kept-line']");
+        if (!inBar && t.trim().length >= 12) break;
+      }
+      if (!node) return "";
+      const t = node.textContent ?? "";
+      const start = t.length - t.trimStart().length;
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, Math.min(t.length, start + 24));
+      const sel = window.getSelection()!;
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+      return sel.toString().trim();
+    }, lastOf("user"))) as string;
+    expect(picked.length).toBeGreaterThanOrEqual(8);
+    await press(await $('[data-testid="remember-selection"]'));
+    const line = await within("user", "kept-line");
+    await line.waitForExist({ timeout: 60_000 });
+    expect(await textOf(line)).toContain("The words you selected.");
+    const kept = await current();
+    console.log(`e2e: own selection ${JSON.stringify(picked)} kept as ${JSON.stringify(kept.map((i) => i.text))}`);
+    expect(kept.some((i) => i.item.source?.kind === "selection" && i.text === picked)).toBe(true);
+    await shot("remember-own-selection");
   });
 
   it("said in the chat: 'remember that' with words keeps this message, alone it keeps the exchange before", async () => {

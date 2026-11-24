@@ -1,10 +1,11 @@
 import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
 
 /**
- * Remember on selected words: highlight text inside any reply and a small
+ * Remember on selected words: highlight text inside any reply, or inside
+ * the person's own message, and a small
  * floating "Remember" button appears. Pressing it keeps the selected words
  * as a memory item that points at the exchange, and the Kept line appears
- * under that reply (with its audience and Undo). Mounted ONCE at the chat
+ * under that message (with its audience and Undo). Mounted ONCE at the chat
  * page (one document listener, not one per message), so it adds nothing
  * per message and nothing renders until the person selects text.
  *
@@ -19,6 +20,7 @@ export default component$(() => {
   const text = useSignal('');
   const state = useSignal(''); // '' | 'saving' | 'saved' | 'error'
   const messageId = useSignal('');
+  const role = useSignal<'user' | 'assistant'>('assistant');
   const seq = useSignal<number | undefined>(undefined);
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -54,6 +56,7 @@ export default component$(() => {
           return;
         }
         aiId.value = host.getAttribute('data-remember-aiid') || '';
+        role.value = host.getAttribute('data-remember-role') === 'user' ? 'user' : 'assistant';
         text.value = selected;
         // Position centered above the selection, clamped to the viewport.
         x.value = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
@@ -88,7 +91,7 @@ export default component$(() => {
     state.value = 'saving';
     try {
       const { keepMessage, announceKept } = await import('../utils/memoryKeep');
-      const kept = await keepMessage({ aiId: aiId.value, role: 'assistant', text: text.value, selection: text.value, seq: seq.value });
+      const kept = await keepMessage({ aiId: aiId.value, role: role.value, text: text.value, selection: text.value, seq: seq.value });
       announceKept({ messageId: messageId.value, kept, selection: true });
       state.value = 'saved';
     } catch {
