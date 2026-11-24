@@ -393,6 +393,231 @@ pub(crate) fn log_with(mut log: Vec<Change>, entry: Change, keep: usize) -> Vec<
     log
 }
 
+// ── "remember that" ─────────────────────────────────────────────────────
+
+/// What a message asks memory to keep, when it asks.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Remember {
+    /// "remember that": the exchange before this message.
+    TheExchangeBefore,
+    /// "remember that the oven runs hot": this message's own words.
+    This(String),
+}
+
+const REMEMBER_PHRASES: [&str; 5] = ["remember that", "remember this", "keep that", "don't forget that", "do not forget that"];
+
+/// Does the message start by asking memory to keep something? A fixed
+/// list of phrases, no model. A question ("do you remember that ...") is
+/// not a request.
+pub(crate) fn remember_phrase(message: &str) -> Option<Remember> {
+    let text = message.trim();
+    let folded: String = text.chars().map(|c| if c == '\u{2019}' { '\'' } else { c }).collect::<String>().to_lowercase();
+    let folded = folded.trim_start_matches("please ").trim_start_matches("ok ").trim_start_matches("okay ").trim_start_matches(", ");
+    let skipped = text.chars().count() - folded.chars().count();
+    for phrase in REMEMBER_PHRASES {
+        let Some(rest) = folded.strip_prefix(phrase) else { continue };
+        if folded.ends_with('?') {
+            return None;
+        }
+        let rest_trimmed = rest.trim_matches(|c: char| c.is_whitespace() || ".,:;!".contains(c));
+        if rest_trimmed.is_empty() {
+            return Some(Remember::TheExchangeBefore);
+        }
+        // The phrase runs into another word ("remember thatch roofs"): not it.
+        if !rest.starts_with(|c: char| c.is_whitespace() || ",:".contains(c)) {
+            return None;
+        }
+        // The words after the phrase, as the person wrote them.
+        let from = skipped + phrase.chars().count();
+        let own: String = text.chars().skip(from).collect();
+        return Some(Remember::This(own.trim_matches(|c: char| c.is_whitespace() || ",:".contains(c)).to_string()));
+    }
+    None
+}
+
+// ── the stores, and the page's doors ────────────────────────────────────
+
+const CHANGES_FILE: &str = "memory-changes.enc";
+/// The change log on this device holds this many entries; older changes
+/// are still in the rows' own history.
+const CHANGES_KEPT: usize = 2000;
+
+fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    use tauri::Manager;
+    app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()
+}
+
+fn read_changes(app: &tauri::AppHandle, key: &[u8; 32]) -> Vec<Change> {
+    let Ok(root) = crate::profile::root(app) else { return Vec::new() };
+    let Ok(raw) = std::fs::read(root.join(CHANGES_FILE)) else { return Vec::new() };
+    if raw.len() < 24 {
+        return Vec::new();
+    }
+    crate::transcript_crypto::decrypt(key, &raw[..24], &raw[24..]).ok().and_then(|p| serde_json::from_slice(&p).ok()).unwrap_or_default()
+}
+
+fn write_changes(app: &tauri::AppHandle, key: &[u8; 32], log: &[Change]) -> Result<(), String> {
+    let root = crate::profile::root(app)?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(key, &serde_json::to_vec(log).map_err(|e| e.to_string())?)?;
+    let mut out = nonce.to_vec();
+    out.extend_from_slice(&cipher);
+    let path = root.join(CHANGES_FILE);
+    std::fs::write(&path, out).map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+fn held(app: &tauri::AppHandle, key: &[u8; 32]) -> Vec<Item> {
+    items(&crate::memory_rows::read_cache(app, key, SCOPE))
+}
+
+/// An item as the page sees it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemView {
+    pub id: String,
+    pub text: String,
+    pub as_of: i64,
+    pub updated_at: i64,
+    pub saved_by: String,
+    pub item: ItemMeta,
+}
+
+fn view(row: &MemoryRow) -> Option<ItemView> {
+    Some(ItemView { id: row.id.clone(), text: row.text.clone(), as_of: row.as_of, updated_at: row.updated_at, saved_by: row.saved_by.clone(), item: meta_of(row)? })
+}
+
+/// Save a changed item and note the change in the log.
+async fn save(app: &tauri::AppHandle, key: &[u8; 32], row: MemoryRow, change: Change) -> Result<ItemView, String> {
+    let saved = crate::memory_rows::save_and_cache(app, row).await?;
+    write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))?;
+    view(&saved).ok_or_else(|| "the saved row is not an item".to_string())
+}
+
+/// What the page asks to keep.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeepInput {
+    pub text: String,
+    pub item_type: ItemType,
+    pub ptr: Ptr,
+    /// When the exchange was (ms).
+    pub as_of: i64,
+    /// Absent: the person.
+    #[serde(default)]
+    pub by: Option<String>,
+    #[serde(default)]
+    pub audience: Option<Audience>,
+    /// `exchange` or `selection`.
+    pub kind: String,
+    /// `pressed` | `said` | `asked` | `tool`.
+    pub why: String,
+    #[serde(default)]
+    pub subject: Option<String>,
+}
+
+/// The answer to a keep: the item, the change that can be undone, and
+/// whether it was already kept (then nothing was written).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeptAnswer {
+    pub item: ItemView,
+    pub change: Option<String>,
+    pub already: bool,
+}
+
+/// Every item, forgotten and replaced ones too (the page decides what a
+/// view shows).
+#[tauri::command]
+pub fn memory_items(app: tauri::AppHandle) -> Result<Vec<ItemView>, String> {
+    let key = data_key(&app)?;
+    Ok(held(&app, &key).iter().filter_map(|i| view(&i.row)).collect())
+}
+
+#[tauri::command]
+pub async fn memory_keep(app: tauri::AppHandle, input: KeepInput) -> Result<KeptAnswer, String> {
+    if input.text.trim().is_empty() {
+        return Err("there is nothing to keep".into());
+    }
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let now = now_ms();
+    let id = {
+        use rand::Rng as _;
+        format!("it-{:016x}{:016x}", rand::thread_rng().gen::<u64>(), rand::thread_rng().gen::<u64>())
+    };
+    // What is kept is kept without its secrets.
+    let text = crate::secret_mask::hand_on(&input.text).text;
+    let by = input.by.clone().unwrap_or_else(|| "person".to_string());
+    let k = Keep { id, text: &text, item_type: input.item_type, ptr: input.ptr, as_of: input.as_of, by: &by, audience: input.audience, kind: &input.kind, why: &input.why, quote: None, subject: input.subject, now };
+    match keep(&have, k) {
+        Err(had) => Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true }),
+        Ok((row, change)) => {
+            let change_id = change.id.clone();
+            Ok(KeptAnswer { item: save(&app, &key, row, change).await?, change: Some(change_id), already: false })
+        }
+    }
+}
+
+/// A change the person makes to one item.
+#[derive(Deserialize)]
+#[serde(tag = "do", rename_all = "snake_case")]
+pub enum ItemEdit {
+    Confirm,
+    Correct { text: String },
+    Forget,
+    Audience { audience: Audience },
+    Close { done: bool },
+}
+
+#[tauri::command]
+pub async fn memory_item_change(app: tauri::AppHandle, id: String, edit: ItemEdit) -> Result<ItemView, String> {
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let item = have.iter().find(|i| i.row.id == id).ok_or("no such item")?;
+    let now = now_ms();
+    let (row, change) = match edit {
+        ItemEdit::Confirm => confirm(item, now),
+        ItemEdit::Correct { text } => correct(item, &crate::secret_mask::hand_on(&text).text, now),
+        ItemEdit::Forget => forget(item, now),
+        ItemEdit::Audience { audience } => set_audience(item, audience, now),
+        ItemEdit::Close { done } => close(item, done, "person", now),
+    };
+    save(&app, &key, row, change).await
+}
+
+/// What memory changed lately, newest first.
+#[tauri::command]
+pub fn memory_changes(app: tauri::AppHandle) -> Result<Vec<Change>, String> {
+    let key = data_key(&app)?;
+    Ok(read_changes(&app, &key))
+}
+
+#[tauri::command]
+pub async fn memory_undo(app: tauri::AppHandle, change_id: String) -> Result<Vec<ItemView>, String> {
+    let key = data_key(&app)?;
+    let log = read_changes(&app, &key);
+    let change = log.iter().find(|c| c.id == change_id).ok_or("that change is no longer in the list")?.clone();
+    let have = held(&app, &key);
+    let now = now_ms();
+    let mut out = Vec::new();
+    for id in &change.items {
+        let Some(item) = have.iter().find(|i| &i.row.id == id) else { continue };
+        if let Some((row, entry)) = undo(&change, item, now) {
+            out.push(save(&app, &key, row, entry).await?);
+        }
+    }
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -579,6 +804,33 @@ mod tests {
         let mut sys = row.clone();
         sys.structured = Some(serde_json::json!({ "sys": "subject", "name": "Suppliers" }));
         assert!(meta_of(&sys).is_none() && items(&[sys]).is_empty());
+    }
+
+    #[test]
+    fn remember_that_is_a_fixed_list_of_phrases() {
+        assert_eq!(remember_phrase("remember that"), Some(Remember::TheExchangeBefore));
+        assert_eq!(remember_phrase("  Remember this.  "), Some(Remember::TheExchangeBefore));
+        assert_eq!(remember_phrase("please keep that!"), Some(Remember::TheExchangeBefore));
+        assert_eq!(remember_phrase("Don\u{2019}t forget that"), Some(Remember::TheExchangeBefore));
+        assert_eq!(remember_phrase("Remember that the Oven runs 10 degrees hot."), Some(Remember::This("the Oven runs 10 degrees hot.".into())));
+        assert_eq!(remember_phrase("ok remember that: Dana is the packaging rep"), Some(Remember::This("Dana is the packaging rep".into())));
+        // Not a request.
+        assert_eq!(remember_phrase("do you remember that we changed suppliers?"), None);
+        assert_eq!(remember_phrase("remember that?"), None);
+        assert_eq!(remember_phrase("I remember that day."), None);
+        assert_eq!(remember_phrase("remember thatch roofs need care"), None);
+        assert_eq!(remember_phrase("what should I remember"), None);
+        assert_eq!(remember_phrase(""), None);
+    }
+
+    #[test]
+    fn an_edit_from_the_page_reads_as_written() {
+        let e: ItemEdit = serde_json::from_value(serde_json::json!({ "do": "audience", "audience": { "kind": "project", "project": "id:p1" } })).unwrap();
+        assert!(matches!(e, ItemEdit::Audience { audience: Audience::Project { .. } }));
+        let e: ItemEdit = serde_json::from_value(serde_json::json!({ "do": "correct", "text": "x" })).unwrap();
+        assert!(matches!(e, ItemEdit::Correct { .. }));
+        let k: KeepInput = serde_json::from_value(serde_json::json!({ "text": "t", "itemType": "about_person", "ptr": { "c": 1, "s": 2, "t": 3, "a": 0, "b": 1 }, "asOf": 5, "kind": "exchange", "why": "pressed" })).unwrap();
+        assert_eq!((k.item_type, k.by, k.audience), (ItemType::AboutPerson, None, None));
     }
 
     #[test]

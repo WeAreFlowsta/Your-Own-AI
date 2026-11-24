@@ -159,6 +159,30 @@ pub async fn save_memory_row(
     save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await
 }
 
+/// Save one row through any provisioned agent and put it in the scope's
+/// cache at once, without a live read of the scope: for a caller that
+/// already holds the row it is changing. Returns the row as saved.
+pub(crate) async fn save_and_cache(app: &tauri::AppHandle, mut row: MemoryRow) -> Result<MemoryRow, String> {
+    if !KINDS.contains(&row.kind.as_str()) {
+        return Err(format!("unknown memory kind {}", row.kind));
+    }
+    let hc = app.state::<Arc<HolochainState>>();
+    let manager = hc.get()?;
+    let agent = any_agent(&manager).await.ok_or("no agent provisioned yet")?;
+    let key = manager.data_key()?;
+    let mut sealed = row.clone();
+    sealed.action_hash = None;
+    let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
+    let anchor = scope_anchor(&row.scope, &key)?;
+    let hash = save_sealed(&manager, &agent, cipher, nonce.to_vec(), anchor).await?;
+    row.action_hash = Some(hash);
+    let mut after: Vec<MemoryRow> = read_cache(app, &key, &row.scope).into_iter().filter(|r| r.id != row.id).collect();
+    after.push(row.clone());
+    write_cache(app, &key, &row.scope, &reduce(after));
+    Ok(row)
+}
+
 /// Save one sealed row: on the AI's 0.6 cell first while it has one (then
 /// the 0.7 line in the background, the same bytes), else on the 0.7 line,
 /// awaited, when the 0.6 line cannot take it. Returns the hash, hex.
