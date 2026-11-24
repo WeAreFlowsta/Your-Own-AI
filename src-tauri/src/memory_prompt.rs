@@ -163,8 +163,15 @@ fn rules_layer(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Count
     (text_of(&own, &project), counts)
 }
 
-/// The memory block of a turn.
+/// The memory block of a turn: what the stores hold, with any password or
+/// key in it hidden. What memory says is said in other conversations than
+/// the one a secret was given in.
 pub(crate) fn block(held: &Held) -> (String, Counts) {
+    let (text, counts) = block_as_held(held);
+    (crate::secret_mask::hand_on(&text).text, counts)
+}
+
+fn block_as_held(held: &Held) -> (String, Counts) {
     let live: Vec<&MemoryFact> = held.facts.iter().filter(|f| f.valid_to.is_none()).collect();
     let kind = |f: &MemoryFact, k: &str| f.entry_kind == k;
 
@@ -569,6 +576,16 @@ mod tests {
         // Under the budget nothing is left out.
         let few = &own[..2];
         assert_eq!(with_rows(few, &project).1.rules, 3);
+    }
+
+    #[test]
+    fn a_password_in_an_earlier_turn_or_a_note_is_hidden_in_the_block() {
+        let all = profiles();
+        let mut p = all.into_iter().find(|p| p.name.starts_with("earlier turns")).unwrap();
+        p.recall[1].text = "The supplier login: password is Fl0ur&Water99, keep it.".into();
+        let (text, _) = block_of(&p);
+        assert!(text.contains("- The supplier login: password is [hidden: looks like a password or key], keep it."), "{text}");
+        assert!(!text.contains("Fl0ur&Water99"));
     }
 
     #[test]

@@ -1795,7 +1795,9 @@ pub fn corpus_recall(
             doc_id: c.doc_id.clone(),
             filename: meta.filename,
             idx: c.idx,
-            text: String::from_utf8_lossy(&dec(&key, &text_blob)?).into_owned(),
+            // A passage is handed to a model: a password or key in the
+            // document stays in the document.
+            text: crate::secret_mask::hand_on(&String::from_utf8_lossy(&dec(&key, &text_blob)?)).text,
             score,
             mine: meta.mine,
         });
