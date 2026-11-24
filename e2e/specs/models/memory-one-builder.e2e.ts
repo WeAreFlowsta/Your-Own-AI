@@ -89,7 +89,8 @@ describe("one builder for what memory adds to a request", () => {
     const { memory } = await assemble({ ai: ai.id, question: QUESTION, surface: "chat" });
     console.log(`e2e: the builder's part (${memory.systemPart.length} characters):\n${memory.systemPart}`);
     expect(memory.systemPart).toContain(RULE);
-    expect(memory.systemPart).toContain(`- runs business: Crumb & Kettle (${stamp})`);
+    // A fact an AI learned by the older way is set aside: it is not in the prompt.
+    expect(memory.systemPart).not.toContain(`Crumb & Kettle (${stamp})`);
     expect(memory.systemPart.endsWith(today())).toBe(true);
     expect(memory.counts.rules).toBeGreaterThanOrEqual(1);
     expect(sent).toContain(memory.systemPart);

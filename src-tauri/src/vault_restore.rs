@@ -1217,6 +1217,15 @@ async fn restore_backup(
         log::info!("[restore] {memory_rows_restored} memory row(s) restored");
         crate::memory_tidying::words_changed(&app);
     }
+    if let Some(raw) = backup["memory_changes"]["raw_b64"].as_str().and_then(|b| {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.decode(b).ok()
+    }) {
+        let changes = crate::memory_items::fold_changes(&app, &key, &raw);
+        if changes > 0 {
+            log::info!("[restore] {changes} memory change(s) restored to the log");
+        }
+    }
     let thumbnails_restored = restore_thumbnails(&app, &merged, &backup);
     let knowledge_restored = restore_ai_knowledge(&app, &key, &merged, &backup);
     let corpus_restored = restore_corpus(&app, &key, &merged, &backup);

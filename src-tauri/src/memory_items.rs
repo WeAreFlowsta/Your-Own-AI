@@ -424,6 +424,17 @@ pub(crate) fn log_with(mut log: Vec<Change>, entry: Change, keep: usize) -> Vec<
     log
 }
 
+/// Two copies of the log as one: every change once, newest first, at most
+/// `keep`. A change is never edited after it is written, so the same id
+/// is the same change on both sides.
+pub(crate) fn merged_log(mine: Vec<Change>, theirs: Vec<Change>, keep: usize) -> Vec<Change> {
+    let mut seen = std::collections::HashSet::new();
+    let mut all: Vec<Change> = mine.into_iter().chain(theirs).filter(|c| seen.insert(c.id.clone())).collect();
+    all.sort_by(|a, b| b.at.cmp(&a.at));
+    all.truncate(keep);
+    all
+}
+
 // ── "remember that" ─────────────────────────────────────────────────────
 
 /// What a message asks memory to keep, when it asks.
@@ -505,6 +516,27 @@ fn write_changes(app: &tauri::AppHandle, key: &[u8; 32], log: &[Change]) -> Resu
 /// Note a change in this device's log.
 pub(crate) fn log_change(app: &tauri::AppHandle, key: &[u8; 32], change: Change) -> Result<(), String> {
     write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))
+}
+
+/// The change log as a backup carries it: the sealed file as it stands.
+pub(crate) fn changes_for_backup(app: &tauri::AppHandle) -> Option<Vec<u8>> {
+    std::fs::read(crate::profile::root(app).ok()?.join(CHANGES_FILE)).ok().filter(|raw| raw.len() > 24)
+}
+
+/// A backup's change log, folded into this device's. Returns how many
+/// changes this device did not have.
+pub(crate) fn fold_changes(app: &tauri::AppHandle, key: &[u8; 32], raw: &[u8]) -> usize {
+    if raw.len() < 24 {
+        return 0;
+    }
+    let Some(theirs) = crate::transcript_crypto::decrypt(key, &raw[..24], &raw[24..]).ok().and_then(|p| serde_json::from_slice::<Vec<Change>>(&p).ok()) else { return 0 };
+    let mine = read_changes(app, key);
+    let had: std::collections::HashSet<String> = mine.iter().map(|c| c.id.clone()).collect();
+    let new = theirs.iter().filter(|c| !had.contains(&c.id)).count();
+    if new > 0 {
+        let _ = write_changes(app, key, &merged_log(mine, theirs, CHANGES_KEPT));
+    }
+    new
 }
 
 fn now_ms() -> i64 {
@@ -1215,5 +1247,16 @@ mod tests {
         assert_eq!(words_to_keep(&"é".repeat(3000), None).chars().count(), 1000);
         let k: KeepMessageInput = serde_json::from_value(serde_json::json!({ "conversation": "h", "role": "assistant", "text": "t", "seq": 3, "agentKey": "k" })).unwrap();
         assert_eq!((k.seq, k.agent_key.as_deref(), k.selection, k.why), (Some(3), Some("k"), None, None));
+    }
+
+    #[test]
+    fn a_restored_log_adds_what_this_device_lacks_and_repeats_nothing() {
+        let c = |id: &str, at: i64| Change { id: id.into(), at, what: What::Kept, items: vec![], by: "person".into(), undo: Undo::Forget, device: None };
+        let mine = vec![c("c", 30), c("a", 10)];
+        let theirs = vec![c("d", 40), c("b", 20), c("a", 10)];
+        let ids = |log: &[Change]| log.iter().map(|x| x.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&merged_log(mine.clone(), theirs.clone(), 10)), vec!["d", "c", "b", "a"]);
+        assert_eq!(ids(&merged_log(mine.clone(), theirs, 2)), vec!["d", "c"], "the newest are the ones held");
+        assert_eq!(ids(&merged_log(mine.clone(), vec![], 10)), ids(&mine));
     }
 }

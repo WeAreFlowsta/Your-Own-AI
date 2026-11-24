@@ -2540,6 +2540,14 @@ fn attach_extras(
             if block["scopes"].as_object().map(|o| !o.is_empty()).unwrap_or(false) {
                 payload["memory_rows"] = block;
             }
+            // The log of what memory changed (what Recently lists and an
+            // undo reads), sealed under the data key.
+            if let Some(raw) = crate::memory_items::changes_for_backup(app) {
+                payload["memory_changes"] = serde_json::json!({
+                    "_readme": "The log of changes to memory (kept, replaced, closed, undone), as this device holds it - encrypted, readable with app_keys.",
+                    "raw_b64": base64::engine::general_purpose::STANDARD.encode(&raw),
+                });
+            }
         }
     }
 

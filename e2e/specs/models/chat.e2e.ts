@@ -88,7 +88,7 @@ describe("chat with installed models", () => {
     expect(r.text.toLowerCase()).toContain("paris");
   });
 
-  it("leaves one episode in the AI's memory when a conversation is left", async function () {
+  it("writes no summary row when a conversation is left", async function () {
     this.timeout(600_000);
     await waitForChat();
     await (await $('[data-testid="new-chat"]')).click();
@@ -108,15 +108,11 @@ describe("chat with installed models", () => {
       return ais[0] ? { agent: ais[0].agentPubKey ?? "", founding: ais[0].foundingKey ?? ais[0].agentPubKey ?? "" } : null;
     });
     expect(ai?.agent).toBeTruthy();
-    let rows: { kind: string; text: string; provenance: string }[] = [];
-    await browser.waitUntil(async () => {
-      rows = await invoke<{ kind: string; text: string; provenance: string }[]>("list_memory_rows", { agentKey: ai!.agent, scope: `ai:${ai!.founding}` });
-      return rows.some((r) => r.kind === "episode" && r.provenance === `distilled:chat:${hash}`);
-    }, { timeout: 60_000, interval: 2000, timeoutMsg: "no episode row for the conversation that was left" });
-    const ep = rows.find((r) => r.kind === "episode" && r.provenance === `distilled:chat:${hash}`)!;
-    console.log(`e2e: episode ${JSON.stringify(ep.text.slice(0, 160))}`);
-    expect(ep.text).toContain("Conversation: Name one primary colour");
-    expect(ep.text).toContain("(2 questions)");
+    // Nothing is written about a conversation when it is left: what it
+    // settled is looked at later, in idle time, and kept as items.
+    await browser.pause(20_000);
+    const rows = await invoke<{ kind: string; text: string; provenance: string }[]>("list_memory_rows", { agentKey: ai!.agent, scope: `ai:${ai!.founding}` });
+    expect(rows.filter((r) => r.kind === "episode" && r.provenance === `distilled:chat:${hash}`).length).toBe(0);
   });
 
   (WAIT_LOG ? it : it.skip)("the app's log says what this launch waits for", async function () {

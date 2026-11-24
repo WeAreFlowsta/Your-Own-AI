@@ -61,6 +61,83 @@ pub(crate) fn conv_uses(rows: &[MemoryRow]) -> Vec<ConvUse> {
         .collect()
 }
 
+/// One change the person makes to how a conversation is used.
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvChange {
+    pub started_at: i64,
+    /// Keep it out of memory, or let it be used again.
+    #[serde(default)]
+    pub private: Option<bool>,
+    /// Who may use it; "all" clears the choice.
+    #[serde(default)]
+    pub audience: Option<Audience>,
+    /// A message not to be used.
+    #[serde(default)]
+    pub exclude: Option<u32>,
+    /// A message to be used again.
+    #[serde(default)]
+    pub include: Option<u32>,
+}
+
+/// The decision after a change. What is not named stays as it was.
+pub(crate) fn changed(uses: &[ConvUse], c: &ConvChange) -> ConvUse {
+    let mut u = uses.iter().find(|u| u.started_at == c.started_at).cloned().unwrap_or(ConvUse { started_at: c.started_at, audience: None, private: false, excluded: Vec::new() });
+    if let Some(p) = c.private {
+        u.private = p;
+    }
+    if let Some(a) = &c.audience {
+        u.audience = if matches!(a, Audience::All) { None } else { Some(a.clone()) };
+    }
+    if let Some(seq) = c.exclude {
+        if !u.excluded.contains(&seq) {
+            u.excluded.push(seq);
+            u.excluded.sort_unstable();
+        }
+    }
+    if let Some(seq) = c.include {
+        u.excluded.retain(|s| *s != seq);
+    }
+    u
+}
+
+/// Does a decision say anything other than the default (all the person's
+/// AIs, every message)? These are the ones the "Not used" list shows.
+pub(crate) fn restricts(u: &ConvUse) -> bool {
+    u.private || !u.excluded.is_empty() || u.audience.is_some()
+}
+
+fn rows_now(app: &tauri::AppHandle) -> Result<Vec<MemoryRow>, String> {
+    use tauri::Manager;
+    let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()?;
+    Ok(crate::memory_rows::read_cache(app, &key, SCOPE))
+}
+
+/// What the person decided about one conversation (the default when nothing).
+#[tauri::command]
+pub fn memory_conversation_use(app: tauri::AppHandle, started_at: i64) -> Result<ConvUse, String> {
+    Ok(changed(&conv_uses(&rows_now(&app)?), &ConvChange { started_at, ..Default::default() }))
+}
+
+/// Change how a conversation is used. It takes effect with the next
+/// question: nothing is read or imported again.
+#[tauri::command]
+pub async fn memory_conversation_use_set(app: tauri::AppHandle, change: ConvChange) -> Result<ConvUse, String> {
+    if change.started_at <= 0 {
+        return Err("This conversation is still being saved. Try again in a moment.".into());
+    }
+    let next = changed(&conv_uses(&rows_now(&app)?), &change);
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    crate::memory_rows::save_and_cache(&app, conv_row(&next, now)).await?;
+    Ok(next)
+}
+
+/// Every conversation with a decision other than the default.
+#[tauri::command]
+pub fn memory_conversations_not_used(app: tauri::AppHandle) -> Result<Vec<ConvUse>, String> {
+    Ok(conv_uses(&rows_now(&app)?).into_iter().filter(restricts).collect())
+}
+
 /// A turn, as far as use goes.
 #[derive(Clone, Copy)]
 pub(crate) struct Asking<'a> {
@@ -313,5 +390,39 @@ mod tests {
         let after = crate::memory_rows::reduce([rows, gone].concat());
         assert_eq!(after.iter().map(|r| r.id.as_str()).collect::<Vec<_>>().len(), 2);
         assert!(after.contains(&rule) && after.contains(&project_rule));
+    }
+
+    #[test]
+    fn a_change_names_one_thing_and_leaves_the_rest() {
+        let start = 1_700_000_000_000_000;
+        let one = changed(&[], &ConvChange { started_at: start, private: Some(true), ..Default::default() });
+        assert!(one.private && one.excluded.is_empty() && one.audience.is_none());
+        let two = changed(&[one.clone()], &ConvChange { started_at: start, exclude: Some(4), ..Default::default() });
+        assert!(two.private, "the private mark stays");
+        assert_eq!(two.excluded, vec![4]);
+        let three = changed(&[two], &ConvChange { started_at: start, private: Some(false), exclude: Some(2), ..Default::default() });
+        assert!(!three.private);
+        assert_eq!(three.excluded, vec![2, 4]);
+        let four = changed(&[three.clone()], &ConvChange { started_at: start, include: Some(4), audience: Some(Audience::LocalAis), ..Default::default() });
+        assert_eq!(four.excluded, vec![2]);
+        assert_eq!(four.audience, Some(Audience::LocalAis));
+        let five = changed(&[four], &ConvChange { started_at: start, audience: Some(Audience::All), include: Some(2), ..Default::default() });
+        assert!(!restricts(&five), "back to the default: all the person's AIs, every message");
+        assert!(restricts(&three));
+        // Another conversation is untouched by any of it.
+        assert!(!restricts(&changed(&[three], &ConvChange { started_at: start + 1, ..Default::default() })));
+    }
+
+    #[test]
+    fn a_change_is_read_back_from_its_row() {
+        let u = changed(&[], &ConvChange { started_at: 7, private: Some(true), exclude: Some(3), ..Default::default() });
+        let rows = vec![conv_row(&u, 100)];
+        assert_eq!(conv_uses(&rows), vec![u.clone()]);
+        let who = Asking { ai: "a", project: None, online: false };
+        assert_eq!(may_use_message(&conv_uses(&rows), 7, 0, &who), May::Never);
+        let back = changed(&conv_uses(&rows), &ConvChange { started_at: 7, private: Some(false), ..Default::default() });
+        let rows = crate::memory_rows::reduce(vec![conv_row(&u, 100), conv_row(&back, 200)]);
+        assert_eq!(may_use_message(&conv_uses(&rows), 7, 0, &who), May::Use);
+        assert_eq!(may_use_message(&conv_uses(&rows), 7, 3, &who), May::Never, "the one message stays out");
     }
 }

@@ -32,6 +32,7 @@ mod memory_state;         // what memory holds to be true now beside a question:
 mod memory_tidying;       // the tidying job: judges queued pairs in idle time, on a model that passed the check
 mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
 mod memory_migrate;       // the update path: what the older stores become
+mod memory_rule_offers;   // when a rule is offered: the second time an instruction is given, and never after an answer
 mod memory_use;           // who may draw on what: audiences, private conversations, forget and delete
 mod memory_rules;         // when an instruction becomes an offer to keep it as a rule
 mod memory_check;         // the built-in check's marks: may this model do memory's judging
@@ -899,6 +900,13 @@ pub fn run() {
             memory_items::memory_undo,
             memory_items::memory_not_replaced,
             memory_session::memory_session_given,
+            memory_use::memory_conversation_use,
+            memory_use::memory_conversation_use_set,
+            memory_use::memory_conversations_not_used,
+            memory_rule_offers::memory_rule_heard,
+            memory_rule_offers::memory_rule_offer_answered,
+            memory_rule_offers::memory_rule_offers_declined,
+            memory_rule_offers::memory_rule_offer_forget,
             memory_migrate::memory_update_run,
             memory_migrate::memory_update_report,
             memory_items::memory_set_aside_remove_all,
