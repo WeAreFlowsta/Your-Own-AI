@@ -312,6 +312,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/online-smoke", get(online_smoke_dev))
         .route("/internal/replayed-conversations", get(replayed_conversations_dev))
         .route("/internal/conversation-probe", get(conversation_probe_dev))
+        .route("/internal/memory-fixture-load", post(memory_fixture_load_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -649,6 +650,32 @@ async fn conversation_probe_dev(
         }
     }
     Json(json!({ "error": "no conversation with that hash prefix on a connected agent" })).into_response()
+}
+
+/// Dev builds only: write a file of conversations into the open profile as
+/// ordinary records (`memory_fixture`). `path` is the file; `map` pairs the
+/// file's AI names with this profile's AIs (`Juno:<id or name>,Atlas:<id>`);
+/// `all` is the AI for every name left unmapped that no AI here carries;
+/// `model` is the model name written on the records.
+async fn memory_fixture_load_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let Some(path) = q.get("path").filter(|p| !p.is_empty()) else {
+        return Json(json!({ "error": "path=<file> is required" })).into_response();
+    };
+    let names: std::collections::HashMap<String, String> = q
+        .get("map")
+        .map(|m| m.split(',').filter_map(|pair| pair.split_once(':')).map(|(a, b)| (a.trim().to_string(), b.trim().to_string())).collect())
+        .unwrap_or_default();
+    let model = q.get("model").map(String::as_str).unwrap_or("fixture");
+    match crate::memory_fixture::load_into_profile(&app, std::path::Path::new(path), &load_ais(&app), &names, q.get("all").map(String::as_str), model).await {
+        Ok(loaded) => Json(json!(loaded)).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
 }
 
 /// Dev builds only: conversations whose chain record was written at or

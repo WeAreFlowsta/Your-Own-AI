@@ -297,7 +297,7 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 }
 
 /// "2024-05-01T12:34:56.789Z" / "...+02:00" / date-only -> microseconds UTC.
-fn iso_to_micros(s: &str) -> Option<i64> {
+pub(crate) fn iso_to_micros(s: &str) -> Option<i64> {
     let s = s.trim();
     if s.len() < 10 {
         return None;
@@ -1872,7 +1872,7 @@ async fn commit_encrypted(
 /// An imported conversation, on the line that takes the AI's writes: its
 /// 0.6 cell while it has one (its hash the id), else the 0.7 line under a
 /// fresh id, once the 0.6 line cannot take it.
-async fn start_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, founding: &str, key: &[u8; 32], meta: &serde_json::Value) -> Result<String, String> {
+pub(crate) async fn start_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, founding: &str, key: &[u8; 32], meta: &serde_json::Value) -> Result<String, String> {
     if manager.is_provisioned(ai_id).await {
         let hash = commit_encrypted(manager, ai_id, key, "start_conversation", None, meta).await?;
         return Ok(hex::encode(hash.get_raw_39()));
@@ -1884,7 +1884,7 @@ async fn start_imported(manager: &crate::holochain::HolochainManager, ai_id: &st
 }
 
 /// One imported message, on the line its conversation is on.
-async fn record_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, key: &[u8; 32], conversation_id: &str, plain: &serde_json::Value) -> Result<(), String> {
+pub(crate) async fn record_imported(manager: &crate::holochain::HolochainManager, ai_id: &str, key: &[u8; 32], conversation_id: &str, plain: &serde_json::Value) -> Result<(), String> {
     if let Some(hash) = crate::transcript_ids::v1_hash(conversation_id) {
         if manager.is_provisioned(ai_id).await {
             commit_encrypted(manager, ai_id, key, "record_message", Some(hash), plain).await?;

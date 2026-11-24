@@ -17,6 +17,7 @@ mod corpus;               // the person's document library (SQLite, row-encrypte
 mod model_hash;
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
+mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)

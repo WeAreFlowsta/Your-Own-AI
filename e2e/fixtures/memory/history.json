@@ -1,0 +1,456 @@
+{
+ "v": 1,
+ "note": "Made-up history of a small bakery. Every name, price, key and date here is invented. It is the only history in this repository.",
+ "ais": [
+  {
+   "name": "Juno"
+  },
+  {
+   "name": "Atlas"
+  }
+ ],
+ "conversations": [
+  {
+   "id": "conv-b01",
+   "ai": "Juno",
+   "title": "Delivery pricing",
+   "started_at": "2026-01-12T09:14:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "I want to make delivery free for bigger orders. Most baskets are around $30. What threshold makes sense?",
+     "at": "2026-01-12T09:14:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "With baskets around $30, a threshold a little above that nudges people to add one more item. $40 is a common choice: it is reachable with one extra loaf and a pastry.",
+     "at": "2026-01-12T09:15:30Z"
+    },
+    {
+     "role": "user",
+     "text": "let's make delivery free over $40.",
+     "at": "2026-01-12T09:17:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Done. Free delivery now applies to orders over $40. Orders under that keep the $6 delivery fee.",
+     "at": "2026-01-12T09:18:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b02",
+   "ai": "Juno",
+   "title": "Flour supplier",
+   "started_at": "2026-01-20T14:02:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Dunmore Grain just told me their bread flour is going up 18 percent from February. I can't absorb that.",
+     "at": "2026-01-20T14:02:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "An 18 percent rise on your main ingredient is large. Two mills nearby sell comparable strong white flour: Hartwell Mills and Pennybrook. Hartwell quotes per 12.5 kg bag and delivers monthly; Pennybrook delivers weekly but has a higher minimum.",
+     "at": "2026-01-20T14:03:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Monthly is fine, we have the dry store. Go with Hartwell Mills. Forty bags, delivered the first Monday of each month.",
+     "at": "2026-01-20T14:05:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Set. Hartwell Mills, forty 12.5 kg bags of strong white flour, delivered on the first Monday of each month, paid by transfer within fourteen days. I have drafted the notice to Dunmore Grain ending the standing order.",
+     "at": "2026-01-20T14:06:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Send it.",
+     "at": "2026-01-20T14:08:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Sent. The last Dunmore delivery is January 27.",
+     "at": "2026-01-20T14:09:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b03",
+   "ai": "Juno",
+   "title": "Opening hours",
+   "started_at": "2026-02-02T08:30:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Write down our hours properly. Weekdays we open at 7.",
+     "at": "2026-02-02T08:30:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Noted. Weekday opening is 7 am. What about the weekend?",
+     "at": "2026-02-02T08:31:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Saturday 8 am, closed Sunday. We close at 3 every open day.",
+     "at": "2026-02-02T08:33:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Recorded: Monday to Friday 7 am to 3 pm, Saturday 8 am to 3 pm, closed Sunday.",
+     "at": "2026-02-02T08:34:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b04",
+   "ai": "Atlas",
+   "title": "Website order form",
+   "started_at": "2026-02-10T16:45:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "The order form on the site is letting people order for tomorrow at 4 pm. The cutoff is supposed to be 2 pm.",
+     "at": "2026-02-10T16:45:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "I looked at the form's cutoff check. It compares against the server's clock, which is set to UTC, so 2 pm on the server is the middle of the night for you.",
+     "at": "2026-02-10T16:46:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Here is the payment test key in case you need to run a test order: sk_test_MADEUP51Hq9crumbkettle0000",
+     "at": "2026-02-10T16:48:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Thanks. I set the form's timezone to Pacific/Auckland and ran three test orders: 1:55 pm is accepted for tomorrow, 2:05 pm is offered the day after, and midnight behaves correctly.",
+     "at": "2026-02-10T16:49:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Good. Ship it.",
+     "at": "2026-02-10T16:51:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Shipped. The next-day cutoff is 2 pm Pacific/Auckland time, and the form now shows the cutoff under the date picker.",
+     "at": "2026-02-10T16:52:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b05",
+   "ai": "Juno",
+   "title": "Sourdough schedule",
+   "started_at": "2026-02-18T05:50:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "I keep forgetting the starter. Help me fix a schedule for Gerald.",
+     "at": "2026-02-18T05:50:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Gerald the starter does best on a steady rhythm. How warm is the kitchen overnight?",
+     "at": "2026-02-18T05:51:30Z"
+    },
+    {
+     "role": "user",
+     "text": "About 24 degrees by the ovens. Feed at 6 am and 6 pm?",
+     "at": "2026-02-18T05:53:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "That works. Feed Gerald at 6 am and 6 pm. At 24 degrees, plan the bulk ferment for five hours, with a fold every hour for the first three.",
+     "at": "2026-02-18T05:54:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Five hours at 24 degrees, got it.",
+     "at": "2026-02-18T05:56:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Written on the kitchen sheet: feeds at 6 am and 6 pm, bulk ferment five hours at 24 degrees.",
+     "at": "2026-02-18T05:57:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b06",
+   "ai": "Juno",
+   "title": "Delivery threshold",
+   "started_at": "2026-03-03T11:20:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Van fuel is killing the margin on small deliveries. raise the free delivery threshold to $60 from Monday.",
+     "at": "2026-03-03T11:20:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Updated. From Monday March 9, free delivery starts at $60. Orders under $60 keep the $6 fee. I changed the banner on the site and the note on the printed menu file.",
+     "at": "2026-03-03T11:21:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Thanks.",
+     "at": "2026-03-03T11:23:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "You're welcome. I will check order sizes after two weeks and tell you whether baskets moved.",
+     "at": "2026-03-03T11:24:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b07",
+   "ai": "Juno",
+   "title": "Staff roster",
+   "started_at": "2026-03-11T15:05:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Roster. Priya opens Tuesday to Thursday. Tom does both weekend days, but we only open Saturday so that's one day.",
+     "at": "2026-03-11T15:05:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Recorded: Priya opens Tuesday, Wednesday and Thursday. Tom works Saturday. Who covers the Saturday counter while Tom bakes?",
+     "at": "2026-03-11T15:06:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Nobody yet. I need a Saturday counter helper. Tom said his cousin might want it, he's asking her.",
+     "at": "2026-03-11T15:08:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Open item: hire a Saturday counter helper. Waiting on Tom to hear back from his cousin.",
+     "at": "2026-03-11T15:09:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b08",
+   "ai": "Juno",
+   "title": "Easter menu",
+   "started_at": "2026-03-20T10:10:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Easter. Hot cross buns: what did we charge last year, and should we do a chocolate one?",
+     "at": "2026-03-20T10:10:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Last year's price is not in anything I can see. For this year, ingredient cost per bun is about $1.30. A chocolate version would need its own allergen line and a separate tray rotation.",
+     "at": "2026-03-20T10:11:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Then no chocolate version, I don't want a second allergen line in Easter week. $4.50 each, six for $24.",
+     "at": "2026-03-20T10:13:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Set for Easter: hot cross buns $4.50 each or six for $24. No chocolate version this year, to avoid a second allergen line during the busiest week.",
+     "at": "2026-03-20T10:14:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b09",
+   "ai": "Juno",
+   "title": "Saturday hours",
+   "started_at": "2026-04-14T07:40:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "People are queueing outside on Saturdays before we open. Move Saturday opening to 7:30 starting this week.",
+     "at": "2026-04-14T07:40:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Done. From Saturday April 18, Saturday opening is 7:30 am. Closing stays 3 pm. I updated the hours on the site and the door sign file.",
+     "at": "2026-04-14T07:41:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Tell Tom.",
+     "at": "2026-04-14T07:43:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Message drafted for Tom: Saturday start moves half an hour earlier, to 7:30 am, from April 18.",
+     "at": "2026-04-14T07:44:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b10",
+   "ai": "Atlas",
+   "title": "Newsletter tool",
+   "started_at": "2026-04-22T13:30:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "I want a weekly email to regulars. Mailbrook or Postwing?",
+     "at": "2026-04-22T13:30:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Both handle a list your size. Mailbrook is cheaper under 500 subscribers but has no scheduled sends on its free plan. Postwing includes scheduling and a simple sign-up form.",
+     "at": "2026-04-22T13:31:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Scheduling matters. Postwing. Here's the key: pw_live_MADEUP_7f3a9c2e41",
+     "at": "2026-04-22T13:33:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Connected Postwing. I imported the 412 addresses from the loyalty sheet and added the sign-up form to the site footer.",
+     "at": "2026-04-22T13:34:30Z"
+    },
+    {
+     "role": "user",
+     "text": "Send it Thursdays at 4 pm, when people plan the weekend.",
+     "at": "2026-04-22T13:36:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Scheduled: the newsletter goes out every Thursday at 4 pm through Postwing, to 412 subscribers today.",
+     "at": "2026-04-22T13:37:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b11",
+   "ai": "Juno",
+   "title": "Saturday helper",
+   "started_at": "2026-05-02T12:15:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Tom's cousin said no in the end, but Mei from the market stall wants the Saturday counter job. I said yes.",
+     "at": "2026-05-02T12:15:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Good news. What are the terms?",
+     "at": "2026-05-02T12:16:30Z"
+    },
+    {
+     "role": "user",
+     "text": "She starts May 9. $27 an hour, 7:15 to 3:15.",
+     "at": "2026-05-02T12:18:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Recorded and closed: Mei is the Saturday counter helper from May 9, $27 an hour, 7:15 am to 3:15 pm. The open item about hiring a Saturday helper is done.",
+     "at": "2026-05-02T12:19:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b12",
+   "ai": "Juno",
+   "title": "Oven repair",
+   "started_at": "2026-05-19T09:00:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "The deck oven is running 20 degrees hot on the left side.",
+     "at": "2026-05-19T09:00:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "That pattern usually points to the thermostat or its probe. Kessler Service looks after that oven brand locally.",
+     "at": "2026-05-19T09:01:30Z"
+    },
+    {
+     "role": "user",
+     "text": "They came this morning. Kessler replaced the thermostat. $380.",
+     "at": "2026-05-19T09:03:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Recorded: Kessler Service replaced the deck oven thermostat on May 19 for $380. Is there a warranty on the part?",
+     "at": "2026-05-19T09:04:30Z"
+    },
+    {
+     "role": "user",
+     "text": "12 months. And from now on always give me prices including GST.",
+     "at": "2026-05-19T09:06:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Understood. I will always give prices including GST. The thermostat carries a 12 month warranty, to May 2027.",
+     "at": "2026-05-19T09:07:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b13",
+   "ai": "Juno",
+   "title": "Winter menu",
+   "started_at": "2026-06-04T14:20:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "Winter menu. Add the pumpkin scone. Take the lemon tart off until spring.",
+     "at": "2026-06-04T14:20:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Done: pumpkin scone added, lemon tart off the menu until spring. Any change to coffee?",
+     "at": "2026-06-04T14:21:30Z"
+    },
+    {
+     "role": "user",
+     "text": "No, we stay with Ridgeback Roasters.",
+     "at": "2026-06-04T14:23:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "Coffee stays with Ridgeback Roasters. The winter menu file is updated and dated June 4.",
+     "at": "2026-06-04T14:24:30Z"
+    }
+   ]
+  },
+  {
+   "id": "conv-b14",
+   "ai": "Juno",
+   "title": "Quick test",
+   "started_at": "2026-06-10T10:00:00Z",
+   "messages": [
+    {
+     "role": "user",
+     "text": "testing",
+     "at": "2026-06-10T10:00:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "I'm here. What would you like to do?",
+     "at": "2026-06-10T10:01:30Z"
+    },
+    {
+     "role": "user",
+     "text": "nothing, just checking the new laptop works",
+     "at": "2026-06-10T10:03:00Z"
+    },
+    {
+     "role": "assistant",
+     "text": "It works. Enjoy the new laptop.",
+     "at": "2026-06-10T10:04:30Z"
+    }
+   ]
+  }
+ ]
+}
