@@ -2097,4 +2097,235 @@ mod tests {
         let back: serde_json::Value = serde_json::from_slice(&crate::transcript_crypto::decrypt(&key, &n2, &c2).unwrap()).unwrap();
         assert_eq!((back["id"].as_str(), back["conversation_id"].as_str(), back["content"].as_str()), (Some("m1"), Some("c1"), Some("hi")));
     }
+
+    /// A probe, not a pass or fail test: how
+    /// long a live read of one scope takes as its revisions grow, on each
+    /// line, and what a write costs late in the run. Made-up rows in the
+    /// scope `memory`, five revisions per id, on a conductor with its own
+    /// network seed and no peers, so the figures are the floor a real
+    /// profile starts from. It prints lines that start with `PROBE`.
+    /// Run with the app closed:
+    /// `YOAI_PROBE_ROWS=5000 cargo test --lib -- --ignored live_probe_scope_read --test-threads 1 --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_probe_scope_read_as_revisions_grow() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::{ExternIO, Record};
+        use std::time::Instant;
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        #[derive(Serialize, Debug)]
+        struct RowsV1 {
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        let total: usize = std::env::var("YOAI_PROBE_ROWS").ok().and_then(|v| v.parse().ok()).unwrap_or(5000);
+        let ids = (total / 5).max(1);
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [9u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-probe-rows-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let anchor = crate::memory_rows::scope_anchor("memory", &data_key).unwrap();
+        // One revision of a made-up item with a full set of fields.
+        let row = |n: usize| {
+            let item = n % ids;
+            serde_json::json!({
+                "id": format!("item-{item:05}"), "scope": "memory", "kind": "note",
+                "text": format!("The bakery orders flour from supplier number {item}, forty bags on the first Monday of each month, revision {n}, paid by transfer within fourteen days."),
+                "structured": {"item": {
+                    "v": 1, "type": "decision", "state": "current", "replaced_by": null, "now": null, "reason": "the old supplier raised prices",
+                    "waiting_on": null, "state_at": 1764000000000u64 + n as u64, "state_by": "person", "confirmed": null, "corrected_from": null,
+                    "subject": format!("sub-{:04}", item % 40), "audience": {"kind": "all"},
+                    "source": {"kind": "exchange", "ptr": {"c": 1764000000000u64, "s": item, "t": 1764000000000u64 + item as u64, "a": 0, "b": 0}, "quote": "forty bags on the first Monday", "doc": null, "why": "pressed", "for_ai": null},
+                    "last_came_up": null}},
+                "as_of": 1764000000000u64 + item as u64, "saved_by": "person", "provenance": "authored", "updated_at": 1764000000000u64 + n as u64
+            })
+        };
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+        eprintln!("PROBE rows={total} ids={ids} sealed_bytes={}", seal(row(0)).1.len());
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let agent = manager.provision_agent("live-probe-rows").await.expect("an AI");
+        let mut marks: Vec<usize> = [100, 250, 500, 1000, 2000, 3500, 5000, 7500, 10000].into_iter().filter(|m| *m < total).collect();
+        marks.push(total);
+        let mut written = 0usize;
+        for mark in marks {
+            let t = Instant::now();
+            let segment = mark - written;
+            while written < mark {
+                let (n, c) = seal(row(written));
+                manager.call_zome(&agent, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: n.to_vec(), anchor: anchor.clone() }).unwrap()).await.unwrap();
+                written += 1;
+            }
+            eprintln!("PROBE line=0.6 revisions={written} write_ms_each={:.1}", t.elapsed().as_millis() as f64 / segment as f64);
+            for read in 1..=2 {
+                let t = Instant::now();
+                let out = manager.call_zome_with_timeout(&agent, "transcript", "get_memory_rows", ExternIO::encode(RowsV1 { anchor: anchor.clone() }).unwrap(), Duration::from_secs(1800)).await;
+                let call_ms = t.elapsed().as_millis();
+                match out {
+                    Ok(out) => {
+                        let t = Instant::now();
+                        let records: Vec<Record> = ExternIO::decode(&out).unwrap();
+                        let rows: Vec<crate::memory_rows::MemoryRow> = records.iter().filter_map(|r| crate::vault_escrow::open_record(&data_key, r)).filter_map(|(plain, _)| serde_json::from_value(plain).ok()).collect();
+                        let got = rows.len();
+                        let live = crate::memory_rows::reduce(rows).len();
+                        eprintln!("PROBE line=0.6 revisions={written} read={read} call_ms={call_ms} open_and_reduce_ms={} reply_bytes={} records={got} live={live}", t.elapsed().as_millis(), out.as_bytes().len());
+                    }
+                    Err(e) => eprintln!("PROBE line=0.6 revisions={written} read={read} call_ms={call_ms} ERROR {e}"),
+                }
+            }
+        }
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AI reconnects");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let mv = Arc::new(Move { hc, data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown), full: Default::default() });
+        // The move carries the rows to 0.7: its time is the 0.7 write rate.
+        for pass in 1..=20 {
+            let t = Instant::now();
+            let out = runner().run(&mv, &profile, "probe").await;
+            eprintln!("PROBE line=0.7 move_pass={pass} took_ms={} rows={:?} flipped={} error={:?}", t.elapsed().as_millis(), out.kind("memory rows").map(|k| (k.total, k.present, k.written)), out.flipped, out.error);
+            if out.flipped || out.error.is_some() {
+                break;
+            }
+        }
+        for read in 1..=3 {
+            let t = Instant::now();
+            match mv.cells.memory_rows(&agent, anchor.clone()).await {
+                Ok(views) => {
+                    let call_ms = t.elapsed().as_millis();
+                    let t = Instant::now();
+                    let rows: Vec<crate::memory_rows::MemoryRow> = views
+                        .iter()
+                        .filter_map(|v| v.entry_as::<crate::commands_holochain::EncryptedEntryRaw>().ok())
+                        .filter_map(|ee| crate::transcript_crypto::decrypt(&data_key, &ee.nonce, &ee.cipher).ok())
+                        .filter_map(|plain| serde_json::from_slice(&plain).ok())
+                        .collect();
+                    let got = rows.len();
+                    let live = crate::memory_rows::reduce(rows).len();
+                    eprintln!("PROBE line=0.7 revisions={total} read={read} call_ms={call_ms} open_and_reduce_ms={} records={got} live={live}", t.elapsed().as_millis());
+                }
+                Err(e) => eprintln!("PROBE line=0.7 revisions={total} read={read} call_ms={} ERROR {e}", t.elapsed().as_millis()),
+            }
+        }
+        supervisor().stop();
+    }
+
+    /// A probe, not a pass or fail test:
+    /// rows of the `memory` scope written through one AI's agent, read
+    /// through a second AI's agent before and after the first AI is purged,
+    /// on each line. It prints lines that start with `PROBE`.
+    /// Run with the app closed:
+    /// `cargo test --lib -- --ignored live_probe_rows_after_a_purge --test-threads 1 --nocapture`
+    #[tokio::test(flavor = "multi_thread")]
+    #[ignore]
+    async fn live_probe_rows_after_a_purge_of_the_ai_that_wrote_them() {
+        use crate::conductor::{prepare_store_07, start_for_test, supervisor, Line07};
+        use crate::holochain::HolochainManager;
+        use crate::transcript_crypto::{encrypt, RecoveryMaterial};
+        use holochain_types::prelude::{ExternIO, Record};
+        use std::time::Instant;
+        #[derive(Serialize, Debug)]
+        struct SaveRowV1 {
+            cipher: Vec<u8>,
+            nonce: Vec<u8>,
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        #[derive(Serialize, Debug)]
+        struct RowsV1 {
+            anchor: holochain_types::prelude::AnyLinkableHash,
+        }
+        const ROWS: usize = 3;
+        let tmp = tempfile::tempdir().unwrap();
+        let profile = tmp.path().join("profile");
+        let resource_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
+        let data_key = [10u8; 32];
+        let material = || RecoveryMaterial { network_seed: format!("live-probe-purge-{}", std::process::id()), data_key_hex: hex::encode(data_key), version: 1 };
+        let anchor = crate::memory_rows::scope_anchor("memory", &data_key).unwrap();
+        let seal = |v: serde_json::Value| encrypt(&data_key, &serde_json::to_vec(&v).unwrap()).unwrap();
+
+        start_for_test(profile.clone(), None).await.expect("0.6 starts");
+        let manager = HolochainManager::new(resource_dir.clone(), material());
+        let first = manager.provision_agent("probe-purge-first").await.expect("AI 1");
+        let second = manager.provision_agent("probe-purge-second").await.expect("AI 2");
+        for n in 0..ROWS {
+            let row = serde_json::json!({"id": format!("item-{n}"), "scope": "memory", "kind": "note", "text": format!("made-up item {n}"), "as_of": n, "saved_by": "person", "provenance": "authored", "updated_at": n});
+            let (nonce, c) = seal(row);
+            manager.call_zome(&first, "transcript", "save_memory_row", ExternIO::encode(SaveRowV1 { cipher: c, nonce: nonce.to_vec(), anchor: anchor.clone() }).unwrap()).await.unwrap();
+        }
+        // Through an agent's 0.6 cell: how many of the rows it can read.
+        async fn seen_06(manager: &HolochainManager, agent: &str, anchor: &holochain_types::prelude::AnyLinkableHash) -> Result<usize, String> {
+            let out = manager.call_zome(agent, "transcript", "get_memory_rows", ExternIO::encode(RowsV1 { anchor: anchor.clone() }).map_err(|e| e.to_string())?).await?;
+            let records: Vec<Record> = ExternIO::decode(&out).map_err(|e| e.to_string())?;
+            Ok(records.len())
+        }
+        eprintln!("PROBE line=0.6 before_purge through=first seen={:?}", seen_06(&manager, &first, &anchor).await);
+        let t = Instant::now();
+        loop {
+            let seen = seen_06(&manager, &second, &anchor).await;
+            eprintln!("PROBE line=0.6 before_purge through=second after_ms={} seen={seen:?}", t.elapsed().as_millis());
+            if seen == Ok(ROWS) || t.elapsed() > Duration::from_secs(120) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+        drop(manager);
+        supervisor().stop();
+
+        let passphrase = prepare_store_07(&profile, &data_key).await.expect("prepared");
+        start_for_test(profile.clone(), Some(Line07 { passphrase, network_seed: material().network_seed, resource_dir: resource_dir.clone() })).await.expect("both lines");
+        let until = Instant::now() + Duration::from_secs(600);
+        while !supervisor().has(Line::V07) {
+            assert!(Instant::now() < until, "the 0.7 line did not join");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        let manager = HolochainManager::new(resource_dir, material());
+        manager.reconnect_existing_agents().await.expect("the AIs reconnect");
+        let hc = Arc::new(HolochainState::new());
+        let _ = hc.manager.set(manager);
+        let mv = Arc::new(Move { hc: hc.clone(), data_key, cells: crate::hc07::app_cells(), founding: Box::new(|a| a.to_string()), deleted: Box::new(HashSet::new), passed_in_full: Default::default(), known: Box::new(|_| crate::line_facts::Known::Unknown), full: Default::default() });
+        let out = runner().run(&mv, &profile, "probe").await;
+        eprintln!("PROBE line=0.7 move rows={:?} flipped={} error={:?}", out.kind("memory rows").map(|k| (k.total, k.present, k.written)), out.flipped, out.error);
+        let seen_07 = |agent: String| {
+            let (mv, anchor) = (mv.clone(), anchor.clone());
+            async move { mv.cells.memory_rows(&agent, anchor).await.map(|v| v.len()) }
+        };
+        eprintln!("PROBE line=0.7 before_purge through=first seen={:?}", seen_07(first.clone()).await);
+        let t = Instant::now();
+        loop {
+            let seen = seen_07(second.clone()).await;
+            eprintln!("PROBE line=0.7 before_purge through=second after_ms={} seen={seen:?}", t.elapsed().as_millis());
+            if seen == Ok(ROWS) || t.elapsed() > Duration::from_secs(120) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+
+        let manager = hc.get().expect("the manager");
+        eprintln!("PROBE purge of AI 1: {:?}", manager.purge_agent("probe-purge-first").await);
+        eprintln!("PROBE apps left on 0.7: {:?}", crate::hc07::agents_with_apps().await.map(|s| s.len()));
+        for wait in [0u64, 10, 30] {
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            eprintln!("PROBE line=0.6 after_purge wait_s={wait} through=second seen={:?}", seen_06(&manager, &second, &anchor).await);
+            eprintln!("PROBE line=0.7 after_purge wait_s={wait} through=second seen={:?}", seen_07(second.clone()).await);
+        }
+        supervisor().stop();
+    }
 }
