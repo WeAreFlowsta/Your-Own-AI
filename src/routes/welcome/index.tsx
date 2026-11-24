@@ -320,6 +320,11 @@ export default component$(() => {
     }
   });
 
+  // The person pressed a set themselves. Kept apart from `preset`, which
+  // also follows what the AIs are named: a stale write that puts the old
+  // names back for a moment reads as "personal" there, and is no choice.
+  const pickedByHand = useSignal(false);
+
   const applyPreset$ = $(async (kind: DefaultAiPreset, again = false) => {
     if (applying.value || (preset.value === kind && !again)) return;
     applying.value = true;
@@ -392,8 +397,10 @@ export default component$(() => {
         await applyPreset$("work", true);
       }
       await new Promise((r) => setTimeout(r, 1500));
-      // Someone chose the other set meanwhile: theirs stands.
-      if (preset.value !== "work") return;
+      // Someone chose the other set meanwhile: theirs stands. Only a
+      // press counts: the names going back to the starters' for a moment
+      // (the stale write this loop exists for) is not a choice.
+      if (pickedByHand.value) return;
       if (shown() === want) held++;
     }
   });
@@ -667,7 +674,7 @@ export default component$(() => {
                       aria-pressed={on}
                       data-testid="welcome-preset-option"
                       data-preset={k}
-                      onClick$={() => applyPreset$(k)}
+                      onClick$={() => { pickedByHand.value = true; return applyPreset$(k); }}
                       class={`text-left rounded-xl border-2 p-4 transition hover:border-[var(--text-primary)] ${
                         on ? "border-[var(--bg-button-primary)] bg-[var(--bg-card)]" : "border-[var(--border-subtle)]"
                       }`}
