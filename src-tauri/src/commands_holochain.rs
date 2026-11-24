@@ -95,6 +95,8 @@ pub struct TranscriptEntryInfo {
     /// What memory gave the reply (None for replies from before it was
     /// recorded, and for the person's own messages).
     pub given: Option<crate::memory_block::GivenRecord>,
+    /// The line the reply gets under it, from that record.
+    pub given_line: Option<crate::memory_quotes::ReplyLine>,
     pub agent_log: Option<serde_json::Value>,
     pub folder_path: Option<String>,
 }
@@ -1844,6 +1846,7 @@ pub async fn delete_conversation(
 
 /// A decrypted message as the front end sees it.
 fn entry_info(hash: String, e: MessagePlain) -> TranscriptEntryInfo {
+    let given_line = crate::memory_quotes::line_from_record(e.given.as_ref(), &e.content);
     TranscriptEntryInfo {
         hash,
         role: e.role,
@@ -1866,6 +1869,7 @@ fn entry_info(hash: String, e: MessagePlain) -> TranscriptEntryInfo {
         routing_reason: e.routing_reason,
         routing_task: e.routing_task,
         stopped: e.stopped,
+        given_line,
         given: e.given,
         agent_log: e.agent_log,
         folder_path: e.folder_path,
@@ -2515,7 +2519,7 @@ mod order_tests {
             hash: hash.into(), role: "user".into(), content: String::new(), sequence: seq, timestamp: ts,
             model: String::new(), model_hash: None, provider_fingerprint: None, thinking: None, tokens: None,
             sources: None, system_prompt: None, mode: None, attachments: None, images: None, grounded: None,
-            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None, given: None,
+            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None, given: None, given_line: None,
             agent_log: None, folder_path: None,
         }
     }

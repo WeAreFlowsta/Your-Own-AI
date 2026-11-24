@@ -180,6 +180,14 @@ pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Ve
     Checked { check, given, line }
 }
 
+/// The line a recorded reply gets when its conversation is opened again:
+/// from the record alone, whose passages carry whether they were quoted.
+pub(crate) fn line_from_record(given: Option<&GivenRecord>, reply: &str) -> Option<ReplyLine> {
+    let g = given?;
+    let check = QuoteCheck { quoted: g.exchanges.iter().map(|e| e.quoted).collect(), not_given: Vec::new(), quotes: 0 };
+    line_for(Some(g), &check, reply)
+}
+
 /// Does the reply say that a search was made? ("I searched your
 /// conversations and found nothing that answers it.")
 pub(crate) fn reports_a_search(reply: &str) -> bool {
@@ -344,6 +352,10 @@ mod tests {
         assert_eq!(done.given.unwrap().exchanges.len(), 1);
         assert_eq!(done.check.quoted, vec![false, true]);
         assert!(memory_reply_checked("no record".into(), None, vec![]).line.is_none());
+        // Opened again later: the same line, from the record alone.
+        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some({ let mut r = record(ran(2, 2)); r.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }]; r }), given());
+        assert_eq!(line_from_record(done.given.as_ref(), "As you said..."), done.line);
+        assert_eq!(line_from_record(None, "x"), None);
     }
 
     #[test]

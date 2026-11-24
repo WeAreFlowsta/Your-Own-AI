@@ -528,6 +528,8 @@ export interface HolochainTranscriptEntry {
   /** What memory gave the reply: the search's report and pointers to the
    *  exchanges (never their text). Null on replies from before it was kept. */
   given?: Record<string, unknown> | null;
+  /** The line the reply gets under it, worked out from that record. */
+  given_line?: import("../utils/memory").ReplyLine | null;
   /** Agent turn: the working log ({ items, stats }) - restores the rail on
    *  resume. Client-side schema; old entries read back null. */
   agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats']; surface?: 'project' | 'tools' } | null;
