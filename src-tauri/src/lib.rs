@@ -24,6 +24,7 @@ mod memory_index;         // memory's search index: vectors and pointers for eve
 mod memory_reading;       // the background job that keeps the index level with the conversations
 mod memory_block;         // the search results placed ahead of the question: exchanges, the report, the rule
 mod memory_quotes;        // the quote check, and which line shows under a reply
+mod memory_items;         // the memory item: what was kept, its state, who may use it, and the log of changes
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
