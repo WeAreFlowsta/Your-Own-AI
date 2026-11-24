@@ -177,7 +177,14 @@ describe("memory, asked a question set", () => {
         // The request kept must be this question's: a turn that never
         // reached the model would leave the one before it.
         expect(lastText).toContain(q.question.slice(0, 40));
-        save({ n: q.n, setup: `${SETUP}-chat`, question: q.question, answer: r.text, ms: Date.now() - started, request });
+        // The reply's own words: the bubble's body, without the AI's name
+        // and the buttons that stand around it.
+        const body = await browser.execute(() => {
+          const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined;
+          const b = m?.querySelector(".markdown-content:not(.thinking-markdown)") as HTMLElement | null;
+          return b ? b.innerText : null;
+        });
+        save({ n: q.n, setup: `${SETUP}-chat`, question: q.question, answer: (body ?? r.text).trim(), ms: Date.now() - started, request });
       }
       if (PATHS.includes("port") && !have.has(`${q.n}|${SETUP}-port`)) {
         await dev("POST", "memory-stores", { do: "back" });
