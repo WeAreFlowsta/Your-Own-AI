@@ -1384,7 +1384,14 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   if (props.message.role === 'user') {
     const images = props.message.images;
     return (
-      <div class="group flex flex-col items-end mb-4" data-testid="chat-message" data-role="user">
+      <div
+        class="group flex flex-col items-end mb-4"
+        data-testid="chat-message"
+        data-role="user"
+        {...(props.message.content && props.turnAiId
+          ? { 'data-remember-aiid': props.turnAiId, 'data-remember-role': 'user', 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
+          : {})}
+      >
       <div class="flex justify-end items-start gap-2 w-full">
         <div class="bg-[var(--bg-user-message)] chat-bubble-border text-[var(--text-primary)] text-sm mt-1 py-1.5 px-4 leading-loose tracking-wide font-light max-w-[calc(100%)] rounded-2xl">
           {images && images.length > 0 && (
@@ -1516,8 +1523,8 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-error={props.message.error ? "1" : "0"}
       data-served={props.message.servedBy ?? ""}
       data-stopped={props.message.stopped ? "1" : undefined}
-      {...(props.message.content && (props.message.role === 'assistant' || (props.message.role === 'user' && props.turnAiId))
-        ? { 'data-remember-aiid': props.message.role === 'assistant' ? props.message.model : props.turnAiId, 'data-remember-role': props.message.role, 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
+      {...(props.message.role === 'assistant' && props.message.content
+        ? { 'data-remember-aiid': props.message.model, 'data-remember-role': 'assistant', 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
         : {})}
     >
       {renderAvatarContent()}

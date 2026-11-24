@@ -644,12 +644,19 @@ async fn session_block(app: &AppHandle, ai: &ResolvedAi, msgs: &mut [Value], hea
                 _ => (crate::memory_prompt::Surface::Session, session_project(app, true).await),
             };
             let question = crate::memory_session::question_of(&prompt, crate::memory_session::typed().as_deref());
+            // The project's rules ride beside the prompt as well as in the
+            // system message, after what memory holds on the matter.
+            let rules = crate::memory_prompt::project_rules_beside(app, project.as_deref());
             let m = turn_memory_as(app, ai, surface, project, &question, true, false).await;
+            let after = match (m.after_question, rules) {
+                (Some(note), Some(rules)) => Some(format!("{note}\n\n{rules}")),
+                (note, rules) => note.or(rules),
+            };
             let turn = crate::memory_session::Turn {
                 key: key.clone(),
                 question,
                 before: m.before_question,
-                after: m.after_question,
+                after,
                 given: m.given,
                 given_texts: m.given_texts,
                 remember: m.remember,

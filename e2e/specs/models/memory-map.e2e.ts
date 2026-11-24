@@ -64,7 +64,11 @@ describe("the Map", () => {
     const subject = data.subjects.find((s) => s.kind === "conversation")!;
     console.log(`e2e: the map: ${JSON.stringify(data.subjects.map((s) => [s.name, s.items]))}`);
     expect(subject.items).toBe(1);
-    expect(subject.name).toMatch(/, (January|February|March|April|May|June|July|August|September|October|November|December) \d+$/);
+    // Not named by the person yet: shown by the conversation's title and the day, on this computer's clock.
+    const shown = (await placed()).find((p) => p.id === subject.id)!.name;
+    console.log(`e2e: shown as ${JSON.stringify(shown)}`);
+    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric" });
+    expect(shown.endsWith(`, ${today}`)).toBe(true);
     expect(await textOf('[data-testid="map-sentence"]')).toBe("What your AIs can use: 2 subjects, 1 item.");
 
     // A real press on the circle, where it is drawn.
@@ -97,7 +101,7 @@ describe("the Map", () => {
       console.log(`e2e: pointer events at the circle's place opened it: ${pressed}`);
     }
     if (!pressed) await browser.execute((id) => (window as any).__yoaiMap.select(id), subject.id);
-    await browser.waitUntil(async () => (await textOf('[data-testid="map-panel-name"]')) === subject.name, { timeout: 20_000, timeoutMsg: "the panel did not open on the subject" });
+    await browser.waitUntil(async () => (await textOf('[data-testid="map-panel-name"]')) === shown, { timeout: 20_000, timeoutMsg: "the panel did not open on the subject" });
     await (await $('[data-testid="map-panel-item"]')).waitForExist({ timeout: 20_000 });
     expect(await textOf('[data-testid="map-panel-item"]')).toContain("Mill and Sons");
     expect(await textOf('[data-testid="map-panel-count"]')).toBe("1 item");
@@ -143,5 +147,49 @@ describe("the Map", () => {
     await press(await $('[data-testid="map-mode-map"]'));
     await browser.pause(1_500);
     await shot("memory-map-two-subjects");
+  });
+
+  it("an item can be corrected, moved to another subject and forgotten, from the subject's panel", async function () {
+    this.timeout(300_000);
+    const all = () => invoke<Item[]>("memory_items");
+    const panelItems = async () => ((await browser.execute(() => document.querySelectorAll('[data-testid="map-panel-item"]').length)) as number);
+    const you = (await map()).subjects.find((s) => s.kind === "about_you")!;
+    const other = (await map()).subjects.find((s) => s.kind === "conversation")!;
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), you.id);
+    await (await $('[data-testid="map-panel-item"]')).waitForExist({ timeout: 20_000 });
+
+    // Correct: the words change, and the item is still the person's.
+    await press(await $('[data-testid="item-correct"]'));
+    const box = await $('[data-testid="item-correct-text"]');
+    await box.waitForExist({ timeout: 20_000 });
+    await browser.execute((e) => {
+      const el = e as HTMLTextAreaElement;
+      el.focus();
+      el.value = "I bake on Saturdays and Sundays.";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }, box);
+    await press(await $('[data-testid="item-correct-save"]'));
+    await browser.waitUntil(async () => (await all()).some((i) => i.text === "I bake on Saturdays and Sundays." && i.item.state === "current"), { timeout: 60_000, timeoutMsg: "the correction was not saved" });
+    await browser.waitUntil(async () => (await textOf('[data-testid="map-panel-item"]')).includes("Saturdays and Sundays"), { timeout: 30_000, timeoutMsg: "the panel did not show the corrected words" });
+
+    // Move: it leaves About you for the other subject.
+    await press(await $('[data-testid="item-move"]'));
+    await press(await $(`[data-testid="item-move-to"][data-subject="${other.id}"]`));
+    await browser.waitUntil(async () => other.ids.includes((await all()).find((i) => i.text === "I bake on Saturdays and Sundays.")?.item.subject ?? ""), { timeout: 60_000, timeoutMsg: "the item did not move" });
+    await (await $('[data-testid="map-panel-empty"]')).waitForExist({ timeout: 30_000 });
+    const after = await map();
+    console.log(`e2e: after the move: ${JSON.stringify(after.subjects.map((s) => [s.name, s.items]))}`);
+    expect(after.subjects.find((s) => s.id === you.id)!.items).toBe(0);
+    expect(after.subjects.find((s) => s.id === other.id)!.items).toBe(2);
+
+    // Forget: one fewer in the subject, and the list of changes has all three.
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), other.id);
+    await browser.waitUntil(async () => (await panelItems()) === 2, { timeout: 30_000, timeoutMsg: "the subject's two items were not listed" });
+    await press(await $('[data-testid="item-forget"]'));
+    await browser.waitUntil(async () => (await map()).subjects.find((s) => s.id === other.id)?.items === 1, { timeout: 60_000, timeoutMsg: "the item was not forgotten" });
+    const whats = (await invoke<{ what: string }[]>("memory_changes")).map((c) => c.what);
+    console.log(`e2e: changes: ${JSON.stringify(whats)}`);
+    for (const what of ["corrected", "moved", "forgotten"]) expect(whats).toContain(what);
+    await shot("memory-map-item-actions");
   });
 });

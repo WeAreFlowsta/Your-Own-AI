@@ -8,7 +8,7 @@ import { MemoryQuestions } from './MemoryQuestions';
 interface Change {
   id: string;
   at: number;
-  what: 'kept' | 'replaced' | 'closed' | 'forgotten' | 'confirmed' | 'corrected' | 'audience_changed' | 'undone';
+  what: 'kept' | 'replaced' | 'closed' | 'forgotten' | 'confirmed' | 'corrected' | 'audience_changed' | 'moved' | 'undone';
   items: string[];
   /** `person` | `ai:<key>` | `tidy`. */
   by: string;
@@ -37,6 +37,8 @@ function happened(c: Change, who: string): string {
       return 'Your note changed';
     case 'audience_changed':
       return 'Who can use this changed';
+    case 'moved':
+      return 'Moved to another subject';
     default:
       return 'Undone';
   }

@@ -273,6 +273,8 @@ pub enum What {
     Confirmed,
     Corrected,
     AudienceChanged,
+    /// Moved to another subject.
+    Moved,
     Undone,
 }
 
@@ -436,6 +438,12 @@ pub(crate) fn forget(item: &Item, now: i64) -> (MemoryRow, Change) {
 pub(crate) fn set_audience(item: &Item, audience: Audience, now: i64) -> (MemoryRow, Change) {
     let meta = ItemMeta { audience, ..item.meta.clone() };
     changed(item, None, meta, What::AudienceChanged, "person", now)
+}
+
+/// The person moves an item to another subject.
+pub(crate) fn move_to(item: &Item, subject: &str, now: i64) -> (MemoryRow, Change) {
+    let meta = ItemMeta { subject: Some(subject.to_string()), ..item.meta.clone() };
+    changed(item, None, meta, What::Moved, "person", now)
 }
 
 /// Undo a change: the row to save, and the log's entry for the undo. The
@@ -887,6 +895,8 @@ pub enum ItemEdit {
     Forget,
     Audience { audience: Audience },
     Close { done: bool },
+    /// To another subject, by its id.
+    Move { subject: String },
 }
 
 #[tauri::command]
@@ -902,6 +912,11 @@ pub async fn memory_item_change(app: tauri::AppHandle, id: String, edit: ItemEdi
         ItemEdit::Forget => forget(item, now),
         ItemEdit::Audience { audience } => set_audience(item, audience, now),
         ItemEdit::Close { done } => close(item, done, "person", now),
+        ItemEdit::Move { subject } => {
+            let all = crate::memory_subjects::subjects(&crate::memory_rows::read_cache(&app, &key, SCOPE));
+            let to = crate::memory_subjects::standing(&all, &subject).map(|s| s.id.clone()).or_else(|| (subject == crate::memory_subjects::ABOUT_YOU).then(|| subject.clone())).ok_or("that subject is not here any more")?;
+            move_to(item, &to, now)
+        }
     };
     let saved = save(&app, &key, row, change).await?;
     // Other words need another vector.
@@ -1066,6 +1081,19 @@ mod tests {
         // Something left to do starts open.
         let (row, _) = keep(&[], Keep { id: "it-3".into(), text: "Ask the fitter about a second deck.", item_type: ItemType::Open, ptr: ptr(6), as_of: 1, by: "person", audience: None, kind: "exchange", why: "said", quote: None, subject: None, now: NOW }).ok().unwrap();
         assert_eq!((meta_of(&row).unwrap().state, row.kind.as_str()), (ItemState::Open, "note"));
+    }
+
+    #[test]
+    fn a_move_changes_only_the_subject_and_undo_puts_it_back() {
+        let (row, _) = keep(&[], Keep { id: "it-1".into(), text: "The oven is a Rofco B40.", item_type: ItemType::Detail, ptr: ptr(3), as_of: 1, by: "person", audience: None, kind: "exchange", why: "pressed", quote: None, subject: Some("sub-a".into()), now: 5 }).ok().unwrap();
+        let item = Item { meta: meta_of(&row).unwrap(), row };
+        let (moved, change) = move_to(&item, "sub-b", 9);
+        let meta = meta_of(&moved).unwrap();
+        assert_eq!((meta.subject.as_deref(), moved.text.as_str(), meta.state), (Some("sub-b"), "The oven is a Rofco B40.", ItemState::Current));
+        assert_eq!(change.what, What::Moved);
+        let now_item = Item { meta, row: moved };
+        let (back, _) = undo(&change, &now_item, 12).unwrap();
+        assert_eq!(meta_of(&back).unwrap().subject.as_deref(), Some("sub-a"));
     }
 
     #[test]

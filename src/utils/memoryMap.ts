@@ -64,13 +64,21 @@ export function stretchDates(first: number, last: number, now = Date.now()): str
   return `${fmt(a, years)} to ${fmt(b, years)}`;
 }
 
+/** A conversation's title, cut at a word when it is long. */
+export function shortTitle(title: string, most = 40): string {
+  const t = title.trim().replace(/\s+/g, " ");
+  if (t.length <= most) return t;
+  const cut = t.slice(0, most + 1);
+  const at = cut.lastIndexOf(" ");
+  return `${(at > most / 2 ? cut.slice(0, at) : t.slice(0, most)).replace(/[\s,;:.\-]+$/, "")}…`;
+}
+
 /** The name a subject is shown by: the person's once they named it; else,
  *  for a stretch of a conversation, the conversation's title as it is now
  *  with the dates its items span, on the person's own clock. */
 export function shownName(s: MapSubject): string {
   if (s.nameAccepted || s.kind !== "conversation" || s.first == null || s.last == null) return s.name;
-  const title = (s.title ?? "").trim().slice(0, 40) || "A conversation";
-  return `${title}, ${stretchDates(s.first, s.last)}`;
+  return `${shortTitle(s.title ?? "") || "A conversation"}, ${stretchDates(s.first, s.last)}`;
 }
 
 export async function loadMap(view: MapView): Promise<MemoryMapData> {

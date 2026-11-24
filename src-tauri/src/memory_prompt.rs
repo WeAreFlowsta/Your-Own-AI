@@ -117,6 +117,38 @@ fn layer_text(rows: &[&MemoryRow]) -> String {
 
 pub(crate) const PROJECT_HEADING: &str = "Rules for this project:";
 
+/// How much of a project's rules is put beside the person's prompt.
+pub(crate) const RULES_BESIDE_BUDGET: usize = 1200;
+
+/// A project's rules as a note beside the person's prompt in a session.
+/// They are in the session's system message too; a small model reads what
+/// is beside the question and skims a long system message. Pinned rules
+/// first, then the newest, within a budget; given in their own order.
+pub(crate) fn rules_beside(project_rows: &[MemoryRow]) -> Option<String> {
+    let all: Vec<&MemoryRow> = project_rows.iter().filter(|r| !r.deleted && is_rule_kind(&r.kind) && !r.text.trim().is_empty()).collect();
+    let mut wanted = all.clone();
+    wanted.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+    let mut kept: Vec<&MemoryRow> = Vec::new();
+    for r in wanted {
+        let mut tried = kept.clone();
+        tried.push(r);
+        if layer_text(&in_order(&tried, &all)).len() <= RULES_BESIDE_BUDGET {
+            kept = tried;
+        }
+    }
+    let text = layer_text(&in_order(&kept, &all));
+    (!text.is_empty()).then(|| format!("{PROJECT_HEADING}\n{text}"))
+}
+
+/// The note of a project's rules for a session's prompt, read from this
+/// device's copy of the project's rows.
+pub(crate) fn project_rules_beside(app: &tauri::AppHandle, project: Option<&str>) -> Option<String> {
+    use tauri::Manager;
+    let scope = project_scope(project)?;
+    let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).ok()?;
+    rules_beside(&crate::memory_rows::read_cache(app, &key, &scope))
+}
+
 /// The rows of `all` that are among `kept`, in the order of `all`.
 fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a MemoryRow> {
     all.iter().copied().filter(|r| kept.iter().any(|k| std::ptr::eq(*k, *r))).collect()
@@ -882,6 +914,20 @@ mod tests {
 
     fn with_rows(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
         block(&Held { facts: &[], rows, project_rows, recall: None, question_vector: None, conversation: None })
+    }
+
+    #[test]
+    fn a_projects_rules_are_also_a_note_beside_a_sessions_prompt() {
+        assert_eq!(rules_beside(&[]), None);
+        let rows = vec![row("project:p", "rule", "Deploy with: make ship", 10, false), row("project:p", "command", "make test", 20, false), row("project:p", "note", "A note is not a rule.", 30, false)];
+        let note = rules_beside(&rows).unwrap();
+        assert!(note.starts_with(PROJECT_HEADING), "{note}");
+        assert!(note.contains("Deploy with: make ship") && note.contains("make test") && !note.contains("A note is not a rule."), "{note}");
+        // Over the budget: the newest stay, and the note stays within it.
+        let many: Vec<MemoryRow> = (0..60).map(|n| row("project:p", "rule", &format!("Rule number {n} says to do a particular thing in a particular way."), n, false)).collect();
+        let cut = rules_beside(&many).unwrap();
+        assert!(cut.len() <= RULES_BESIDE_BUDGET + PROJECT_HEADING.len() + 1);
+        assert!(cut.contains("Rule number 59 ") && !cut.contains("Rule number 0 "), "the newest are kept");
     }
 
     #[test]
