@@ -92,6 +92,9 @@ pub struct TranscriptEntryInfo {
     pub routing_task: Option<String>,
     /// The user stopped this reply; content is as far as it got.
     pub stopped: Option<bool>,
+    /// What memory gave the reply (None for replies from before it was
+    /// recorded, and for the person's own messages).
+    pub given: Option<crate::memory_block::GivenRecord>,
     pub agent_log: Option<serde_json::Value>,
     pub folder_path: Option<String>,
 }
@@ -317,6 +320,10 @@ pub struct Provenance {
     /// The user stopped this reply; content is as far as it got.
     #[serde(default)]
     pub stopped: Option<bool>,
+    /// What memory gave the reply: the search's report and pointers to the
+    /// exchanges, never their text.
+    #[serde(default)]
+    pub given: Option<crate::memory_block::GivenRecord>,
 }
 
 /// Plaintext message payload (lives INSIDE the ciphertext). Provenance fields
@@ -362,6 +369,10 @@ struct MessagePlain {
     /// The user stopped this reply; content is as far as it got.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<bool>,
+    /// What memory gave the reply. Like the fields above it lives in the
+    /// encrypted plaintext only: no DNA change, old entries read back None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub given: Option<crate::memory_block::GivenRecord>,
     /// The agent turn's working log (steps/narration/thoughts/permission
     /// receipts + stats), opaque JSON owned by the frontend. The plaintext
     /// schema is client-side and encrypted before the zome sees it, so this
@@ -653,6 +664,7 @@ pub async fn record_transcript_entry(
         routing_reason: prov.routing_reason,
         routing_task: prov.routing_task,
         stopped: prov.stopped,
+        given: prov.given,
         agent_log,
         folder_path,
     };
@@ -1854,6 +1866,7 @@ fn entry_info(hash: String, e: MessagePlain) -> TranscriptEntryInfo {
         routing_reason: e.routing_reason,
         routing_task: e.routing_task,
         stopped: e.stopped,
+        given: e.given,
         agent_log: e.agent_log,
         folder_path: e.folder_path,
     }
@@ -2399,6 +2412,7 @@ mod size_guard_tests {
             routing_reason: None,
             routing_task: None,
             stopped: None,
+            given: None,
             agent_log: log,
             folder_path: None,
         }
@@ -2406,6 +2420,38 @@ mod size_guard_tests {
 
     fn size(p: &MessagePlain) -> usize {
         serde_json::to_vec(p).unwrap().len()
+    }
+
+    #[test]
+    fn old_entries_read_back_without_given() {
+        // A reply stored before the record existed.
+        let old = serde_json::json!({ "role": "assistant", "content": "Hartwell Mills.", "sequence": 3, "timestamp": 5, "model": "m.gguf", "thinking": null, "tokens": null });
+        let plain: MessagePlain = serde_json::from_value(old).unwrap();
+        assert!(plain.given.is_none());
+        // And a reply stored without one stays as compact as before.
+        assert!(!serde_json::to_string(&plain_with("x", None)).unwrap().contains("given"));
+    }
+
+    #[test]
+    fn given_survives_shrink_to_budget() {
+        use crate::memory_block::{GivenExchange, GivenRecord, Ptr, SearchReport};
+        let ptr = |s: u32| Ptr { c: 1_768_896_000_000_000, s, t: 1_768_896_090_000_000, a: 0, b: 600 };
+        let given = GivenRecord {
+            v: 1,
+            search: SearchReport { ran: true, found: 12, given: 12, read_share: 1.0, ..Default::default() },
+            exchanges: (0..12).map(|i| GivenExchange { before: Some(ptr(i)), hit: ptr(i + 1), after: Some(ptr(i + 2)), score: 0.5, quoted: false }).collect(),
+            fingerprint: "f".repeat(64),
+            ..Default::default()
+        };
+        // Twelve exchanges of three pointers are a few kilobytes.
+        assert!(serde_json::to_vec(&given).unwrap().len() < 4096);
+        let big_log = serde_json::json!({ "items": (0..4000).map(|i| serde_json::json!({ "type": "thought", "text": format!("{i} {}", "x".repeat(400)) })).collect::<Vec<_>>() });
+        let mut plain = plain_with("the reply", Some(big_log));
+        plain.given = Some(given.clone());
+        assert!(size(&plain) > PLAIN_BUDGET);
+        shrink_to_budget(&mut plain);
+        assert!(size(&plain) <= PLAIN_BUDGET);
+        assert_eq!(plain.given, Some(given), "the working log gives way, never the record of what was given");
     }
 
     #[test]
@@ -2469,7 +2515,7 @@ mod order_tests {
             hash: hash.into(), role: "user".into(), content: String::new(), sequence: seq, timestamp: ts,
             model: String::new(), model_hash: None, provider_fingerprint: None, thinking: None, tokens: None,
             sources: None, system_prompt: None, mode: None, attachments: None, images: None, grounded: None,
-            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None,
+            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None, given: None,
             agent_log: None, folder_path: None,
         }
     }

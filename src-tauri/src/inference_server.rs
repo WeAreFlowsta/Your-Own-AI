@@ -448,9 +448,11 @@ fn build_persona_prompt(ai: &ResolvedAi, user_memory: &str) -> String {
 
 // ── handlers ────────────────────────────────────────────────────────────────
 
-/// The memory part of a turn through this port, for an AI.
-async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_prompt::Surface, project: Option<String>, query: &str) -> String {
+/// What memory adds to a turn through this port, for an AI.
+async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_prompt::Surface, project: Option<String>, query: &str) -> crate::memory_prompt::TurnMemory {
     let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
+    let online = ai.model.starts_with("online:");
+    let window = if online { None } else { crate::llm::window_if_loaded(app, &ai.model).await.map(|(w, _)| w.min(u64::from(u32::MAX)) as u32) };
     crate::memory_prompt::for_turn(app, crate::memory_prompt::TurnInput {
         ai_id: Some(ai.id.clone()),
         founding_key: founding,
@@ -460,22 +462,53 @@ async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_pr
         question: query.to_string(),
         question_vector: None,
         embed_here: true,
+        window_tokens: window,
+        online,
+        room_tokens: None,
+        previous_question: None,
+        on_wire_from: None,
     })
     .await
-    .system_part
+}
+
+/// The text of a message's content: the string, or the text parts of a
+/// content array.
+fn content_text(content: &Value) -> String {
+    match content {
+        Value::String(s) => s.clone(),
+        Value::Array(parts) => parts.iter().filter(|p| p["type"] == "text").filter_map(|p| p["text"].as_str()).collect::<Vec<_>>().join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Put what memory found ahead of the question in the last message the
+/// person sent. For this turn only: the caller's own copy is untouched.
+fn with_found_beside(msgs: &mut [Value], before: Option<&str>, after: Option<&str>) {
+    let Some(last) = msgs.iter_mut().rev().find(|m| m["role"] == "user") else { return };
+    match &mut last["content"] {
+        Value::String(text) => *text = crate::memory_block::turn_text(before, text, after),
+        Value::Array(parts) => {
+            if let Some(part) = parts.iter_mut().find(|p| p["type"] == "text") {
+                if let Some(text) = part["text"].as_str() {
+                    part["text"] = json!(crate::memory_block::turn_text(before, text, after));
+                }
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Persona mode's messages: this server owns the system prompt (the persona,
-/// with the memory part in its slot), followed by the caller's messages.
+/// with the memory part in its slot), followed by the caller's messages,
+/// the last of the person's with what memory found beside the question.
 async fn persona_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], query: &str, with_memory: bool) -> Vec<Value> {
-    let user_memory = if with_memory {
-        turn_memory(app, ai, crate::memory_prompt::Surface::ApiPersona, None, query).await
-    } else {
-        MEMORY_OFF_LINE.to_string()
-    };
-    let persona = build_persona_prompt(ai, &user_memory);
+    let memory = if with_memory { Some(turn_memory(app, ai, crate::memory_prompt::Surface::ApiPersona, None, query).await) } else { None };
+    let persona = build_persona_prompt(ai, memory.as_ref().map(|m| m.system_part.as_str()).unwrap_or(MEMORY_OFF_LINE));
     let mut msgs = vec![json!({ "role": "system", "content": persona })];
     msgs.extend(incoming.iter().cloned());
+    if let Some(m) = &memory {
+        with_found_beside(&mut msgs, m.before_question.as_deref(), m.after_question.as_deref());
+    }
     msgs
 }
 
@@ -537,7 +570,7 @@ async fn agent_memory_message(app: &AppHandle, ai: &ResolvedAi, caller: AgentCal
     let part = match KEPT.get(&key) {
         Some(part) => part,
         None => {
-            let part = turn_memory(app, ai, surface, project, query).await;
+            let part = turn_memory(app, ai, surface, project, query).await.system_part;
             KEPT.put(&key, &part);
             part
         }
@@ -883,7 +916,7 @@ async fn memory_search_dev(
             Ok(a) => json!(a),
             Err(e) => json!({ "error": e }),
         };
-        answer["block"] = json!(turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await);
+        answer["memory"] = json!(turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await);
     }
     Json(answer).into_response()
 }
@@ -922,6 +955,11 @@ async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Valu
             question,
             question_vector: None,
             embed_here: true,
+            window_tokens: body["windowTokens"].as_u64().map(|w| w as u32),
+            online: body["online"].as_bool().unwrap_or(false),
+            room_tokens: body["roomTokens"].as_u64().map(|w| w as u32),
+            previous_question: body["previousQuestion"].as_str().map(str::to_string),
+            on_wire_from: body["onWireFrom"].as_u64().map(|w| w as u32),
         })
         .await;
         return Json(json!({ "ai": ai.name, "path": "chat", "memory": memory })).into_response();
@@ -1251,9 +1289,8 @@ async fn chat_completions(
         .iter()
         .rev()
         .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|m| m.get("content").and_then(Value::as_str))
-        .unwrap_or("")
-        .to_string();
+        .map(|m| content_text(&m["content"]))
+        .unwrap_or_default();
 
     // Auto modes: resolve "auto:*" to a concrete model for this question, so the
     // online/offline logic below runs on the resolved value.

@@ -315,6 +315,7 @@ pub(crate) struct CachedConv {
     pub touched: i64,
     pub hash: String,
     pub agent_key: String,
+    pub ai_name: String,
     pub source: Option<String>,
     pub started_at: i64,
     pub title: Option<String>,
@@ -344,7 +345,7 @@ pub(crate) fn cached_conversations(app: &AppHandle) -> Result<Vec<CachedConv>, S
     let mut out = Vec::new();
     for (k, blob, touched) in rows.flatten() {
         let Ok(m) = dec(&key, &blob).and_then(|p| serde_json::from_slice::<ConvMeta>(&p).map_err(|e| e.to_string())) else { continue };
-        out.push(CachedConv { last_seq: last.get(&k).copied().unwrap_or(-1), k, touched, hash: m.hash, agent_key: m.agent_key, source: m.source, started_at: m.started_at, title: m.title });
+        out.push(CachedConv { last_seq: last.get(&k).copied().unwrap_or(-1), k, touched, hash: m.hash, agent_key: m.agent_key, ai_name: m.ai_name, source: m.source, started_at: m.started_at, title: m.title });
     }
     Ok(out)
 }
@@ -361,6 +362,43 @@ pub(crate) fn cached_entries(app: &AppHandle, k: &str, from: i64) -> Result<Vec<
         out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content });
     }
     Ok(out)
+}
+
+/// Does any message the cache holds mention these words, together and in
+/// this order? Asked of the keyword index (loaded on first use).
+pub(crate) fn mentions(app: &AppHandle, phrase: &str) -> Result<bool, String> {
+    let words: Vec<String> = phrase.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect();
+    if words.is_empty() {
+        return Ok(true);
+    }
+    ensure_index(app)?;
+    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
+    let found: Option<i64> = idx.query_row("SELECT 1 FROM e WHERE e MATCH ?1 LIMIT 1", params![format!("\"{}\"", words.join(" "))], |r| r.get(0)).optional().map_err(|e| e.to_string())?;
+    Ok(found.is_some())
+}
+
+/// Does the cache hold a word spelled nearly like this one (one or two
+/// letters apart; one for a four-letter word; none for a shorter one)?
+pub(crate) fn has_close_spelling(app: &AppHandle, word: &str) -> Result<bool, String> {
+    let word = word.to_lowercase();
+    let n = word.chars().count();
+    if n < 4 || word.contains(|c: char| !c.is_alphanumeric()) {
+        return Ok(false);
+    }
+    let limit = if n == 4 { 1 } else { 2 };
+    ensure_index(app)?;
+    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
+    idx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS temp.e_terms USING fts5vocab('main', 'e', 'row');").map_err(|e| e.to_string())?;
+    let mut st = idx.prepare("SELECT term FROM temp.e_terms WHERE length(term) BETWEEN ?1 AND ?2").map_err(|e| e.to_string())?;
+    let terms = st.query_map(params![(n - limit) as i64, (n + limit) as i64], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    for term in terms.flatten() {
+        if term != word && crate::memory_block::edit_distance(&word, &term, limit) <= limit {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// The row key of a conversation, from its record id.

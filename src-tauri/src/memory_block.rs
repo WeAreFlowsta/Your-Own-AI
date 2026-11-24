@@ -95,7 +95,14 @@ impl Wording {
         Wording { today: false, rule_scope: false, who_and_where: false }
     }
     /// The form that ships.
+    /// The form that ships. Today's date is in the system part of the
+    /// prompt, so the block does not repeat it.
     pub(crate) const fn shipped() -> Self {
+        Wording { today: false, rule_scope: true, who_and_where: true }
+    }
+    /// Every addition at once (for measuring them together).
+    #[cfg(test)]
+    pub(crate) const fn all() -> Self {
         Wording { today: true, rule_scope: true, who_and_where: true }
     }
 }
@@ -201,6 +208,8 @@ pub(crate) struct Block {
     pub given: Vec<GivenExchange>,
     /// How many the search found, before the budget.
     pub found: u32,
+    /// How many are shown (exchanges and dated lines).
+    pub shown: u32,
 }
 
 /// The block for a search that ran. `found` is in rank order. Whole
@@ -208,6 +217,18 @@ pub(crate) struct Block {
 /// count or the characters allowed; `room_chars` is what the turn has left
 /// when that is less than the window's own cap.
 pub(crate) fn block(found: &[Exchange], about: &About, at_most: usize, cap_chars: usize, room_chars: Option<usize>, wording: Wording) -> Block {
+    block_with(found, &[], about, at_most, cap_chars, room_chars, wording)
+}
+
+/// A dated line that is not an exchange: a note the person saved, or
+/// knowledge they gave an AI, found for this question.
+pub(crate) fn dated_line(at_micros: i64, what: &str, text: &str) -> String {
+    format!("[{}, {what}]\nThey said: {}", day(at_micros), first(&collapse(text), PERSON_CHARS).0)
+}
+
+/// `block`, with dated lines (`dated_line`) after the exchanges. They are
+/// counted with the exchanges and fit by the same rule.
+pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &About, at_most: usize, cap_chars: usize, room_chars: Option<usize>, wording: Wording) -> Block {
     let cap = room_chars.map_or(cap_chars, |r| r.min(cap_chars));
     let mut body = String::new();
     let mut given = Vec::new();
@@ -220,15 +241,24 @@ pub(crate) fn block(found: &[Exchange], about: &About, at_most: usize, cap_chars
         body.push_str("\n\n");
         given.push(g);
     }
-    let n = given.len();
+    let mut lines = 0;
+    for l in also_dated {
+        if body.chars().count() + l.chars().count() > cap {
+            break;
+        }
+        body.push_str(l);
+        body.push_str("\n\n");
+        lines += 1;
+    }
+    let n = given.len() + lines;
     let mut report = String::new();
     if wording.today && !about.today.is_empty() {
         report.push_str(&about.today);
         report.push(' ');
     }
     report.push_str(RAN);
-    if n == 0 && !found.is_empty() {
-        report.push_str(&format!(" It found {} dated exchange(s), but none of them fits in the room this conversation has left, so none is shown.", found.len()));
+    if n == 0 && !(found.is_empty() && also_dated.is_empty()) {
+        report.push_str(&format!(" It found {} dated exchange(s), but none of them fits in the room this conversation has left, so none is shown.", found.len() + also_dated.len()));
     } else if about.replaced_left_out {
         report.push_str(&format!(" It returned the {n} dated exchange(s) below; older exchanges that memory has marked as replaced were left out."));
     } else {
@@ -250,7 +280,7 @@ pub(crate) fn block(found: &[Exchange], about: &About, at_most: usize, cap_chars
     let text = format!("[From memory. {}\n\n{}]", report.trim_end(), body.trim_end());
     // With nothing to show, the report stands alone.
     let text = if n == 0 { format!("[From memory. {}]", report.trim_end()) } else { text };
-    Block { text, given, found: found.len() as u32 }
+    Block { text, given, found: (found.len() + also_dated.len()) as u32, shown: n as u32 }
 }
 
 /// Why a search did not run.
@@ -281,6 +311,82 @@ impl WhyNot {
             WhyNot::SwitchedOffForThisAi => "they have switched memory off for this AI",
         }
     }
+}
+
+impl WhyNot {
+    /// The cause behind an error from the part of the app that searches.
+    pub(crate) fn from_error(e: &str) -> WhyNot {
+        let e = e.to_lowercase();
+        if e.contains("not downloaded") || e.contains("not installed") {
+            WhyNot::ComponentMissing
+        } else if e.contains("downloading") {
+            WhyNot::ComponentDownloading
+        } else if e.contains("not enough free memory") {
+            WhyNot::NotEnoughMemory
+        } else if e.contains("timed out") || e.contains("timeout") {
+            WhyNot::TimedOut
+        } else {
+            WhyNot::DidNotStartInTime
+        }
+    }
+}
+
+/// What a search reported, as it is recorded with the reply.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct SearchReport {
+    pub ran: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why_not: Option<WhyNot>,
+    /// Found by the search, and given after the budget.
+    pub found: u32,
+    pub given: u32,
+    /// The share of the history read into the index, 0 to 1.
+    pub read_share: f32,
+    #[serde(default)]
+    pub absent_names: Vec<String>,
+    /// Found, but this AI may not use them.
+    #[serde(default)]
+    pub withheld: u32,
+    #[serde(default)]
+    pub follow_up: bool,
+    /// The date line that was sent.
+    #[serde(default)]
+    pub today: String,
+}
+
+/// What a reply was given by memory: recorded with the reply, as pointers.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+pub struct GivenRecord {
+    pub v: u8,
+    pub search: SearchReport,
+    /// In the order given.
+    #[serde(default)]
+    pub exchanges: Vec<GivenExchange>,
+    /// Counts of what rode in the system part.
+    #[serde(default)]
+    pub also: Also,
+    /// How many secrets were hidden in what was given.
+    #[serde(default)]
+    pub masked: u32,
+    #[serde(default)]
+    pub mask_version: String,
+    #[serde(default)]
+    pub cut_version: String,
+    /// sha256 of the person's turn exactly as sent (set by the sender,
+    /// which is the one that knows the final text).
+    #[serde(default)]
+    pub fingerprint: String,
+    /// Fields later versions add ride through untouched.
+    #[serde(flatten)]
+    pub more: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
+pub struct Also {
+    pub rules: u32,
+    pub commands: u32,
+    pub locations: u32,
+    pub facts: u32,
 }
 
 /// The block for a search that did not run: one sentence saying so and
@@ -470,7 +576,7 @@ mod tests {
     #[test]
     fn the_shipped_form_adds_only_what_is_named() {
         let about = About { today: "Today is 2026-11-24.".into(), partial_percent: Some(62), withheld: 3, ..Default::default() };
-        let b = block(&[mill()], &about, 12, 42_000, None, Wording::shipped());
+        let b = block(&[mill()], &about, 12, 42_000, None, Wording::all());
         assert!(b.text.starts_with(
             "[From memory. Today is 2026-11-24. A search of all their conversations was run for this question. It returned the 1 dated exchange(s) below. \
              Only 62% of their conversations have been read so far, so the answer may be in the rest; say so. \
@@ -542,9 +648,25 @@ mod tests {
     }
 
     #[test]
+    fn a_saved_note_rides_after_the_exchanges_as_a_dated_line() {
+        let note = dated_line(T, "a note they saved", "The oven   runs 10 degrees hot.");
+        assert_eq!(note, "[2026-01-20, a note they saved]\nThey said: The oven runs 10 degrees hot.");
+        let b = block_with(&[mill()], &[note.clone()], &About::default(), 12, 42_000, None, Wording::measured());
+        assert!(b.text.contains("It returned the 2 dated exchange(s) below."));
+        assert!(b.text.ends_with(&format!("AI: Noted: Hartwell Mills from now on.\n\n{note}]")), "{}", b.text);
+        assert_eq!((b.given.len(), b.found, b.shown), (1, 2, 2));
+        // A note alone, with no exchange found.
+        let b = block_with(&[], &[note.clone()], &About::default(), 12, 42_000, None, Wording::measured());
+        assert!(b.text.contains("It returned the 1 dated exchange(s) below.") && b.text.ends_with(&format!("{note}]")));
+        // Nothing found at all: the report alone.
+        let b = block_with(&[], &[], &About::default(), 12, 42_000, None, Wording::measured());
+        assert!(b.text.contains("It returned the 0 dated exchange(s) below.") && b.text.ends_with("from guesswork.]"));
+    }
+
+    #[test]
     fn did_not_run_says_why() {
         for why in [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi] {
-            let text = did_not_run(why, "Today is 2026-11-24.", Wording::shipped());
+            let text = did_not_run(why, "Today is 2026-11-24.", Wording::all());
             assert!(text.starts_with("[From memory. Today is 2026-11-24. No search of their conversations was run for this question: "), "{text}");
             assert!(text.contains(why.said()) && text.ends_with("do not answer about their past from guesswork.]"));
             // Never the words of a search that ran.
@@ -553,6 +675,31 @@ mod tests {
         assert_eq!(serde_json::to_string(&WhyNot::DidNotStartInTime).unwrap(), "\"did_not_start_in_time\"");
         let all: std::collections::HashSet<&str> = [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi].iter().map(|w| w.said()).collect();
         assert_eq!(all.len(), 8, "each cause has its own sentence");
+    }
+
+    #[test]
+    fn a_search_error_is_one_of_the_causes() {
+        assert_eq!(WhyNot::from_error("Embedding model not downloaded: embed.gguf"), WhyNot::ComponentMissing);
+        assert_eq!(WhyNot::from_error("Not enough free memory for the memory model right now"), WhyNot::NotEnoughMemory);
+        assert_eq!(WhyNot::from_error("Embedding server did not become ready in time"), WhyNot::DidNotStartInTime);
+        assert_eq!(WhyNot::from_error("Embedding request failed: operation timed out"), WhyNot::TimedOut);
+        assert_eq!(WhyNot::from_error("something else"), WhyNot::DidNotStartInTime);
+    }
+
+    #[test]
+    fn a_record_reads_back_and_carries_what_a_later_version_adds() {
+        let b = block(&[mill()], &About::default(), 12, 42_000, None, Wording::shipped());
+        let rec = GivenRecord { v: 1, search: SearchReport { ran: true, found: 1, given: 1, read_share: 1.0, ..Default::default() }, exchanges: b.given.clone(), cut_version: CUT_VERSION.into(), ..Default::default() };
+        let mut json = serde_json::to_value(&rec).unwrap();
+        assert!(json["search"].get("why_not").is_none());
+        json["docs"] = serde_json::json!([{ "doc_id": "d1", "idx": 2 }]);
+        json["fingerprint"] = serde_json::json!("abc");
+        let back: GivenRecord = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(back.exchanges, b.given);
+        assert_eq!(back.fingerprint, "abc");
+        assert_eq!(serde_json::to_value(&back).unwrap()["docs"], json["docs"], "a field this version does not know is kept");
+        let not: GivenRecord = serde_json::from_value(serde_json::json!({ "v": 1, "search": { "ran": false, "why_not": "vault_locked", "found": 0, "given": 0, "read_share": 0.0 } })).unwrap();
+        assert_eq!(not.search.why_not, Some(WhyNot::VaultLocked));
     }
 
     #[test]

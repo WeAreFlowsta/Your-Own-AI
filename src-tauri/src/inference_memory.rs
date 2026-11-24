@@ -138,6 +138,19 @@ pub async fn embed_question(app: &AppHandle, query: &str) -> Option<Vec<f32>> {
     }
 }
 
+/// The question embedded for memory's search, with the cause when it could
+/// not be: "did not look" is told apart from "looked and found nothing".
+pub async fn embed_for_search(app: &AppHandle, query: &str) -> Result<Vec<f32>, crate::memory_block::WhyNot> {
+    use crate::memory_block::WhyNot;
+    let llm_state = app.state::<crate::llm::LLMState>();
+    let qtext = format!("{QUERY_INSTRUCTION}{query}");
+    match tokio::time::timeout(Duration::from_secs(15), crate::llm::embed_texts(app.clone(), llm_state, vec![qtext], EMBED_MODEL.to_string())).await {
+        Err(_) => Err(WhyNot::TimedOut),
+        Ok(Err(e)) => Err(WhyNot::from_error(&e)),
+        Ok(Ok(mut v)) => v.drain(..).next().filter(|x| !x.is_empty()).ok_or(WhyNot::DidNotStartInTime),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
