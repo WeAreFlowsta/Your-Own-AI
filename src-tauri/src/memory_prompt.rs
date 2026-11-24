@@ -527,7 +527,23 @@ async fn found_beside(
     // The open conversation's own messages are already being sent.
     let open_k = input.conversation.as_deref().filter(|c| !c.is_empty()).and_then(|c| crate::transcript_search::row_key(app, c).ok());
     let on_wire_from = input.on_wire_from.unwrap_or(0);
-    let keep = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
+    // What the person decided about conversations and items: who a
+    // conversation is for, what is kept out, what was forgotten.
+    let memory_rows = {
+        use tauri::Manager;
+        app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).map(|k| crate::memory_rows::read_cache(app, &k, crate::memory_items::SCOPE)).unwrap_or_default()
+    };
+    let uses = crate::memory_use::conv_uses(&memory_rows);
+    let forgotten = crate::memory_use::forgotten_sources(&crate::memory_items::items(&memory_rows));
+    let who = crate::memory_use::Asking { ai: input.founding_key.as_deref().unwrap_or(""), project: input.project.as_deref().filter(|p| !p.is_empty()), online: input.online };
+    let may = |c: &crate::memory_index::Candidate| {
+        if forgotten.contains(&(c.meta.started_at, c.seq)) {
+            return crate::memory_use::May::Never;
+        }
+        crate::memory_use::may_use_message(&uses, c.meta.started_at, c.seq, &who)
+    };
+    let searched = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
+    let keep = |c: &crate::memory_index::Candidate| searched(c) && may(c) == crate::memory_use::May::Use;
     let at_most = crate::memory_index::FOUND_AT_MOST;
     let mut hits = match crate::memory_reading::search(app, &question, at_most, &keep) {
         Ok(f) => f.hits,
@@ -543,6 +559,15 @@ async fn found_beside(
             }
         }
     }
+    // Conversations that would have been found and that this AI may not
+    // use: counted, so the person can be told and can allow it.
+    let withheld = {
+        let held_back = |c: &crate::memory_index::Candidate| searched(c) && may(c) == crate::memory_use::May::Withheld;
+        let mut conversations: Vec<String> = crate::memory_reading::search(app, &question, at_most, &held_back).map(|f| f.hits.into_iter().map(|h| h.k).collect()).unwrap_or_default();
+        conversations.sort();
+        conversations.dedup();
+        if uses.is_empty() { 0 } else { conversations.len() as u32 }
+    };
     let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits).unwrap_or_default();
     // Saved notes and knowledge given to this AI, found by the rule they
     // were always found by, as dated lines.
@@ -568,13 +593,13 @@ async fn found_beside(
         &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
     );
     let partial = (reading.total > 0 && reading.read < reading.total).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
-    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld: 0, replaced_left_out: false };
+    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: false };
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
     let room = input.room_tokens.map(|t| t as usize * 3);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
-    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string(), partial_percent: partial });
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial });
     rec.exchanges = b.given;
     rec.lines = b.lines;
     rec.block = mb::fingerprint(&b.text);
