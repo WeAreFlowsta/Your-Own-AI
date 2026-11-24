@@ -107,4 +107,25 @@ describe("Remember keeps the exchange", () => {
     expect(kept.some((i) => i.item.source?.kind === "selection" && i.text === picked)).toBe(true);
     await shot("remember-selection");
   });
+
+  it("Recently lists every change, with the tidying line at its top, and Undo works there", async () => {
+    await browser.url("tauri://localhost/your-memory/");
+    const board = await $('[data-testid="recently-board"]');
+    await board.waitForExist({ timeout: 60_000 });
+    await browser.waitUntil(async () => (await $$('[data-testid="recently-row"]').length) >= 4, { timeout: 60_000, timeoutMsg: "Recently did not list the changes" });
+    const rows = (await browser.execute(() => Array.from(document.querySelectorAll('[data-testid="recently-row"]')).map((r) => `${r.getAttribute("data-what")}: ${(r as HTMLElement).innerText.split(/\s+/).join(" ")}`))) as string[];
+    console.log(`e2e: recently: ${JSON.stringify(rows)}`);
+    // Kept (reply), audience twice, kept (own message), undone, kept (selection).
+    expect(rows.filter((r) => r.startsWith("kept:")).length).toBe(3);
+    expect(rows.some((r) => r.startsWith("undone:"))).toBe(true);
+    expect(rows.some((r) => r.includes("Kept by you"))).toBe(true);
+    const line = await $('[data-testid="tidying-line"]');
+    await line.waitForExist({ timeout: 30_000 });
+    console.log(`e2e: tidying line (${await line.getAttribute("data-state")}): ${JSON.stringify(await textOf(line))}`);
+    await shot("recently-board");
+    const before = (await current()).length;
+    await press(await $('[data-testid="recently-row"][data-what="kept"] [data-testid="recently-undo"]'));
+    await browser.waitUntil(async () => (await current()).length === before - 1, { timeout: 60_000, timeoutMsg: "Undo on Recently did not take the item back" });
+    await shot("recently-after-undo");
+  });
 });

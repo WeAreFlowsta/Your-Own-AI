@@ -14,6 +14,7 @@ import LiquidMetalButton from "../../components/LiquidMetalButton";
 import ProfileMemory from "../../components/ProfileMemory";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
 import MemoryOwners from "../../components/MemoryOwners";
+import { RecentlyBoard } from "../../components/memory/RecentlyBoard";
 
 export default component$(() => {
   const nav = useNavigate();
@@ -60,6 +61,10 @@ export default component$(() => {
           </div>
 
           <MemoryOwners selected="you" />
+
+          <div class="mb-6">
+            <RecentlyBoard />
+          </div>
 
           <ProfileMemory readOnly={false} />
 
