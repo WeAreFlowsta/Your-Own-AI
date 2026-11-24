@@ -245,6 +245,12 @@ export interface Message {
   memoryLine?: string;
   /** What memory gave this reply, as recorded with it. */
   given?: Record<string, unknown>;
+  /** The line this reply gets under it (see `ReplyLine` in utils/memory). */
+  givenLine?: import("../utils/memory").ReplyLine;
+  /** The passages given, as text. In memory only, never recorded. */
+  givenLive?: string[];
+  /** Quotations in the reply that are in nothing it was given. */
+  quotesNotGiven?: string[];
   /** The classified routing task at send time — reused when the user retries
    *  this turn online or on device. */
   routingTask?: string;

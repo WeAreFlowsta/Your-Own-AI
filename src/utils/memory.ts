@@ -341,7 +341,31 @@ export interface TurnMemory {
   /** What the reply is given, recorded with it (the search's report and
    *  pointers to the exchanges). Null when memory gave no block. */
   given: Record<string, unknown> | null;
+  /** The passages given, as text (one per exchange of `given`, then any
+   *  dated lines). In memory only, for the quote check and the panel. */
+  givenTexts: string[];
 }
+
+/** Why a search of the person's conversations did not run. */
+export type WhyNot =
+  | "component_missing"
+  | "component_downloading"
+  | "not_enough_memory"
+  | "did_not_start_in_time"
+  | "timed_out"
+  | "vault_locked"
+  | "index_rebuilding"
+  | "switched_off_for_this_ai";
+
+/** The line under a reply (chosen in the backend, `memory_quotes`). */
+export type ReplyLine =
+  | { kind: "given"; passages: number }
+  | { kind: "quoted-none"; passages: number }
+  | { kind: "did-not-fit"; given: number; found: number }
+  | { kind: "read-so-far"; found: number; percent: number }
+  | { kind: "no-mention"; names: string[] }
+  | { kind: "did-not-look"; why: WhyNot }
+  | { kind: "withheld"; conversations: number };
 
 /** What the search block is sized by, known once the model is chosen. */
 export interface TurnRoom {

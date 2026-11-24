@@ -26,7 +26,7 @@ import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTu
 import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
 import { isUtilityModelReady } from "../utils/utilityModel";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { memoryForTurn, type TurnMemory, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
+import { memoryForTurn, type TurnMemory, type ReplyLine, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
 import { assembleUserTurn } from "../utils/turnWire";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -2136,6 +2136,23 @@ export function useChat(props: UseChatProps) {
                 ? "(No reply came back, and asking again did not go through. Try asking again.)"
                 : "(The model returned an empty reply twice - it may not sit well with this AI's setup. Try asking again, or pick a different model for this AI.)");
 
+        // The reply's quotations are checked against what it was given (no
+        // model): which passages it quoted, which quotes are in none of
+        // them, and the line the reply gets.
+        let replyLine: ReplyLine | undefined;
+        let quotesNotGiven: string[] | undefined;
+        if (givenRecord) {
+          const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null }>(
+            "memory_reply_checked",
+            { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [] },
+          ).catch(() => null);
+          if (checked) {
+            if (checked.given) givenRecord = checked.given;
+            replyLine = checked.line ?? undefined;
+            quotesNotGiven = checked.check.notGiven.length ? checked.check.notGiven : undefined;
+          }
+        }
+
         // The same figures on the page's copy and the root's: a page that
         // folds this reply in later shows Tokens, Sources and Model alike.
         const tokenFigures = tokenUsage
@@ -2238,12 +2255,12 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven }
             : m,
         );
         // The root's copy too: a page that folds this reply in later (it
         // finished while the person was elsewhere) shows its Model details.
-        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord } });
+        updateTurn(assistantId, { assistant: { servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven } });
 
         if (!holochainId) {
           console.warn("[Holochain] No agent pub key, skipping transcript");

@@ -210,6 +210,9 @@ pub(crate) struct Block {
     pub found: u32,
     /// How many are shown (exchanges and dated lines).
     pub shown: u32,
+    /// The text of each exchange shown, in order (one per `given`), then of
+    /// each dated line: what the reply's quotations are checked against.
+    pub texts: Vec<String>,
 }
 
 /// The block for a search that ran. `found` is in rank order. Whole
@@ -232,6 +235,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
     let cap = room_chars.map_or(cap_chars, |r| r.min(cap_chars));
     let mut body = String::new();
     let mut given = Vec::new();
+    let mut texts: Vec<String> = Vec::new();
     for e in found.iter().take(at_most) {
         let (text, g) = exchange_text(e, wording);
         if body.chars().count() + text.chars().count() > cap {
@@ -240,6 +244,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
         body.push_str(&text);
         body.push_str("\n\n");
         given.push(g);
+        texts.push(text);
     }
     let mut lines = 0;
     for l in also_dated {
@@ -248,6 +253,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
         }
         body.push_str(l);
         body.push_str("\n\n");
+        texts.push(l.clone());
         lines += 1;
     }
     let n = given.len() + lines;
@@ -280,7 +286,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
     let text = format!("[From memory. {}\n\n{}]", report.trim_end(), body.trim_end());
     // With nothing to show, the report stands alone.
     let text = if n == 0 { format!("[From memory. {}]", report.trim_end()) } else { text };
-    Block { text, given, found: (found.len() + also_dated.len()) as u32, shown: n as u32 }
+    Block { text, given, found: (found.len() + also_dated.len()) as u32, shown: n as u32, texts }
 }
 
 /// Why a search did not run.
@@ -655,6 +661,8 @@ mod tests {
         assert!(b.text.contains("It returned the 2 dated exchange(s) below."));
         assert!(b.text.ends_with(&format!("AI: Noted: Hartwell Mills from now on.\n\n{note}]")), "{}", b.text);
         assert_eq!((b.given.len(), b.found, b.shown), (1, 2, 2));
+        assert_eq!(b.texts.len(), 2);
+        assert!(b.texts[0].starts_with("[2026-01-20, conversation") && b.texts[1] == note);
         // A note alone, with no exchange found.
         let b = block_with(&[], &[note.clone()], &About::default(), 12, 42_000, None, Wording::measured());
         assert!(b.text.contains("It returned the 1 dated exchange(s) below.") && b.text.ends_with(&format!("{note}]")));

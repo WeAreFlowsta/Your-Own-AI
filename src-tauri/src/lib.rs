@@ -23,6 +23,7 @@ mod secret_mask;          // passwords and keys are hidden before text leaves it
 mod memory_index;         // memory's search index: vectors and pointers for every conversation, never text
 mod memory_reading;       // the background job that keeps the index level with the conversations
 mod memory_block;         // the search results placed ahead of the question: exchanges, the report, the rule
+mod memory_quotes;        // the quote check, and which line shows under a reply
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
@@ -877,6 +878,8 @@ pub fn run() {
             secret_mask::mask_text,
             memory_reading::memory_reading_status,
             memory_reading::memory_read_now,
+            memory_quotes::memory_check_quotes,
+            memory_quotes::memory_reply_checked,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
