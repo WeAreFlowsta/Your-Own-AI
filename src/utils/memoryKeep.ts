@@ -103,3 +103,69 @@ export function keepError(e: unknown): string {
   if (/still being saved|not saved yet|not in the list yet/.test(s)) return "This message is still being saved. Try again in a moment.";
   return "Could not keep it just now.";
 }
+
+/** Sent when something was kept for a message from outside its own
+ *  buttons (selected words, or "remember that" said in the chat): the
+ *  message shows the Kept line. */
+export const KEPT_EVENT = "yoai-kept";
+export interface KeptEventDetail {
+  messageId: string;
+  kept: Kept;
+  selection?: boolean;
+}
+export function announceKept(detail: KeptEventDetail): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent<KeptEventDetail>(KEPT_EVENT, { detail }));
+}
+
+/**
+ * "Remember that", said in the chat: keep the message the words point at,
+ * once the turn is recorded, and show the Kept line under it. The records
+ * can lag the reply by a moment, so a "not saved yet" answer is asked
+ * again a few times.
+ */
+export async function keepSaid(req: KeepRequest & { messageId: string }): Promise<Kept | null> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const kept = await invoke<Kept>("memory_keep_message", {
+        input: {
+          conversation: req.conversation ?? openConversation(),
+          agentKey: (await keysOf(req.aiId)).agent || null,
+          seq: typeof req.seq === "number" ? req.seq : null,
+          role: req.role,
+          text: req.text,
+          why: "said",
+        },
+      });
+      announceKept({ messageId: req.messageId, kept });
+      return kept;
+    } catch (e) {
+      if (!/still being saved|not saved yet|not in the list yet/.test(String((e as { message?: string })?.message ?? e))) throw e;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+  return null;
+}
+
+const SEEN_KEY = "yoai-memory-changes-seen-at";
+
+/** How many changes memory made by itself (an AI kept something, tidying
+ *  replaced or closed something) since the person last looked at Recently. */
+export async function unseenChanges(): Promise<number> {
+  let seen = 0;
+  try {
+    seen = Number(localStorage.getItem(SEEN_KEY) ?? 0) || 0;
+  } catch {
+    /* counted from the beginning */
+  }
+  const log = await invoke<{ at: number; by: string; what: string }[]>("memory_changes");
+  return log.filter((c) => c.at > seen && c.by !== "person" && c.what !== "undone").length;
+}
+
+/** The person is looking at Recently: everything up to now is seen. */
+export function markChangesSeen(): void {
+  try {
+    localStorage.setItem(SEEN_KEY, String(Date.now()));
+  } catch {
+    /* the count then stays until the next look */
+  }
+}

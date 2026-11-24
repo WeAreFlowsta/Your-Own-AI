@@ -896,6 +896,8 @@ pub fn run() {
             memory_items::memory_changes,
             memory_items::memory_undo,
             memory_items::memory_not_replaced,
+            memory_items::memory_questions,
+            memory_items::memory_question_answer,
             memory_items::memory_keep_quoted,
             memory_items::memory_keep_message,
             memory_check::memory_check_status,
@@ -1163,7 +1165,9 @@ pub fn run() {
                 memory_rows::start_person_memory_sync(&link_app_handle);
                 machine::start(&link_app_handle);
                 llm::start_idle_unload(&link_app_handle);
-                dreaming::start_dreaming(&link_app_handle);
+                // The older idle tidy-up (merging rows by word overlap) is not
+                // started any more: a merge it made came back after an undo.
+                // Memory's own tidying takes its place.
                 memory_reading::start(&link_app_handle);
                 memory_tidying::start(&link_app_handle);
                 memory_check::start(&link_app_handle);

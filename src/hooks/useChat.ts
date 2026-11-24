@@ -2407,6 +2407,19 @@ export function useChat(props: UseChatProps) {
                   : m,
               );
             }
+            // "Remember that", said in fixed words: now that the turn is
+            // recorded, the exchange before (or this message) is kept and
+            // its Kept line shown.
+            if (assistantMsgHash && foundMemory?.remember) {
+              const at = state.messages.findIndex((m) => m.id === userMessage.id);
+              const before = at > 0 ? [...state.messages.slice(0, at)].reverse().find((m) => m.role === "assistant" && !!m.content) : undefined;
+              const target = foundMemory.remember === "this" ? { messageId: userMessage.id, role: "user" as const, text: userInput, seq: undefined } : before ? { messageId: before.id, role: "assistant" as const, text: before.content, seq: before.sequence } : null;
+              if (target) {
+                void import("../utils/memoryKeep")
+                  .then(({ keepSaid }) => keepSaid({ ...target, aiId: selectedAi.id, conversation: turnConv ?? undefined }))
+                  .catch((e) => console.warn("[memory] keeping what was asked for failed:", e));
+              }
+            }
             console.log(
               `[Holochain] Assistant message recorded (${grounded.length} grounded source${grounded.length === 1 ? "" : "s"})`,
             );

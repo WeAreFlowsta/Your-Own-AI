@@ -22,8 +22,7 @@ import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { givenLineWords } from '../utils/givenLine';
 import { KeptLine } from './KeptLine';
-import { KEPT_SELECTION_EVENT } from './SelectionRemember';
-import type { Kept } from '../utils/memoryKeep';
+import { KEPT_EVENT, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
 import { looksLikeInstruction } from '../utils/memory';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
@@ -332,14 +331,14 @@ const ActionBar = component$<ActionBarProps>((props) => {
   useVisibleTask$(({ cleanup }) => {
     if (props.message.role !== 'assistant') return;
     const onKept = (e: Event) => {
-      const d = (e as CustomEvent<{ messageId: string; kept: Kept }>).detail;
+      const d = (e as CustomEvent<KeptEventDetail>).detail;
       if (d?.messageId && d.messageId === props.message.id) {
-        keptSelection.value = true;
+        keptSelection.value = !!d.selection;
         kept.value = d.kept;
       }
     };
-    window.addEventListener(KEPT_SELECTION_EVENT, onKept);
-    cleanup(() => window.removeEventListener(KEPT_SELECTION_EVENT, onKept));
+    window.addEventListener(KEPT_EVENT, onKept);
+    cleanup(() => window.removeEventListener(KEPT_EVENT, onKept));
   });
   const keepReply = $(async () => {
     if (keepState.value === 'saving') return;
@@ -953,6 +952,20 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   });
   const keptOwn = useSignal<Kept | null>(null);
   const keepFailed = useSignal('');
+  // "Remember that", said in the chat, kept this message: the same line.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    if (props.message.role !== 'user') return;
+    const onKept = (e: Event) => {
+      const d = (e as CustomEvent<KeptEventDetail>).detail;
+      if (d?.messageId && d.messageId === props.message.id) {
+        keptOwn.value = d.kept;
+        captureState.value = 'saved-note';
+      }
+    };
+    window.addEventListener(KEPT_EVENT, onKept);
+    cleanup(() => window.removeEventListener(KEPT_EVENT, onKept));
+  });
   const rememberOwn = $(async () => {
     if (captureState.value === 'saving') return;
     captureState.value = 'saving';

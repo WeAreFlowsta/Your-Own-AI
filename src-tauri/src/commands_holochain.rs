@@ -644,6 +644,7 @@ pub async fn record_transcript_entry(
 
     // Phase A: message content is encrypted with the user data key.
     let prov = provenance.unwrap_or_default();
+    let (given_for_search, stopped_for_search) = (prov.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), prov.stopped == Some(true));
     let model_hash = crate::model_hash::get(&app, &model);
     let plain = MessagePlain {
         role,
@@ -724,7 +725,7 @@ pub async fn record_transcript_entry(
     let at = now_micros();
     crate::conversation_cache::touch(&app, &conversation_hash, at);
     // Search sees the turn now, without a rebuild.
-    crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at);
+    crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at, given_for_search, stopped_for_search);
     // Memory's index reads it on its next pass, which this starts.
     if !is_memory_write {
         crate::memory_reading::note_recorded();

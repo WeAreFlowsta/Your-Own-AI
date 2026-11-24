@@ -344,6 +344,9 @@ export interface TurnMemory {
   /** The passages given, as text (one per exchange of `given`, then any
    *  dated lines). In memory only, for the quote check and the panel. */
   givenTexts: string[];
+  /** The person said, in fixed words, to keep something: the exchange
+   *  before, or this message. Kept once the turn is recorded. */
+  remember?: "before" | "this" | null;
 }
 
 export type { WhyNot, ReplyLine } from "./givenLine";

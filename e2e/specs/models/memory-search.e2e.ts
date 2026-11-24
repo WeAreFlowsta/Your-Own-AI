@@ -66,6 +66,7 @@ async function recorded(): Promise<{ role: string; content: string; given?: any 
 
 let ai = { id: "", name: "", agent: "" };
 const DELIVERY = "What is the free delivery threshold?";
+const SPEC_BEGAN = Date.now();
 
 describe("memory's search, on the made-up history", () => {
   it("a first message on an empty profile carries no search wording", async () => {
@@ -226,6 +227,25 @@ describe("memory's search, on the made-up history", () => {
     expect(lastUserText(request)).toContain("No conversation anywhere mentions: Rosedale.");
     const line = await $('[data-testid="given-line"]');
     if (await line.isExisting()) console.log(`e2e: line: ${await line.getText()}`);
+  });
+
+  it("a reply that reported a search is not found again as a source", async () => {
+    // The delivery question was answered in the chat from what memory
+    // found. Once that turn is read into the index, asking again finds
+    // the first places, never the reply that quoted them.
+    const began = Date.now();
+    await invoke("memory_read_now", { on: true });
+    await browser.waitUntil(async () => {
+      const s = await invoke<any>("memory_reading_status");
+      return s.total > 0 && s.read >= s.total && s.levelAt > began;
+    }, { timeout: 300_000, interval: 5_000, timeoutMsg: "the new turns were not read into the index" });
+    const r = await dev("GET", "memory-search", { q: DELIVERY, limit: "40" });
+    const found = r.found as { started_at: number; role: string; flags: number }[];
+    const fromThisRun = found.filter((f) => f.started_at >= SPEC_BEGAN * 1000);
+    console.log(`e2e: asked again: ${found.length} found, ${fromThisRun.length} from this run's own chat (${fromThisRun.map((f) => f.role).join(", ")})`);
+    expect(fromThisRun.length).toBeGreaterThan(0);
+    expect(fromThisRun.every((f) => f.role === "user")).toBe(true);
+    expect(found.every((f) => (f.flags & 2) === 0)).toBe(true);
   });
 
   it("a deleted source can no longer be shown, and the reply stays", async () => {

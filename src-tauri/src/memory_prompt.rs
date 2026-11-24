@@ -319,6 +319,10 @@ pub(crate) struct TurnMemory {
     /// the dated lines. For this turn only, in memory: the reply's
     /// quotations are checked against them and the panel shows them.
     pub given_texts: Vec<String>,
+    /// The person said, in fixed words, to keep something: the exchange
+    /// before, or this message. The page keeps it once the turn is
+    /// recorded; the turn is told so, and the reply can agree.
+    pub remember: Option<crate::memory_items::SaidRemember>,
 }
 
 /// `Today is YYYY-MM-DD.` for a date.
@@ -449,10 +453,27 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     } else {
         (None, None, Vec::new(), None)
     };
+    // "Remember that", said in fixed words (no model reads it). With no
+    // exchange before, there is nothing "that" could mean.
+    let remember = crate::memory_items::said_remember(&input.question).filter(|r| *r == crate::memory_items::SaidRemember::This || input.conversation.as_deref().is_some_and(|c| !c.is_empty()));
+    let after_question = match remember {
+        None => after_question,
+        Some(r) => {
+            let told = match r {
+                crate::memory_items::SaidRemember::Before => "[The person asked for the exchange before this to be kept in memory. It is being kept, and they are shown a line that says so.]",
+                crate::memory_items::SaidRemember::This => "[The person asked for this message to be kept in memory. It is being kept, and they are shown a line that says so.]",
+            };
+            Some(match after_question {
+                Some(note) => format!("{note}\n{told}"),
+                None => told.to_string(),
+            })
+        }
+    };
     TurnMemory {
         system_part: format!("{text}\n{today}"),
         before_question,
         after_question,
+        remember,
         counts,
         bare_notes: facts.iter().filter(live_note).any(|f| !f.embedding.as_ref().is_some_and(|v| !v.is_empty())),
         bare_knowledge: recall.as_deref().is_some_and(|r| r.iter().any(|e| e.kind == "authored" && e.source.is_none() && e.vector.is_empty())),

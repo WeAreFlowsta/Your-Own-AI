@@ -38,6 +38,7 @@ const REPLIES = path.join(OUT, "replies.jsonl");
 // Have the history read into memory's index, and save what is found for
 // each question, before asking (builds that have the index).
 const READ = !!process.env.YOAI_MEMORY_READ;
+const UNTIL_MS = Number(process.env.YOAI_MEMORY_UNTIL_MS ?? Date.now());
 const READ_MINUTES = Number(process.env.YOAI_MEMORY_READ_MINUTES ?? 30);
 // A request to the loader carries about this many messages: at the pace
 // records are written, well inside the time a request may wait.
@@ -89,6 +90,10 @@ describe("memory, asked a question set", () => {
 
   it("has a model loaded and an AI that has answered once", async () => {
     await waitForChat();
+    // Nothing begun from here on is searched: a run must not find its own
+    // questions, or the replies an earlier run left in a kept profile.
+    const until = await dev("POST", "memory-search-until", {}, { at: UNTIL_MS * 1000 });
+    console.log(`e2e: searching conversations begun up to ${new Date(UNTIL_MS).toISOString()} (${JSON.stringify(until)})`);
     // The first reply of a new profile gives the AI its place in the
     // records, which the loader writes into.
     await ask("What colour is the sky on a clear day?");

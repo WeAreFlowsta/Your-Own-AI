@@ -335,8 +335,8 @@ async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::
                         break;
                     }
                 }
-                Outcome::Ask { now: now_true, judged, .. } => {
-                    crate::memory_rows::save_and_cache(app, tidy::asked_row(&judged, &now_true)).await?;
+                Outcome::Ask { older, now: now_true, judged, .. } => {
+                    crate::memory_rows::save_and_cache(app, tidy::asked_row(&judged, &older, &now_true)).await?;
                     ledger.push(judged);
                     report.asked += 1;
                 }

@@ -156,6 +156,19 @@ export default component$<AppHeaderProps>(
 
     // Controls visibility of the custom dropdown menu
     const menuOpen = useSignal(false);
+    /** Changes memory made by itself since the person last looked at them. */
+    const memoryUnseen = useSignal(0);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ track }) => {
+      track(() => menuOpen.value);
+      if (!menuOpen.value) return;
+      try {
+        const { unseenChanges } = await import("../utils/memoryKeep");
+        memoryUnseen.value = await unseenChanges();
+      } catch {
+        memoryUnseen.value = 0;
+      }
+    });
     // The workspace slot's recents menu.
     const folderMenuOpen = useSignal(false);
     const workspaceMenuOpen = useSignal(false);
@@ -930,6 +943,11 @@ export default component$<AppHeaderProps>(
                   >
                     <LuBrain class="mr-2 h-5 w-5" aria-hidden="true" />
                     Your Memory
+                    {memoryUnseen.value > 0 && (
+                      <span class="ml-auto rounded-full bg-[var(--bg-dropdown-hover)] px-2 py-0.5 text-xs text-[var(--text-dropdown)]" data-testid="menu-memory-unseen" title="Changes memory made by itself that you have not looked at">
+                        {memoryUnseen.value}
+                      </span>
+                    )}
                   </button>
                 </div>
                 <div class="py-1">

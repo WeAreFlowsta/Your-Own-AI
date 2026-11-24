@@ -417,6 +417,14 @@ pub struct GivenRecord {
     pub more: serde_json::Map<String, serde_json::Value>,
 }
 
+impl GivenRecord {
+    /// Was the reply handed exchanges the search found? Such a reply
+    /// repeats them; a later search goes to the exchanges themselves.
+    pub(crate) fn gave_exchanges(&self) -> bool {
+        self.search.ran && !self.exchanges.is_empty()
+    }
+}
+
 /// A found message that was left out of what was given, and the replaced
 /// item it was left out for.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]

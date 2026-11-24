@@ -221,5 +221,24 @@ describe("what memory holds now, on the made-up history", () => {
     expect(report.replaced).toBe(0);
     // And the delivery pair, undone before, was not judged again.
     expect((report.pairs as { earlier: string; later: string }[]).some((p) => p.earlier === old40 && p.later === new60)).toBe(false);
+
+    // The question waits as a line under the conversation; "Replace it"
+    // is the person's own replacement.
+    type Question = { id: string; older: { id: string }; newer: { id: string }; now: string };
+    const waiting = await invoke<Question[]>("memory_questions");
+    console.log(`e2e: questions waiting: ${JSON.stringify(waiting.map((q) => ({ older: q.older.id, newer: q.newer.id, now: q.now })))}`);
+    if (pair!.verdict !== "REPLACES") return;
+    expect(waiting.some((q) => q.older.id === eight && q.newer.id === half7)).toBe(true);
+    await browser.execute(() => window.dispatchEvent(new CustomEvent("yoai-memory-questions")));
+    const line = await $('[data-testid="memory-question"]');
+    await line.waitForExist({ timeout: 30_000 });
+    const words = (await browser.execute((e) => (e as HTMLElement).innerText, line)) as string;
+    console.log(`e2e: the question: ${JSON.stringify(words)}`);
+    expect(words).toContain("You confirmed");
+    await shot("memory-question");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="question-replace"]'));
+    await browser.waitUntil(async () => (await item(eight)).item.state === "replaced", { timeout: 60_000, timeoutMsg: "Replace it did not replace the confirmed item" });
+    expect((await item(eight)).item.replaced_by).toBe(half7);
+    expect((await invoke<Question[]>("memory_questions")).length).toBe(waiting.length - 1);
   });
 });

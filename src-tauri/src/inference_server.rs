@@ -315,6 +315,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/memory-fixture-load", post(memory_fixture_load_dev))
         .route("/internal/memory-stores", post(memory_stores_dev))
         .route("/internal/memory-search", get(memory_search_dev))
+        .route("/internal/memory-search-until", post(memory_search_until_dev))
         .route("/internal/memory-assemble", post(memory_assemble_dev))
         .route("/internal/memory-ask", post(memory_ask_dev))
         .route("/internal/last-chat-request", get(last_chat_request_dev))
@@ -920,6 +921,17 @@ async fn memory_search_dev(
         answer["memory"] = json!(turn_memory(&app, &ai, crate::memory_prompt::Surface::ApiPersona, None, &question).await);
     }
     Json(answer).into_response()
+}
+
+/// Dev builds only: search nothing begun after `at` (microseconds; absent =
+/// no ceiling), so a measured run does not find its own questions.
+async fn memory_search_until_dev(Json(body): Json<Value>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let at = body["at"].as_i64().unwrap_or(i64::MAX);
+    crate::memory_reading::SEARCH_UNTIL.store(at, std::sync::atomic::Ordering::Relaxed);
+    Json(json!({ "until": at })).into_response()
 }
 
 /// What the memory routes below are asked: an AI, a question, and the

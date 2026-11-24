@@ -11,9 +11,6 @@ import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
  * The button is pure DOM math (native selection rect) - it never re-renders
  * the message list, so it can't slow streaming or scrolling.
  */
-/** Sent when selected words were kept: the reply's action bar shows the line. */
-export const KEPT_SELECTION_EVENT = 'yoai-kept-selection';
-
 export default component$(() => {
   const visible = useSignal(false);
   const x = useSignal(0);
@@ -90,9 +87,9 @@ export default component$(() => {
     if (state.value === 'saving' || state.value === 'saved') return;
     state.value = 'saving';
     try {
-      const { keepMessage } = await import('../utils/memoryKeep');
+      const { keepMessage, announceKept } = await import('../utils/memoryKeep');
       const kept = await keepMessage({ aiId: aiId.value, role: 'assistant', text: text.value, selection: text.value, seq: seq.value });
-      window.dispatchEvent(new CustomEvent(KEPT_SELECTION_EVENT, { detail: { messageId: messageId.value, kept } }));
+      announceKept({ messageId: messageId.value, kept, selection: true });
       state.value = 'saved';
     } catch {
       state.value = 'error';

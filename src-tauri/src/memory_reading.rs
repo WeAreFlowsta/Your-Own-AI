@@ -142,10 +142,16 @@ pub(crate) struct Found {
 
 /// Search the index for a question that is already embedded.
 pub(crate) fn search(app: &AppHandle, question: &[f32], at_most: usize, keep: &dyn Fn(&index::Candidate) -> bool) -> Result<Found, String> {
-    let hits = with_index(app, |open, _| Ok(open.cache.search(question, at_most, keep)))?;
+    let until = SEARCH_UNTIL.load(Ordering::Relaxed);
+    let hits = with_index(app, |open, _| Ok(open.cache.search(question, at_most, &|c| c.meta.started_at <= until && keep(c))))?;
     let (read, total) = STATUS.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| (s.read, s.total)).unwrap_or((0, 0));
     Ok(Found { hits, read, total })
 }
+
+/// Development builds only (set by a route that answers "not found" in a
+/// release): conversations begun after this moment are not searched, so a
+/// measured run does not find its own questions. Microseconds.
+pub(crate) static SEARCH_UNTIL: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(i64::MAX);
 
 /// A found message with what names it outside this device's index: the
 /// conversation's start, the message's sequence and time.
@@ -198,9 +204,11 @@ pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit]) -> Result<(Vec<crate::mem
             hidden += m.hidden;
             Said { by_person: e.role == "user", text: m.text, seq: e.seq, at: e.at }
         };
-        let before = (x > 0).then(|| said(&entries[x - 1]));
+        // A neighbor that was itself a report of a search is left out:
+        // what it quoted can be found where it was said.
+        let before = (x > 0).then(|| &entries[x - 1]).filter(|e| !e.given).map(&mut said);
         let hit = said(&entries[x]);
-        let after = entries.get(x + 1).map(&mut said);
+        let after = entries.get(x + 1).filter(|e| !e.given).map(&mut said);
         out.push(Exchange {
             conversation: c.started_at,
             title: c.title.clone().unwrap_or_default(),
@@ -497,7 +505,13 @@ async fn pass(app: &AppHandle) -> Result<bool, String> {
             };
             // What is embedded is what may be found: the masked text.
             let masked = crate::secret_mask::hand_on(&e.content);
-            let flags = if masked.hidden > 0 { index::FLAG_SECRET } else { 0 };
+            let mut flags = if masked.hidden > 0 { index::FLAG_SECRET } else { 0 };
+            if e.given {
+                flags |= index::FLAG_GIVEN_A_BLOCK;
+            }
+            if e.stopped {
+                flags |= index::FLAG_STOPPED;
+            }
             let passages = index::cut(&masked.text);
             if !texts.is_empty() && texts.len() + passages.len() > BATCH {
                 break;

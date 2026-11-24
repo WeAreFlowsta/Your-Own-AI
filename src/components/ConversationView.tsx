@@ -1,3 +1,4 @@
+import { MemoryQuestions } from './memory/MemoryQuestions';
 import { component$, type Signal, type QRL, $ } from '@builder.io/qwik';
 import { ChatMessage as ChatMessageComponent } from './ChatMessage';
 import { Message } from '../types';
@@ -105,6 +106,8 @@ export default component$<ConversationViewProps>(({
           isModelLoading={isModelLoading}
         />
       ))}
+      {/* Asked after the turn is answered, and never in its way. */}
+      {messages.length > 0 && !messages[messages.length - 1].isLoading && <MemoryQuestions limit={1} />}
       {/* End of real content - the follow-the-tip target. */}
       <div ref={tipRef} />
       {/* Turn-scoped scroll reservation for agent turns (see agentStreaming). */}

@@ -125,6 +125,22 @@ fn in_order<'a>(a: &'a Item, b: &'a Item) -> (&'a Item, &'a Item) {
     if (a.row.as_of, &a.row.id) <= (b.row.as_of, &b.row.id) { (a, b) } else { (b, a) }
 }
 
+/// The newer item's row with what is true now said on it.
+fn says_now(newer: &Item, now_true: &str, now: i64) -> MemoryRow {
+    let mut meta = newer.meta.clone();
+    meta.now = Some(now_true.to_string());
+    let mut row = newer.row.clone();
+    row.updated_at = now;
+    row.action_hash = None;
+    let mut structured = match row.structured.take() {
+        Some(serde_json::Value::Object(o)) => o,
+        _ => serde_json::Map::new(),
+    };
+    structured.insert("item".into(), serde_json::to_value(&meta).unwrap_or_default());
+    row.structured = Some(serde_json::Value::Object(structured));
+    row
+}
+
 /// Apply a verdict to a pair of items.
 pub(crate) fn apply(a: &Item, b: &Item, verdict: &Verdict, now: i64) -> Outcome {
     let (older, newer) = in_order(a, b);
@@ -135,18 +151,7 @@ pub(crate) fn apply(a: &Item, b: &Item, verdict: &Verdict, now: i64) -> Outcome 
         Verdict::Replaces { now: now_true } if older.meta.confirmed.is_some() => Outcome::Ask { older: older.row.id.clone(), newer: newer.row.id.clone(), now: now_true.clone(), judged: judged("asked") },
         Verdict::Replaces { now: now_true } => {
             let (older_row, mut change) = crate::memory_items::replace(older, &newer.row.id, None, "tidy", now);
-            // What is true now is said on the item that holds it.
-            let mut newer_meta = newer.meta.clone();
-            newer_meta.now = Some(now_true.clone());
-            let mut newer_row = newer.row.clone();
-            newer_row.updated_at = now;
-            newer_row.action_hash = None;
-            let mut structured = match newer_row.structured.take() {
-                Some(serde_json::Value::Object(o)) => o,
-                _ => serde_json::Map::new(),
-            };
-            structured.insert("item".into(), serde_json::to_value(&newer_meta).unwrap_or_default());
-            newer_row.structured = Some(serde_json::Value::Object(structured));
+            let newer_row = says_now(newer, now_true, now);
             change.items = vec![older.row.id.clone(), newer.row.id.clone()];
             Outcome::Replaced { older: older_row, newer: newer_row, change, judged: judged("replaced") }
         }
@@ -324,14 +329,89 @@ pub(crate) fn started_again(rows: &[MemoryRow]) -> Option<i64> {
     sys::<i64>(rows, "tidy_started", "at")
 }
 
-/// A ledger entry's row for a question put to the person, carrying the
-/// sentence the judgment wrote, so the question can show it on any device.
-pub(crate) fn asked_row(j: &Judged, now_true: &str) -> MemoryRow {
+/// A ledger entry's row for a question put to the person, carrying which
+/// item is the older one and the sentence the judgment wrote, so the
+/// question can be shown and answered on any device.
+pub(crate) fn asked_row(j: &Judged, older: &str, now_true: &str) -> MemoryRow {
     let mut row = ledger_row(j);
     if let Some(serde_json::Value::Object(o)) = row.structured.as_mut() {
+        o.insert("older".into(), serde_json::Value::String(older.to_string()));
         o.insert("now".into(), serde_json::Value::String(now_true.to_string()));
     }
     row
+}
+
+/// A question that waits for the person: something they confirmed, and a
+/// later item the judgment read as changing it. Nothing is replaced until
+/// they answer, and they may never answer.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct Question {
+    /// The row that carries it.
+    pub id: String,
+    pub older: String,
+    pub newer: String,
+    /// What the judgment wrote as true now.
+    pub now: String,
+    pub at: i64,
+}
+
+/// The questions not answered yet, oldest first.
+pub(crate) fn questions(rows: &[MemoryRow]) -> Vec<Question> {
+    let all = ledger(rows);
+    let mut out: Vec<Question> = rows
+        .iter()
+        .filter(|r| !r.deleted)
+        .filter_map(|r| {
+            let s = r.structured.as_ref()?;
+            if s.get("sys")?.as_str()? != "undo" {
+                return None;
+            }
+            let j: Judged = serde_json::from_value(s.get("judged")?.clone()).ok()?;
+            if j.outcome != "asked" {
+                return None;
+            }
+            let older = s.get("older")?.as_str()?.to_string();
+            let newer = if j.pair.0 == older { j.pair.1.clone() } else { j.pair.0.clone() };
+            let answered = all.iter().any(|a| a.outcome == "answered" && a.pair == j.pair && a.at >= j.at);
+            (!answered).then(|| Question { id: r.id.clone(), older, newer, now: s.get("now").and_then(|v| v.as_str()).unwrap_or_default().to_string(), at: j.at })
+        })
+        .collect();
+    out.sort_by(|a, b| a.at.cmp(&b.at).then(a.id.cmp(&b.id)));
+    out
+}
+
+/// The person's answer to a question.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum Answer {
+    /// "Replace it": the confirmed item is replaced by the later one.
+    Replace,
+    /// "Both are true": nothing changes.
+    Both,
+    /// Ignore: nothing changes, and the question is not put again.
+    Ignore,
+}
+
+/// What an answer leads to: rows to save, the change for the log when
+/// something was replaced, and the ledger entry that closes the question
+/// on every device.
+pub(crate) struct Answered {
+    pub rows: Vec<MemoryRow>,
+    pub change: Option<Change>,
+    pub judged: Judged,
+}
+
+pub(crate) fn answer(q: &Question, older: &Item, newer: &Item, a: Answer, now: i64) -> Answered {
+    let judged = |of: &str| Judged { pair: pair_of(&q.older, &q.newer), outcome: "answered".to_string(), at: now, of: Some(of.to_string()) };
+    match a {
+        Answer::Replace => {
+            let (older_row, mut change) = crate::memory_items::replace(older, &newer.row.id, None, "person", now);
+            change.items = vec![older.row.id.clone(), newer.row.id.clone()];
+            Answered { rows: vec![older_row, says_now(newer, &q.now, now)], change: Some(change), judged: judged("replaced") }
+        }
+        Answer::Both => Answered { rows: Vec::new(), change: None, judged: judged("both_stand") },
+        Answer::Ignore => Answered { rows: Vec::new(), change: None, judged: judged("ignored") },
+    }
 }
 
 #[cfg(test)]
@@ -610,8 +690,40 @@ mod tests {
         assert_eq!(started_again(&rows), Some(NOW));
         assert!(ledger(&rows).is_empty(), "neither is a ledger entry");
         let j = Judged { pair: pair_of("it-a", "it-b"), outcome: "asked".into(), at: NOW, of: None };
-        let row = asked_row(&j, "They moved to the medium plan.");
+        let row = asked_row(&j, "it-b", "They moved to the medium plan.");
         assert_eq!(row.structured.as_ref().unwrap()["now"], "They moved to the medium plan.");
         assert_eq!(ledger(&[row]), vec![j], "the entry reads the same with the sentence beside it");
+    }
+
+    #[test]
+    fn a_question_waits_until_it_is_answered_and_only_replace_changes_anything() {
+        let small = item("it-b", "Use the small plan.", 10, "person");
+        assert!(small.meta.confirmed.is_some());
+        let medium = item("it-a", "We moved to the medium plan.", 20, "ai:atlas");
+        let Outcome::Ask { older, now: now_true, judged, .. } = apply(&small, &medium, &Verdict::Replaces { now: "They are on the medium plan.".into() }, NOW) else { panic!("a confirmed item is asked about") };
+        let asked = asked_row(&judged, &older, &now_true);
+        let open = questions(&[asked.clone()]);
+        assert_eq!(open.len(), 1);
+        assert_eq!((open[0].older.as_str(), open[0].newer.as_str(), open[0].now.as_str()), ("it-b", "it-a", "They are on the medium plan."));
+        assert!(!may_judge(&ledger(&[asked.clone()]), "it-a", "it-b"), "a pair asked about is not judged again");
+
+        // "Both are true" and Ignore change no item and close the question.
+        for a in [Answer::Both, Answer::Ignore] {
+            let got = answer(&open[0], &small, &medium, a, NOW + 5);
+            assert!(got.rows.is_empty() && got.change.is_none());
+            assert!(questions(&[asked.clone(), ledger_row(&got.judged)]).is_empty());
+            assert!(!paused(&ledger(&[asked.clone(), ledger_row(&got.judged)]), None));
+        }
+
+        // "Replace it": the confirmed item is replaced, by the person; the
+        // later item says what is true now; the change can be undone.
+        let got = answer(&open[0], &small, &medium, Answer::Replace, NOW + 5);
+        let older_meta = meta_of(&got.rows[0]).unwrap();
+        assert_eq!((older_meta.state.clone(), older_meta.replaced_by.as_deref(), older_meta.state_by.as_str()), (ItemState::Replaced, Some("it-a"), "person"));
+        assert_eq!(meta_of(&got.rows[1]).unwrap().now.as_deref(), Some("They are on the medium plan."));
+        let change = got.change.as_ref().unwrap();
+        assert_eq!((change.what.clone(), change.by.as_str(), change.items.clone()), (What::Replaced, "person", vec!["it-b".to_string(), "it-a".to_string()]));
+        assert!(undone(change, NOW + 9).is_none(), "the person's own replacement, undone, does not count against tidying");
+        assert!(questions(&[asked, ledger_row(&got.judged)]).is_empty());
     }
 }

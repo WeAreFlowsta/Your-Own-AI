@@ -609,6 +609,37 @@ pub(crate) fn recorded_for<'a>(entries: &'a [Recorded], seq: Option<u32>, by_per
     entries.iter().rev().find(|e| e.by_person == by_person && !words.trim().is_empty() && same(&e.content, words))
 }
 
+/// What "remember that", said in the chat, asks to keep.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SaidRemember {
+    /// The exchange before this message.
+    Before,
+    /// This message.
+    This,
+}
+
+/// Did the person ask, in fixed words, for something to be kept? The
+/// phrase alone means the exchange before; the phrase followed by words
+/// means this message. No model reads it: a message is taken this way
+/// only when it begins with one of the phrases and is not a question.
+pub(crate) fn said_remember(message: &str) -> Option<SaidRemember> {
+    const PHRASES: [&str; 6] = ["remember that", "remember this", "keep that", "keep this", "don't forget that", "dont forget that"];
+    let said = message.trim().to_lowercase().replace('\u{2019}', "'");
+    if said.ends_with('?') {
+        return None;
+    }
+    let said = ["please ", "ok ", "ok, ", "okay ", "okay, "].iter().find_map(|p| said.strip_prefix(p)).unwrap_or(&said).trim_start();
+    let rest = PHRASES.iter().find_map(|p| said.strip_prefix(p))?;
+    // "remember thatch roofs leak" is not the phrase.
+    if rest.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    let more = rest.trim_matches(|c: char| !c.is_alphanumeric());
+    // "please", "for me", "too" after the phrase add nothing to keep.
+    Some(if more.is_empty() || matches!(more, "please" | "for me" | "too" | "as well" | "for later") { SaidRemember::Before } else { SaidRemember::This })
+}
+
 /// An item's words are at most this long; the pointer leads to the rest.
 const ITEM_CHARS: usize = 1000;
 
@@ -771,6 +802,54 @@ pub async fn memory_not_replaced(app: tauri::AppHandle, id: String) -> Result<It
     Ok(saved)
 }
 
+/// A question as the page shows it: the item the person confirmed, the
+/// later item that seems to change it, and what would be true then.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuestionView {
+    pub id: String,
+    pub older: ItemView,
+    pub newer: ItemView,
+    pub now: String,
+}
+
+/// The questions that wait for the person. One about an item that is no
+/// longer current (forgotten, or replaced another way) has gone.
+#[tauri::command]
+pub fn memory_questions(app: tauri::AppHandle) -> Result<Vec<QuestionView>, String> {
+    let key = data_key(&app)?;
+    let rows = crate::memory_rows::read_cache(&app, &key, SCOPE);
+    let have = held(&app, &key);
+    let live = |id: &str| have.iter().find(|i| i.row.id == id && matches!(i.meta.state, ItemState::Current | ItemState::Open));
+    Ok(crate::memory_tidy::questions(&rows)
+        .into_iter()
+        .filter_map(|q| Some(QuestionView { older: view(&live(&q.older)?.row)?, newer: view(&live(&q.newer)?.row)?, id: q.id, now: q.now }))
+        .collect())
+}
+
+/// The person answers a question: "Replace it" replaces the item they had
+/// confirmed; "Both are true" and Ignore change nothing. Each closes the
+/// question on every device.
+#[tauri::command]
+pub async fn memory_question_answer(app: tauri::AppHandle, id: String, answer: crate::memory_tidy::Answer) -> Result<(), String> {
+    let key = data_key(&app)?;
+    let rows = crate::memory_rows::read_cache(&app, &key, SCOPE);
+    let q = crate::memory_tidy::questions(&rows).into_iter().find(|q| q.id == id).ok_or("that question is already answered")?;
+    let have = held(&app, &key);
+    let older = have.iter().find(|i| i.row.id == q.older).ok_or("no such item")?;
+    let newer = have.iter().find(|i| i.row.id == q.newer).ok_or("no such item")?;
+    let got = crate::memory_tidy::answer(&q, older, newer, answer, now_ms());
+    let mut rows = got.rows.into_iter();
+    if let (Some(first), Some(change)) = (rows.next(), got.change) {
+        save(&app, &key, first, change).await?;
+    }
+    for row in rows {
+        crate::memory_rows::save_and_cache(&app, row).await?;
+    }
+    crate::memory_rows::save_and_cache(&app, crate::memory_tidy::ledger_row(&got.judged)).await?;
+    Ok(())
+}
+
 /// What memory changed lately, newest first.
 #[tauri::command]
 pub fn memory_changes(app: tauri::AppHandle) -> Result<Vec<Change>, String> {
@@ -891,6 +970,19 @@ mod tests {
         // A forgotten item does not stand in the way of keeping it again.
         let (gone, _) = forget(&have[0], NOW + 9);
         assert!(keep(&[item_of(gone)], Keep { id: "it-5".into(), text: "We buy flour from Hartwell Mills.", item_type: ItemType::Decision, ptr: ptr(2), as_of: 1, by: "person", audience: None, kind: "exchange", why: "pressed", quote: None, subject: None, now: NOW }).is_ok());
+    }
+
+    #[test]
+    fn remember_that_is_read_from_fixed_words() {
+        for alone in ["remember that", "Remember this.", "please remember that!", "OK, keep that", "Don\u{2019}t forget that", "remember that please"] {
+            assert_eq!(said_remember(alone), Some(SaidRemember::Before), "{alone}");
+        }
+        for with_words in ["Remember that the oven is serviced on Mondays.", "keep this: flour comes on Tuesdays", "don't forget that Sam is allergic to nuts"] {
+            assert_eq!(said_remember(with_words), Some(SaidRemember::This), "{with_words}");
+        }
+        for not in ["Do you remember that?", "remember that time we talked about ovens?", "I remember that well", "remember thatch roofs leak", "What should I remember?", "keep going", ""] {
+            assert_eq!(said_remember(not), None, "{not}");
+        }
     }
 
     #[test]
