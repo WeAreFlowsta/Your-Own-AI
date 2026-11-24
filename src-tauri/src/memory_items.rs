@@ -1337,7 +1337,5 @@ mod tests {
         assert!(item.meta.confirmed.is_some() && item.meta.source.ptr.is_none());
         assert_eq!(item.meta.subject.as_deref(), Some(crate::memory_subjects::ABOUT_YOU));
         assert_eq!((change.what, change.by.as_str(), change.undo.clone()), (What::Kept, "person", Undo::Forget));
-        // It is among what a turn is told about the person, for any of their AIs.
-        assert_eq!(crate::memory_prompt::kept_about_them(&[item], "any-ai", None, true), vec!["Vegetarian since 2019.".to_string()]);
     }
 }

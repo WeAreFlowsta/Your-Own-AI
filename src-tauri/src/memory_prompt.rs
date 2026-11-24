@@ -991,4 +991,11 @@ mod tests {
         let t: TurnInput = serde_json::from_value(serde_json::json!({ "surface": "tools-session" })).unwrap();
         assert_eq!((t.surface, t.ai_id, t.question.as_str()), (Surface::ToolsSession, None, ""));
     }
+
+    #[test]
+    fn words_the_person_wrote_about_themselves_are_given_to_any_of_their_ais() {
+        let (row, _) = crate::memory_items::keep_words("it-w".into(), "Vegetarian since 2019.", 5_000);
+        let items = crate::memory_items::items(&[row]);
+        assert_eq!(kept_about_them(&items, "any-ai", None, true), vec!["Vegetarian since 2019.".to_string()]);
+    }
 }
