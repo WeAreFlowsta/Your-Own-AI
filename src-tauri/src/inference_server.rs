@@ -313,6 +313,11 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/replayed-conversations", get(replayed_conversations_dev))
         .route("/internal/conversation-probe", get(conversation_probe_dev))
         .route("/internal/memory-fixture-load", post(memory_fixture_load_dev))
+        .route("/internal/memory-stores", post(memory_stores_dev))
+        .route("/internal/memory-search", get(memory_search_dev))
+        .route("/internal/memory-assemble", post(memory_assemble_dev))
+        .route("/internal/memory-ask", post(memory_ask_dev))
+        .route("/internal/last-chat-request", get(last_chat_request_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -442,6 +447,20 @@ fn build_persona_prompt(ai: &ResolvedAi, user_memory: &str) -> String {
 }
 
 // ── handlers ────────────────────────────────────────────────────────────────
+
+/// Persona mode's messages: this server owns the system prompt (the persona,
+/// with the memory block in its slot), followed by the caller's messages.
+async fn persona_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], query: &str, with_memory: bool) -> Vec<Value> {
+    let user_memory = if with_memory {
+        crate::inference_memory::build_memory_block(app, query, &ai.id, None).await
+    } else {
+        MEMORY_OFF_LINE.to_string()
+    };
+    let persona = build_persona_prompt(ai, &user_memory);
+    let mut msgs = vec![json!({ "role": "system", "content": persona })];
+    msgs.extend(incoming.iter().cloned());
+    msgs
+}
 
 /// The memory task a call names in `X-Your-Own-AI-Task`, when it names one
 /// (the app's own memory writers send these; they are not public values).
@@ -676,6 +695,123 @@ async fn memory_fixture_load_dev(
         Ok(loaded) => Json(json!(loaded)).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: put the profile's memory stores (the facts about the
+/// person, each AI's index of earlier turns) in a known state. `do=seed`
+/// writes a stores file (`path`); `do=build` builds the indexes from a
+/// history file (`path`) as the app does while conversations happen;
+/// `do=keep` keeps a copy of the stores as they are; `do=back` puts that
+/// copy back. `map` and `all` name AIs as for `memory-fixture-load`.
+async fn memory_stores_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let names: std::collections::HashMap<String, String> = q
+        .get("map")
+        .map(|m| m.split(',').filter_map(|pair| pair.split_once(':')).map(|(a, b)| (a.trim().to_string(), b.trim().to_string())).collect())
+        .unwrap_or_default();
+    let all = q.get("all").map(String::as_str);
+    let path = q.get("path").filter(|p| !p.is_empty()).map(std::path::Path::new);
+    let root = match crate::profile::root(&app) {
+        Ok(r) => r,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let done = match (q.get("do").map(String::as_str), path) {
+        (Some("seed"), Some(p)) => crate::memory_fixture::seed_stores(&app, p, &load_ais(&app), &names, all),
+        (Some("build"), Some(p)) => crate::memory_fixture::build_recall(&app, p, &load_ais(&app), &names, all).await,
+        (Some("keep"), _) => crate::memory_fixture::keep_stores(&root).map(|n| json!({ "kept": n })),
+        (Some("back"), _) => crate::memory_fixture::put_stores_back(&root).map(|n| json!({ "back": n })),
+        _ => Err("do=seed|build (with path=<file>) or do=keep|back".to_string()),
+    };
+    match done {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+/// Dev builds only: what memory finds for a question, with no chat model.
+/// `ai` names the AI, `q` is the question, `limit` caps the keyword hits.
+/// Answers with both of the searches the app has: the keyword search over
+/// the AI's conversations, and the lines of the memory block built for the
+/// question (the block is what reaches the model).
+async fn memory_search_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let Some(ai) = q.get("ai").and_then(|name| resolve_ai(&app, name)) else {
+        return Json(json!({ "error": "ai=<id or name> must name an AI of this profile" })).into_response();
+    };
+    let question = q.get("q").cloned().unwrap_or_default();
+    let limit = q.get("limit").and_then(|l| l.parse::<u32>().ok());
+    let keyword = match crate::transcript_search::transcript_search(app.clone(), ai.id.clone(), ai.agent_pub_key.clone(), question.clone(), limit) {
+        Ok(a) => json!(a),
+        Err(e) => json!({ "error": e }),
+    };
+    let block = crate::inference_memory::build_memory_block(&app, &question, &ai.id, None).await;
+    Json(json!({ "ai": ai.name, "question": question, "keyword": keyword, "block": block })).into_response()
+}
+
+/// What the memory routes below are asked: an AI, a question, and the
+/// conversation so far (`messages`, optional, without the question).
+fn memory_turn_of(app: &AppHandle, body: &Value) -> Result<(ResolvedAi, String, Vec<Value>), String> {
+    let ai = body["ai"].as_str().and_then(|name| resolve_ai(app, name)).ok_or("\"ai\" must name an AI of this profile")?;
+    let question = body["question"].as_str().filter(|q| !q.trim().is_empty()).ok_or("\"question\" is required")?.to_string();
+    let mut incoming = body["messages"].as_array().cloned().unwrap_or_default();
+    incoming.push(json!({ "role": "user", "content": question }));
+    Ok((ai, question, incoming))
+}
+
+/// Dev builds only: the exact messages a turn through this port would send
+/// for a question, with no model call. Body: `{"ai", "question", "messages"?,
+/// "memory"?: false}`.
+async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let (ai, question, incoming) = match memory_turn_of(&app, &body) {
+        Ok(t) => t,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let with_memory = body["memory"].as_bool().unwrap_or(true);
+    let messages = fold_same_roles(coalesce_system(persona_messages(&app, &ai, &incoming, &question, with_memory).await));
+    Json(json!({ "ai": ai.name, "path": "port", "messages": messages })).into_response()
+}
+
+/// Dev builds only: assemble as `memory-assemble` does, send it to the
+/// loaded model with the settings an ordinary chat turn uses, and answer
+/// with the reply and the request that produced it. Nothing is recorded and
+/// nothing is indexed.
+async fn memory_ask_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let (ai, question, incoming) = match memory_turn_of(&app, &body) {
+        Ok(t) => t,
+        Err(e) => return Json(json!({ "error": e })).into_response(),
+    };
+    let with_memory = body["memory"].as_bool().unwrap_or(true);
+    let messages = fold_same_roles(coalesce_system(persona_messages(&app, &ai, &incoming, &question, with_memory).await));
+    let state = app.state::<crate::llm::LLMState>();
+    match crate::llm::chat_turn_once(&state, messages).await {
+        Ok((request, reply)) => Json(json!({ "ai": ai.name, "path": "port", "question": question, "request": request, "reply": reply })).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+/// Dev builds only: the last request the chat page sent to a model, as it
+/// was sent (`null` before the first turn of this launch).
+async fn last_chat_request_dev() -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    Json(json!({ "request": crate::llm::last_chat_request() })).into_response()
 }
 
 /// Dev builds only: conversations whose chain record was written at or
@@ -1507,16 +1643,7 @@ async fn chat_completions(
         }
         with_agent_floor(msgs)
     } else {
-        // Persona mode: we own the system prompt (persona + memory in the slot).
-        let user_memory = if with_memory {
-            crate::inference_memory::build_memory_block(&app, &query, &ai.id, None).await
-        } else {
-            MEMORY_OFF_LINE.to_string()
-        };
-        let persona = build_persona_prompt(&ai, &user_memory);
-        let mut msgs = vec![json!({ "role": "system", "content": persona })];
-        msgs.extend(incoming.clone());
-        msgs
+        persona_messages(&app, &ai, &incoming, &query, with_memory).await
     };
     // Some chat templates (Mistral/Ministral) accept only ONE system message —
     // coalesce any system messages into a single leading one (order-preserving).

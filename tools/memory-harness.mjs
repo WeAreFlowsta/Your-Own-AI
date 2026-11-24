@@ -16,6 +16,13 @@
  *       Asks a RUNNING DEV BUILD to write that history into its open
  *       profile as ordinary conversations. Never point this at a profile
  *       that holds real conversations: use a scratch profile.
+ *   node tools/memory-harness.mjs ask-list --questions Q.md --out ASK.json [--wording W.json --field NAME] [--only N,N,...]
+ *       Writes the list the asking spec reads (e2e/specs/memory/ask.e2e.ts):
+ *       [{ n, question }]. A wording file, [{ n, <field>: "..." }], asks
+ *       each question in other words than the set's own.
+ *   node tools/memory-harness.mjs stores --out STORES.json [--facts FACTS.json] [--recall Name=INDEX.json,...]
+ *       Joins a facts list and per-AI indexes of earlier turns into the
+ *       stores file a dev build's /internal/memory-stores?do=seed takes.
  *
  * Env: YOAI_URL (default http://127.0.0.1:11435).
  *
@@ -238,6 +245,21 @@ function need(a, names) {
   }
 }
 
+/** The questions to ask, in the set's order: `only` keeps those numbers,
+ *  and a wording list replaces a question's text where it has one. */
+export function askList(questions, { wording = null, field = "", only = null } = {}) {
+  const other = new Map((wording ?? []).map((w) => [Number(w.n), w[field]]));
+  const keep = only ? new Set(only.map(Number)) : null;
+  if (keep) for (const n of keep) if (!questions.some((q) => q.n === n)) throw new Error(`no question ${n} in the set`);
+  return questions
+    .filter((q) => !keep || keep.has(q.n))
+    .map((q) => {
+      const text = other.get(q.n);
+      if (wording && (typeof text !== "string" || !text.trim())) throw new Error(`the wording file has no "${field}" for question ${q.n}`);
+      return { n: q.n, question: wording ? text.trim() : q.q };
+    });
+}
+
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
   const a = args(rest);
@@ -265,6 +287,34 @@ async function main() {
       process.exit(1);
     }
     console.log(`${body.conversations} conversation(s), ${body.messages} message(s) written; ${body.skipped} already there`);
+  } else if (command === "ask-list") {
+    need(a, ["questions", "out"]);
+    if (!outsideRepo(a.out)) {
+      console.error("the output file must be outside this repository");
+      process.exit(2);
+    }
+    const list = askList(parseQuestions(readFileSync(a.questions, "utf8")), {
+      wording: typeof a.wording === "string" ? JSON.parse(readFileSync(a.wording, "utf8")) : null,
+      field: typeof a.field === "string" ? a.field : "",
+      only: typeof a.only === "string" ? a.only.split(",").map((n) => n.trim()).filter(Boolean) : null,
+    });
+    writeFileSync(a.out, JSON.stringify(list, null, 1));
+    console.log(`${list.length} question(s) written to ${a.out}`);
+  } else if (command === "stores") {
+    need(a, ["out"]);
+    if (!outsideRepo(a.out)) {
+      console.error("the output file must be outside this repository");
+      process.exit(2);
+    }
+    const stores = { recall: [] };
+    if (typeof a.facts === "string") stores.facts = JSON.parse(readFileSync(a.facts, "utf8"));
+    for (const pair of typeof a.recall === "string" ? a.recall.split(",") : []) {
+      const at = pair.indexOf("=");
+      if (at < 1) throw new Error(`--recall takes Name=FILE pairs, not "${pair}"`);
+      stores.recall.push({ ai: pair.slice(0, at), entries: JSON.parse(readFileSync(pair.slice(at + 1), "utf8")) });
+    }
+    writeFileSync(a.out, JSON.stringify(stores));
+    console.log(`${stores.facts ? stores.facts.length : "no"} fact(s), ${stores.recall.map((r) => `${r.entries.length} index entries for ${r.ai}`).join(", ") || "no index"} written to ${a.out}`);
   } else if (command === "sheets") {
     need(a, ["questions", "replies", "out"]);
     if (!outsideRepo(a.out)) {
@@ -287,7 +337,7 @@ async function main() {
       for (const [setup, c] of Object.entries(group)) console.log(`  ${setup.padEnd(20)} ${line(c)}`);
     }
   } else {
-    console.error("usage: memory-harness.mjs sheets|count|convert|load ... (see the top of this file)");
+    console.error("usage: memory-harness.mjs sheets|count|convert|load|ask-list|stores ... (see the top of this file)");
     process.exit(2);
   }
 }

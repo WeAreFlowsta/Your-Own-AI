@@ -253,8 +253,174 @@ pub(crate) async fn load_into_profile(app: &tauri::AppHandle, path: &std::path::
     Ok(loaded)
 }
 
+/// The stores the app's memory reads when it builds a prompt: the facts
+/// about the person, and each AI's index of earlier turns. A file of these
+/// puts a profile's memory in a known state before it is measured.
+#[derive(Deserialize)]
+pub(crate) struct MemoryStores {
+    #[serde(default)]
+    pub facts: Option<Vec<crate::memory::MemoryFact>>,
+    #[serde(default)]
+    pub recall: Vec<RecallStore>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct RecallStore {
+    /// The AI's name in the file (mapped like a conversation's).
+    pub ai: String,
+    pub entries: Vec<crate::transcript_memory::TranscriptEmbedding>,
+}
+
+/// The store id of the profile AI a file's name stands for.
+fn store_id_for(profile_ais: &[serde_json::Value], names: &HashMap<String, String>, all: Option<&str>, name: &str) -> Result<String, String> {
+    let find = |wanted: &str| {
+        profile_ais.iter().find_map(|a| {
+            let id = a["id"].as_str().filter(|i| !i.is_empty())?;
+            (id == wanted || a["agentPubKey"].as_str() == Some(wanted) || a["name"].as_str().unwrap_or("").eq_ignore_ascii_case(wanted)).then(|| id.to_string())
+        })
+    };
+    let wanted = names.get(name).map(String::as_str).unwrap_or(name);
+    find(wanted)
+        .or_else(|| if names.contains_key(name) { None } else { all.and_then(find) })
+        .ok_or_else(|| format!("no AI in this profile for the name {name:?} (map it with map=Name:ai, or give all=ai)"))
+}
+
+fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+    use tauri::Manager;
+    app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()
+}
+
+/// Write a file of memory stores into the open profile, replacing what is
+/// there. Answers with how many facts and how many index entries per AI.
+pub(crate) fn seed_stores(app: &tauri::AppHandle, path: &std::path::Path, profile_ais: &[serde_json::Value], names: &HashMap<String, String>, all: Option<&str>) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let stores: MemoryStores = serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    let key = data_key(app)?;
+    let mut targets = Vec::new();
+    for r in &stores.recall {
+        targets.push(store_id_for(profile_ais, names, all, &r.ai)?);
+    }
+    if let Some(facts) = &stores.facts {
+        crate::memory::write_facts(app, &key, facts)?;
+    }
+    let mut recall = serde_json::Map::new();
+    for (r, id) in stores.recall.iter().zip(&targets) {
+        crate::transcript_memory::write_for(app, &key, id, &r.entries)?;
+        recall.insert(r.ai.clone(), serde_json::json!(r.entries.len()));
+    }
+    Ok(serde_json::json!({ "facts": stores.facts.as_ref().map(Vec::len), "recall": recall }))
+}
+
+/// Build each AI's index of earlier turns from a history file the way the
+/// app builds it as conversations happen: the person's messages, oldest
+/// first, through the same indexing a turn gets. Needs the embedding model.
+pub(crate) async fn build_recall(app: &tauri::AppHandle, path: &std::path::Path, profile_ais: &[serde_json::Value], names: &HashMap<String, String>, all: Option<&str>) -> Result<serde_json::Value, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let fixture: Fixture = serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+    let key = data_key(app)?;
+    let mut turns: Vec<(i64, String, &str, &str)> = Vec::new();
+    for c in &fixture.conversations {
+        let id = store_id_for(profile_ais, names, all, &c.ai)?;
+        let started = c.started_at.micros().ok_or_else(|| format!("{}: its start is not a date", c.id))?;
+        for (i, m) in c.messages.iter().enumerate() {
+            if m.role == "user" {
+                let at = m.at.as_ref().and_then(When::micros).unwrap_or(started + i as i64);
+                turns.push((at, id.clone(), &c.id, &m.text));
+            }
+        }
+    }
+    turns.sort_by_key(|t| t.0);
+    let mut asked = 0usize;
+    for (_, id, conversation, text) in &turns {
+        crate::inference_memory::index_turn(app, id, conversation, text).await;
+        asked += 1;
+    }
+    let mut held = serde_json::Map::new();
+    let ids: HashSet<&String> = turns.iter().map(|t| &t.1).collect();
+    for id in ids {
+        held.insert(id.clone(), serde_json::json!(crate::transcript_memory::read_for(app, &key, id)?.len()));
+    }
+    Ok(serde_json::json!({ "turns": asked, "held": held }))
+}
+
+const STORES_KEPT: &str = "memory-stores-kept";
+
+fn is_store_file(name: &str) -> bool {
+    name == "memory-facts.enc" || (name.starts_with("transcript-emb-") && name.ends_with(".enc"))
+}
+
+fn store_files(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_file() && p.file_name().and_then(|n| n.to_str()).is_some_and(is_store_file)).collect())
+        .unwrap_or_default()
+}
+
+/// Keep a copy of the profile's memory stores as they are now.
+pub(crate) fn keep_stores(root: &std::path::Path) -> Result<usize, String> {
+    let kept = root.join(STORES_KEPT);
+    let _ = std::fs::remove_dir_all(&kept);
+    std::fs::create_dir_all(&kept).map_err(|e| e.to_string())?;
+    let files = store_files(root);
+    for f in &files {
+        std::fs::copy(f, kept.join(f.file_name().unwrap())).map_err(|e| e.to_string())?;
+    }
+    Ok(files.len())
+}
+
+/// Put the memory stores back as they were kept: stores written since are
+/// replaced, and a store that did not exist then is removed.
+pub(crate) fn put_stores_back(root: &std::path::Path) -> Result<usize, String> {
+    let kept = root.join(STORES_KEPT);
+    if !kept.is_dir() {
+        return Err("no copy of the memory stores was kept in this profile".into());
+    }
+    for f in store_files(root) {
+        std::fs::remove_file(&f).map_err(|e| e.to_string())?;
+    }
+    let files = store_files(&kept);
+    for f in &files {
+        std::fs::copy(f, root.join(f.file_name().unwrap())).map_err(|e| e.to_string())?;
+    }
+    Ok(files.len())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kept_memory_stores_come_back_and_later_ones_go() {
+        let dir = std::env::temp_dir().join(format!("memory-stores-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("memory-facts.enc"), "facts v1").unwrap();
+        std::fs::write(dir.join("transcript-emb-aaa.enc"), "index v1").unwrap();
+        std::fs::write(dir.join("ai-data.json"), "not a store").unwrap();
+        assert!(super::put_stores_back(&dir).is_err(), "nothing kept yet");
+        assert_eq!(super::keep_stores(&dir).unwrap(), 2);
+        std::fs::write(dir.join("memory-facts.enc"), "facts v2").unwrap();
+        std::fs::write(dir.join("transcript-emb-bbb.enc"), "a later index").unwrap();
+        std::fs::write(dir.join("ai-data.json"), "changed").unwrap();
+        assert_eq!(super::put_stores_back(&dir).unwrap(), 2);
+        assert_eq!(std::fs::read_to_string(dir.join("memory-facts.enc")).unwrap(), "facts v1");
+        assert_eq!(std::fs::read_to_string(dir.join("transcript-emb-aaa.enc")).unwrap(), "index v1");
+        assert!(!dir.join("transcript-emb-bbb.enc").exists());
+        assert_eq!(std::fs::read_to_string(dir.join("ai-data.json")).unwrap(), "changed", "other files are left alone");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stores_file_names_ais_the_way_a_history_does() {
+        let ais = vec![serde_json::json!({ "id": "ai-1", "name": "Juno", "agentPubKey": "uhCAk1" }), serde_json::json!({ "id": "ai-2", "name": "Atlas" })];
+        let none = HashMap::new();
+        assert_eq!(super::store_id_for(&ais, &none, None, "juno").unwrap(), "ai-1");
+        assert_eq!(super::store_id_for(&ais, &none, None, "uhCAk1").unwrap(), "ai-1");
+        assert_eq!(super::store_id_for(&ais, &none, Some("Atlas"), "Pilot").unwrap(), "ai-2");
+        let map: HashMap<String, String> = [("Pilot".to_string(), "Juno".to_string())].into();
+        assert_eq!(super::store_id_for(&ais, &map, None, "Pilot").unwrap(), "ai-1");
+        assert!(super::store_id_for(&ais, &none, None, "Pilot").is_err());
+        let wrong: HashMap<String, String> = [("Pilot".to_string(), "Nobody".to_string())].into();
+        assert!(super::store_id_for(&ais, &wrong, Some("Atlas"), "Pilot").is_err(), "a wrong map is an error, never the fallback");
+    }
+
     use super::*;
 
     fn ais() -> HashMap<String, FixtureAi> {

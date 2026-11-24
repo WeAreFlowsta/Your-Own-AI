@@ -4,7 +4,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   parseQuestions,
@@ -12,6 +12,7 @@ import {
   countCodes,
   outsideRepo,
   convertBackup,
+  askList,
   CODES,
 } from "./memory-harness.mjs";
 
@@ -137,7 +138,7 @@ test("a reader file with a wrong code or a missing label is refused, never guess
 test("an output folder inside the repository is refused", () => {
   assert.equal(outsideRepo(join(repo, "tools", "out")), false);
   assert.equal(outsideRepo(repo), false);
-  assert.equal(outsideRepo(join(repo, "..", "Your Own AI App", "e2e")), false);
+  assert.equal(outsideRepo(join(repo, "..", basename(repo), "e2e")), false);
   const out = mkdtempSync(join(tmpdir(), "memory-harness-"));
   assert.equal(outsideRepo(out), true);
   writeFileSync(join(out, "probe.txt"), "x");
@@ -208,4 +209,19 @@ test("two conversations with messages and one start time are reported, not hidde
   });
   const { report } = convertBackup({ apps: [{ snapshots: [conv("conv-aa"), conv("conv-bb")] }] });
   assert.deepEqual(report.same_start, [["conv-aa", "conv-bb"]]);
+});
+
+test("an ask list keeps the set's order, takes other wordings, and refuses a missing one", () => {
+  assert.deepEqual(askList(questions), [
+    { n: 1, question: "Which mill?" },
+    { n: 2, question: "What threshold?" },
+    { n: 3, question: "Which accountant?" },
+  ]);
+  const wording = [{ n: 3, loose: " who does the books? " }, { n: 1, loose: "where does the flour come from" }];
+  assert.deepEqual(askList(questions, { wording, field: "loose", only: ["3", "1"] }), [
+    { n: 1, question: "where does the flour come from" },
+    { n: 3, question: "who does the books?" },
+  ]);
+  assert.throws(() => askList(questions, { wording, field: "loose" }), /question 2/);
+  assert.throws(() => askList(questions, { only: [9] }), /no question 9/);
 });

@@ -6489,6 +6489,47 @@ pub(crate) fn apply_sampling(body: &mut serde_json::Value, s: Option<&SamplingPa
     }
 }
 
+static LAST_CHAT_REQUEST: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// The last request a person's own chat turn sent (dev builds only keep it).
+pub(crate) fn last_chat_request() -> Option<serde_json::Value> {
+    LAST_CHAT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// One chat turn on the loaded local model, not streamed, with the settings
+/// an ordinary chat turn uses (no thinking, the chat sampling, the chat
+/// stops). Answers with the request as sent and the model's message. For
+/// measuring only: nothing is recorded and the page hears nothing.
+pub(crate) async fn chat_turn_once(state: &LLMState, messages: Vec<serde_json::Value>) -> Result<(serde_json::Value, serde_json::Value), String> {
+    let model = state.current_model.lock().await.clone().ok_or("no model is loaded")?;
+    if !our_chat_server_is_up() {
+        return Err("the local engine is not running".into());
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "max_tokens": 4096,
+        "top_k": 40,
+        "stop": chat_stop_strings(&model),
+    });
+    apply_sampling(&mut body, None, false);
+    apply_no_think_here(&mut body, &model);
+    let _turn = CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
+    let resp = local_http()
+        .post(format!("http://localhost:{}/v1/chat/completions", chat_port()))
+        .bearer_auth(local_api_key())
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("the local engine did not answer: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("the local engine answered {}", resp.status()));
+    }
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| format!("the local engine's answer did not parse: {e}"))?;
+    Ok((body, parsed["choices"][0]["message"].clone()))
+}
+
 #[derive(serde::Deserialize, Clone, Copy, Default)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
@@ -6802,6 +6843,11 @@ pub async fn stream_chat_completion(
     } else {
         body
     };
+    // Dev builds keep the last request of a person's own turn, so a test
+    // can read exactly what the page sent.
+    if cfg!(debug_assertions) && background != Some(true) && request_body.get("grammar").is_none() {
+        *LAST_CHAT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(request_body.clone());
+    }
 
     // Log a COMPACT summary to the log file - never the full body, whose base64
     // image data floods the console and buries everything useful.
