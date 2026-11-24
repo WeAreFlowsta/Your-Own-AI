@@ -136,7 +136,13 @@ jobs:
         working-directory: src-tauri/windows
         run: |
           $makensis = Join-Path ${env:ProgramFiles(x86)} "NSIS\makensis.exe"
-          if (-not (Test-Path $makensis)) { choco install nsis -y --no-progress | Out-Null }
+          if (-not (Test-Path $makensis)) {
+            # Not on every runner image: install it, and look where it landed.
+            choco install nsis -y --no-progress
+            $found = Get-ChildItem "${env:ProgramFiles(x86)}\NSIS", "${env:ProgramFiles}\NSIS", "${env:ChocolateyInstall}\lib" -Recurse -Filter makensis.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $found) { throw "NSIS is not on this runner and could not be installed" }
+            $makensis = $found.FullName
+          }
           & $makensis /V2 hook-test.nsi
           if ($LASTEXITCODE -ne 0) { throw "the installer hooks did not compile" }
           New-Item -ItemType Directory -Force hook-test-inst | Out-Null
