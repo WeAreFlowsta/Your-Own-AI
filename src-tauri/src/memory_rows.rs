@@ -335,15 +335,24 @@ fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[M
 /// own, and the scope of every project this device knows (a project a
 /// kept item is for, and each folder that had a project memory).
 pub(crate) fn backup_scopes(app: &tauri::AppHandle) -> Vec<String> {
+    let folders: Vec<String> = crate::commands_holochain::project_memory_folders(app).iter().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))).collect();
+    let items = app
+        .try_state::<Arc<HolochainState>>()
+        .and_then(|hc| hc.get().and_then(|m| m.data_key()).ok())
+        .map(|key| crate::memory_items::items(&read_cache(app, &key, crate::memory_items::SCOPE)))
+        .unwrap_or_default();
+    scopes_for_backup(folders, &items)
+}
+
+/// Memory's own scope, then one scope for each project: the projects of
+/// this device's folders, and every project a kept item is for or a
+/// subject was made from.
+pub(crate) fn scopes_for_backup(folder_projects: Vec<String>, items: &[crate::memory_items::Item]) -> Vec<String> {
     let mut scopes = vec![crate::memory_items::SCOPE.to_string()];
-    let mut projects: Vec<String> = crate::commands_holochain::project_memory_folders(app).iter().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))).collect();
-    if let Some(hc) = app.try_state::<Arc<HolochainState>>() {
-        if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
-            for item in crate::memory_items::items(&read_cache(app, &key, crate::memory_items::SCOPE)) {
-                if let crate::memory_items::Audience::Project { project } = item.meta.audience {
-                    projects.push(project);
-                }
-            }
+    let mut projects = folder_projects;
+    for item in items {
+        if let crate::memory_items::Audience::Project { project } = &item.meta.audience {
+            projects.push(project.clone());
         }
     }
     projects.sort();
@@ -1161,6 +1170,21 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_backup_carries_memorys_scope_and_each_projects() {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{keep, meta_of, Audience, Item, ItemType, Keep};
+        let item = |id: &str, audience: Audience| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text: "Deploy with make ship.", item_type: ItemType::Detail, ptr: Ptr { c: 1, s: 1, t: 1, a: 0, b: 0 }, as_of: 1, by: "person", audience: Some(audience), kind: "exchange", why: "pressed", quote: None, subject: None, now: 1 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let items = vec![item("it-1", Audience::Project { project: "p-items".into() }), item("it-2", Audience::All), item("it-3", Audience::Project { project: "p-folder".into() })];
+        let scopes = scopes_for_backup(vec!["p-folder".into(), String::new()], &items);
+        assert_eq!(scopes, vec!["memory".to_string(), "project:p-folder".to_string(), "project:p-items".to_string()], "memory's rows first; a project once, whether a folder or an item names it");
+        assert_eq!(scopes_for_backup(Vec::new(), &[]), vec!["memory".to_string()], "what was kept is in the backup before any project exists");
+    }
+
 
     fn row(id: &str, text: &str, at: i64) -> MemoryRow {
         MemoryRow {

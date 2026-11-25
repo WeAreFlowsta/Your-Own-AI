@@ -357,6 +357,22 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; h
   const draft = useSignal('');
   const busy = useSignal('');
   const problem = useSignal('');
+  /** Items made a rule for their project on this visit. */
+  const ruled = useSignal<string[]>([]);
+
+  // The item's words become a rule of its project; the item stays as it is.
+  const makeRule = $(async (id: string, text: string, project: string) => {
+    busy.value = id;
+    problem.value = '';
+    try {
+      const { saveMemoryRow, newRow, projectScope } = await import('../../utils/memoryRows');
+      await saveMemoryRow(newRow(projectScope(project), 'rule', text, { pinned: true }));
+      ruled.value = [...ruled.value, id];
+    } catch (e) {
+      problem.value = `The rule could not be saved just now. ${String(e)}`;
+    }
+    busy.value = '';
+  });
 
   const change = $(async (id: string, edit: Record<string, unknown>) => {
     busy.value = id;
@@ -446,6 +462,19 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; h
                   <button type="button" class={act} data-testid="item-forget" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
                     Forget
                   </button>
+                  {(() => {
+                    const project = i.item.audience?.kind === 'project' ? i.item.audience.project : props.subject.project;
+                    if (!project) return null;
+                    return ruled.value.includes(i.id) ? (
+                      <span class="text-xs text-[var(--text-muted)]" data-testid="item-ruled">
+                        Now a rule for this project.
+                      </span>
+                    ) : (
+                      <button type="button" class={act} data-testid="item-make-rule" disabled={busy.value === i.id} onClick$={() => makeRule(i.id, i.text, project)}>
+                        Make it a rule for this project
+                      </button>
+                    );
+                  })()}
                 </div>
               )}
             </>

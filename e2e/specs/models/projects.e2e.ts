@@ -203,6 +203,21 @@ describe("projects: the agent in a project", () => {
       ((await browser.execute(() => (document.querySelector('[data-testid="map-sentence"]') as HTMLElement | null)?.innerText ?? "")) as string).includes(` in ${leaf}:`),
     );
     await shot("projects-memory-map");
+    // What an AI kept for this project sits in the project's subject, and
+    // one press makes it a rule of the project.
+    const pidHere = await invoke<string>("project_identity_for", { folder: FOLDER });
+    const mapHere = await invoke<{ subjects: { id: string; kind: string; project: string | null; items: number }[] }>("memory_map", { view: { ai: null, project: pidHere } });
+    const subjectHere = mapHere.subjects.find((s) => s.project === pidHere);
+    console.log(`e2e: the project's view: ${JSON.stringify(mapHere.subjects.map((s) => [s.kind, s.items]))}`);
+    expect(subjectHere?.items ?? 0).toBeGreaterThan(0);
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), subjectHere!.id);
+    const makeRule = await $('[data-testid="item-make-rule"]');
+    await makeRule.waitForExist({ timeout: 30_000 });
+    const before = (await invoke<{ kind: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pidHere}` })).filter((r) => r.kind === "rule" && !r.deleted).length;
+    await browser.execute((e) => (e as HTMLElement).click(), makeRule);
+    await (await $('[data-testid="item-ruled"]')).waitForExist({ timeout: 60_000 });
+    const after = (await invoke<{ kind: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pidHere}` })).filter((r) => r.kind === "rule" && !r.deleted).length;
+    expect(after).toBe(before + 1);
     await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
     const rules = await $('[data-testid="project-rules"]');
     await rules.waitForDisplayed({ timeout: 30_000 });
@@ -214,6 +229,7 @@ describe("projects: the agent in a project", () => {
     // Back to the chat, the project still open.
     await browser.execute(() => history.back());
     await waitForChat();
+    await (await $('[data-testid="project-pill"]')).waitForDisplayed({ timeout: 30_000, timeoutMsg: "back in the chat, the project was no longer open" });
   });
 
   it("is given the project's rules in a new session", async function () {
