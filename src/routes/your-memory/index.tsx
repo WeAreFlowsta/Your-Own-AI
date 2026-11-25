@@ -1,9 +1,9 @@
 /**
- * Your Memory — the global page for the shared user-level profile.
- *
- * The management home for "what your AIs know about you": every AI reads
- * from this one profile, so it lives here (top-level, next to Your AIs)
- * rather than per-AI. The per-AI Memory page mirrors it read-only.
+ * Memory: the one page for what the person's AIs can use. The faces choose
+ * whose view the whole page shows: all the person's AIs, or one of them.
+ * With an AI chosen, the Map is what that AI can use, the Rules board
+ * starts with the rules that AI follows, and under the Map is what the
+ * person gave that AI.
  */
 import { component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
@@ -11,7 +11,9 @@ import { LuArrowLeft, LuBrain } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
-import ProfileMemory from "../../components/ProfileMemory";
+import AiKnowledge from "../../components/AiKnowledge";
+import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
+import { useAiData } from "../../contexts/AiDataContext";
 import ImportHistoryCard from "../../components/ImportHistoryCard";
 import MemoryOwners from "../../components/MemoryOwners";
 import { RecentlyBoard } from "../../components/memory/RecentlyBoard";
@@ -35,7 +37,7 @@ export default component$(() => {
   const headerWs = useHeaderWorkspace();
   /** Whose view of memory the Map shows: "you" for all the person's AIs, or one AI's id. */
   const viewAi = useSignal("you");
-  const viewAgent = useSignal("");
+  const aiData = useAiData();
   /** The board that is open. The address can name one: `#recently`, `#open`, `#rules`. */
   const tab = useSignal<Tab>("map");
   const openCount = useSignal(0);
@@ -49,6 +51,16 @@ export default component$(() => {
       tab.value = TABS.some((t) => t.id === named) ? (named as Tab) : "map";
     };
     fromAddress();
+    // An AI's card opens Memory on that AI.
+    try {
+      const wanted = sessionStorage.getItem("memory-ai-id");
+      if (wanted) {
+        sessionStorage.removeItem("memory-ai-id");
+        viewAi.value = wanted;
+      }
+    } catch {
+      /* the page opens on all the person's AIs */
+    }
     const fromProject = () => (project.value = chosenProject());
     fromProject();
     window.addEventListener(MEMORY_PROJECT_EVENT, fromProject);
@@ -62,6 +74,10 @@ export default component$(() => {
       window.removeEventListener("yoai-memory-changed", count);
     });
   });
+
+  // The AI whose face is chosen, when one is.
+  const picked = aiData.userDefinedAis.find((a) => a.id === viewAi.value);
+  const chosen = picked ? { id: picked.id, name: picked.name } : null;
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
@@ -94,44 +110,23 @@ export default component$(() => {
 
             <div class="min-w-0 flex-1">
               <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela leading-tight">
-                Your Memory
+                Memory
               </h2>
               <p class="text-sm text-[var(--text-secondary)]">
-                What your AIs know about you — shared across all of them, stored
-                encrypted on this device.
+                What your AIs can use, kept encrypted on this device.
               </p>
             </div>
           </div>
 
-          <p class="text-xs text-[var(--text-secondary)] mb-2">Show what can be used by</p>
           <MemoryOwners
             selected={viewAi.value}
             onAll$={() => {
               viewAi.value = "you";
             }}
-            onPick$={(aiId, agentKey) => {
+            onPick$={(aiId) => {
               viewAi.value = aiId;
-              viewAgent.value = agentKey;
             }}
           />
-          {viewAi.value !== "you" && (
-            <p class="-mt-4 mb-6 text-xs text-[var(--text-muted)]">
-              <button
-                type="button"
-                data-testid="open-ai-memory"
-                class="underline hover:text-[var(--text-secondary)]"
-                onClick$={() => {
-                  sessionStorage.setItem("memory-ai-id", viewAi.value);
-                  sessionStorage.setItem("memory-agent-key", viewAgent.value);
-                  sessionStorage.setItem("memory-tab", "knows");
-                  nav("/memory/");
-                }}
-              >
-                Open this AI's conversations and documents
-              </button>
-            </p>
-          )}
-
           {project.value && (
             <p class="mb-4 text-sm text-[var(--text-secondary)]" data-testid="memory-project-line">
               Showing the project <span class="font-semibold text-[var(--text-primary)]">{project.value.name}</span>.{" "}
@@ -178,11 +173,21 @@ export default component$(() => {
                   }}
                 />
               </div>
-              <ProfileMemory readOnly={false} rules={false} />
-              <div class="mt-6">
-                <SetAsideList />
-              </div>
-              <ImportHistoryCard />
+              {chosen ? (
+                // What the person gave this AI: its documents and what they wrote for it.
+                <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]" data-testid="given-to-ai">
+                  <h3 class="text-lg font-semibold text-[var(--text-primary)] mb-4">What you gave {chosen.name}</h3>
+                  <AiKnowledge aiId={chosen.id} aiName={chosen.name} />
+                  <div class="mt-4">
+                    <AiKnowledgeDocuments aiId={chosen.id} aiName={chosen.name} />
+                  </div>
+                </section>
+              ) : (
+                <>
+                  <SetAsideList />
+                  <ImportHistoryCard />
+                </>
+              )}
             </>
           )}
           {tab.value === "recently" && (
@@ -194,7 +199,7 @@ export default component$(() => {
             </>
           )}
           {tab.value === "open" && <OpenBoard />}
-          {tab.value === "rules" && <RulesBoard project={project.value} />}
+          {tab.value === "rules" && <RulesBoard project={project.value} ai={chosen} />}
 
           <p class="mt-6 text-xs text-[var(--text-muted)]">
             <button type="button" data-testid="open-memory-update" onClick$={() => nav("/memory-update/")} class="underline hover:text-[var(--text-secondary)]">

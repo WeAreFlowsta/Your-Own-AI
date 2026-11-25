@@ -27,7 +27,7 @@ export const RememberEntryButton = component$<{ aiId: string; aiName?: string; c
     }
   });
 
-  if (kept.value) return <KeptLine kept={kept} aiId={props.aiId} aiName={props.aiName ?? ''} own={props.role === 'user'} />;
+  if (kept.value) return <KeptLine kept={kept} />;
   return (
     <button
       type="button"

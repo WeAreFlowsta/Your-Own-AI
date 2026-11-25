@@ -89,9 +89,7 @@ export default component$<Props>((props) => {
                 return;
               }
               sessionStorage.setItem("memory-ai-id", ai.id);
-              sessionStorage.setItem("memory-agent-key", ai.agentPubKey || "");
-              sessionStorage.setItem("memory-tab", "knows");
-              nav("/memory/");
+              nav("/your-memory/");
             }}
           >
             <span class="relative">

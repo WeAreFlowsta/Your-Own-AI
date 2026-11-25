@@ -12,7 +12,7 @@ import type { MemoryProject } from '../../utils/memoryProject';
 
 /** `project`: the project Memory is opened on. Its rules stand first, with
  *  their own field; they are given in that project's sessions only. */
-export const RulesBoard = component$<{ project?: MemoryProject | null }>((props) => {
+export const RulesBoard = component$<{ project?: MemoryProject | null; ai?: { id: string; name: string } | null }>((props) => {
   const projectDraft = useSignal('');
   const projectRefresh = useSignal(0);
   const agentsMd = useSignal('');
@@ -69,6 +69,14 @@ export const RulesBoard = component$<{ project?: MemoryProject | null }>((props)
 
   return (
     <div class="flex flex-col gap-6" data-testid="rules-board">
+      {props.ai && (
+        // With an AI's face chosen: the rules that AI follows, first.
+        <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]" data-testid="ai-rules">
+          <h3 class="text-lg font-semibold text-[var(--text-primary)]">Rules {props.ai.name} follows</h3>
+          <p class="mt-1 text-sm text-[var(--text-secondary)] mb-3">These are for {props.ai.name} only. Your own rules, below, are for all your AIs.</p>
+          <MemoryRowsPanel aiId={props.ai.id} agentKey={props.ai.id} rulesHeading={`Rules ${props.ai.name} follows`} />
+        </section>
+      )}
       {props.project && (
         <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]" data-testid="project-rules">
           <h3 class="text-lg font-semibold text-[var(--text-primary)]">Rules for {props.project.name}</h3>

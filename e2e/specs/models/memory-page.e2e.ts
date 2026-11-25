@@ -10,19 +10,22 @@ const items = () => invoke<Item[]>("memory_items");
 
 let ai = { id: "", agent: "" };
 
-async function add(kind: string, text: string) {
-  await (await $('[data-testid="memory-add"]')).click();
-  await (await $('[data-testid="memory-add-kind"]')).click();
-  await (await $(`[data-testid="memory-add-option"][data-kind="${kind}"]`)).click();
-  const field = kind === "note" ? "memory-add-note" : "memory-add-value";
-  await (await $(`[data-testid="${field}"]`)).waitForExist({ timeout: 20_000 });
-  await browser.execute((id: string, t: string) => {
-    const el = document.querySelector(`[data-testid="${id}"]`) as HTMLInputElement;
+// Written in the About you subject's panel, in the person's own words.
+async function addAbout(text: string) {
+  await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiMap?.select === "function"), { timeout: 60_000, timeoutMsg: "the map never came up" });
+  await browser.execute(() => (window as any).__yoaiMap.select("sub-about-you"));
+  const open = await $('[data-testid="about-add"]');
+  await open.waitForExist({ timeout: 30_000 });
+  await browser.execute((e) => (e as HTMLElement).click(), open);
+  const box = await $('[data-testid="about-add-text"]');
+  await box.waitForExist({ timeout: 20_000 });
+  await browser.execute((e, t: string) => {
+    const el = e as HTMLTextAreaElement;
     el.focus();
     el.value = t;
     el.dispatchEvent(new Event("input", { bubbles: true }));
-  }, field, text);
-  await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-add-save"]'));
+  }, box, text);
+  await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="about-add-save"]'));
 }
 
 describe("the Memory page", () => {
@@ -50,11 +53,11 @@ describe("the Memory page", () => {
     );
 
     await browser.url("tauri://localhost/your-memory/");
-    await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
+    await (await $('[data-testid="memory-map-stage"]')).waitForExist({ timeout: 60_000 });
     const before = (await items()).length;
-    await add("likes", "rye sourdough with caraway");
+    await addAbout("I like rye sourdough with caraway.");
     await browser.waitUntil(async () => (await items()).length === before + 1, { timeout: 60_000, timeoutMsg: "what was written was not kept as an item" });
-    const kept = (await items()).find((i) => i.text === "Likes: rye sourdough with caraway")!;
+    const kept = (await items()).find((i) => i.text === "I like rye sourdough with caraway.")!;
     console.log(`e2e: kept from the page: ${JSON.stringify(kept)}`);
     expect(kept.item.state).toBe("current");
     expect(kept.savedBy).toBe("person");
@@ -65,10 +68,10 @@ describe("the Memory page", () => {
     await browser.waitUntil(async () => ((await browser.execute(() => Array.from(document.querySelectorAll('[data-testid="recently-row"]')).map((r) => (r as HTMLElement).innerText).join("\n"))) as string).includes("rye sourdough with caraway"), { timeout: 30_000, timeoutMsg: "Recently did not list what was kept" });
     await shot("memory-page-kept-words");
     await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="map"]'));
-    await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
+    await (await $('[data-testid="memory-map-stage"]')).waitForExist({ timeout: 60_000 });
 
-    // A note, in free words.
-    await add("note", "My oven is a Rofco B40, bought in 2024.");
+    // A second one.
+    await addAbout("My oven is a Rofco B40, bought in 2024.");
     await browser.waitUntil(async () => (await items()).some((i) => i.text === "My oven is a Rofco B40, bought in 2024."), { timeout: 60_000, timeoutMsg: "the note was not kept as an item" });
     // The same words again are not kept twice.
     const again = await invoke<{ already: boolean }>("memory_keep_words", { text: "my oven is a Rofco B40, bought in 2024" });
@@ -79,7 +82,7 @@ describe("the Memory page", () => {
     const { memory } = await res.json();
     console.log(`e2e: the builder's part:\n${memory.systemPart}`);
     expect(memory.systemPart).toContain("About them, kept by them");
-    expect(memory.systemPart).toContain("- Likes: rye sourdough with caraway");
+    expect(memory.systemPart).toContain("- I like rye sourdough with caraway.");
     expect(memory.systemPart).toContain("- My oven is a Rofco B40, bought in 2024.");
   });
 

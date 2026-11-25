@@ -709,6 +709,7 @@ async fn found_beside(
     };
     let follow_up = follow_up_query(input.previous_question.as_deref(), &input.question);
     let mut followed = false;
+    let held_health;
     if let Some(joined) = &follow_up {
         if let Ok(v) = crate::inference_memory::embed_for_search(app, joined).await {
             if let Ok(f) = crate::memory_reading::search(app, &v, at_most, &keep) {
@@ -716,6 +717,13 @@ async fn found_beside(
                 followed = true;
             }
         }
+    }
+    // A turn about the person's health is never given to an AI that
+    // answers off this computer: found ones stay here, and are counted.
+    {
+        let (kept, held) = crate::memory_health::hold_back(std::mem::take(&mut hits), input.online);
+        hits = kept;
+        held_health = held;
     }
     // Conversations that would have been found and that this AI may not
     // use: counted, so the person can be told and can allow it.
@@ -800,8 +808,9 @@ async fn found_beside(
         texts.push(note.clone());
     }
     if input.online {
-        // What left the computer with this turn, for the line under the reply.
-        rec.more.insert("sent".into(), serde_json::json!({ "passages": rec.exchanges.len(), "lines": rec.lines.len(), "note": stand.note.is_some() }));
+        // What left the computer with this turn, for the line under the reply,
+        // and how many found messages stayed here because they are about the person's health.
+        rec.more.insert("sent".into(), serde_json::json!({ "passages": rec.exchanges.len(), "lines": rec.lines.len(), "note": stand.note.is_some(), "held": held_health }));
     }
     (Some(b.text), Some(rec), texts, stand.note)
 }

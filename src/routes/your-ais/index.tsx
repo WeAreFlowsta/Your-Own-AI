@@ -632,7 +632,7 @@ export default component$(() => {
                         onClick$={() => {
                           sessionStorage.setItem("memory-ai-id", ai.id);
                           sessionStorage.setItem("memory-agent-key", ai.agentPubKey || "");
-                          nav("/memory/");
+                          nav("/your-memory/");
                         }}
                         title="Memory"
                         class="px-3 py-1.5 transition-colors duration-150 flex items-center gap-1.5 rounded-full text-xs"

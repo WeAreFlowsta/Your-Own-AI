@@ -7,6 +7,7 @@ mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (
 #[cfg(test)]
 mod spawn_guard;          // no program start without the no-window flag (Windows consoles)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
+mod memory_health;        // health turns are never given to an AI that answers off this computer
 mod dreaming;             // memory consolidation when idle (the memory design §6)
 mod machine;              // the whole-machine check every background job asks
 mod memory_slot;          // which local model does the memory work (the memory design §7)

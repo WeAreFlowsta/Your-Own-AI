@@ -246,7 +246,7 @@ pub(crate) async fn load_into_profile(app: &tauri::AppHandle, path: &std::path::
             },
         );
         for m in &p.messages {
-            crate::transcript_search::note_recorded(app, id, m["sequence"].as_u64().unwrap_or(0) as u32, m["role"].as_str().unwrap_or(""), m["content"].as_str().unwrap_or(""), m["timestamp"].as_i64().unwrap_or(0), false, false);
+            crate::transcript_search::note_recorded(app, id, m["sequence"].as_u64().unwrap_or(0) as u32, m["role"].as_str().unwrap_or(""), m["content"].as_str().unwrap_or(""), m["timestamp"].as_i64().unwrap_or(0), false, false, false);
         }
     }
     log::info!("[fixture] {} conversation(s), {} message(s) written; {} already there", loaded.conversations, loaded.messages, loaded.skipped);

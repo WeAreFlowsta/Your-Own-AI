@@ -103,7 +103,8 @@ describe("the Map", () => {
     if (!pressed) await browser.execute((id) => (window as any).__yoaiMap.select(id), subject.id);
     await browser.waitUntil(async () => (await textOf('[data-testid="map-panel-name"]')) === shown, { timeout: 20_000, timeoutMsg: "the panel did not open on the subject" });
     await (await $('[data-testid="map-panel-item"]')).waitForExist({ timeout: 20_000 });
-    expect(await textOf('[data-testid="map-panel-item"]')).toContain("Mill and Sons");
+    // The panel shows the item as it was kept (the reply's own words, whatever the model said).
+    expect(await textOf('[data-testid="map-panel-item"]')).toContain((kept as Item & { text: string }).text.slice(0, 40));
     expect(await textOf('[data-testid="map-panel-count"]')).toBe("1 item");
     await shot("memory-map-subject");
     expect(pressed).toBe(true);

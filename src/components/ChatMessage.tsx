@@ -20,7 +20,7 @@ import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
-import { givenLineWords, type Sent } from '../utils/givenLine';
+import { givenLineWords, type Sent, quietLine } from '../utils/givenLine';
 import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
 import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
@@ -624,49 +624,59 @@ const ActionBar = component$<ActionBarProps>((props) => {
 
       {/* The line under a reply: what memory gave it, in one sentence,
           with the passages one step away. */}
-      {(props.message.givenLine || (props.message.given as { sent?: Sent } | undefined)?.sent) && !props.message.isLoading && (() => {
+      {/* Under a reply: nothing at rest. One short line, with one link,
+          only when memory gave the reply something, something was sent off
+          this computer, or memory could not look for a reason the person
+          can do something about. The rest is one press away, under Show. */}
+      {!props.message.isLoading && (() => {
         // A reply made elsewhere: what memory sent with the question. A
         // reply made on this computer sent nothing, whatever was readied.
         const madeElsewhere = /^(online|external):/.test(props.message.servedBy || '');
         const sent = madeElsewhere ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined;
-        if (!props.message.givenLine && !sent) return null;
         const line = props.message.givenLine;
-        // No search ran for this turn, and something from memory still went: only the sent line.
-        if (!line) {
-          return (
-            <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind="sent-only">
-              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} isLast={props.isLast} />
-            </div>
-          );
-        }
-        const w = givenLineWords(line, props.message.aiLabel || 'This AI');
-        const switchedOff = line.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
+        const ai = props.message.aiLabel || 'This AI';
+        const quiet = quietLine(line, sent, ai, props.message.servedBy || '');
+        if (!quiet) return null;
+        const open = openSection.value === 'given';
+        const w = line ? givenLineWords(line, ai) : null;
+        const switchedOff = line?.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
         return (
-          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={line.kind}>
-            {(sent || switchedOff) && (
-              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
-            )}
-            {w.label && <div class="text-[var(--text-muted)]">{w.label}</div>}
+          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={line?.kind ?? 'sent-only'}>
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>{w.text}</span>
-              {w.show && !!props.message.given && (
-                <button type="button" class="underline" data-testid="given-show" aria-expanded={openSection.value === 'given'} onClick$={() => toggleSection$('given')}>
-                  {openSection.value === 'given' ? 'Hide' : 'Show'}
-                </button>
-              )}
-              {w.readRest && (
-                <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
-                  Read the rest now
+              <span data-testid="given-words">{quiet.text}</span>
+              {quiet.show && (
+                <button type="button" class="underline" data-testid="given-show" aria-expanded={open} onClick$={() => toggleSection$('given')}>
+                  {open ? 'Hide' : 'Show'}
                 </button>
               )}
             </div>
+            {open && (
+              <div class="mt-2 flex flex-col gap-1" data-testid="given-details">
+                {(sent || switchedOff) && (
+                  <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
+                )}
+                {w && (
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span>
+                      {w.label ? `${w.label}. ` : ''}
+                      {w.text}
+                    </span>
+                    {w.readRest && (
+                      <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
+                        Read the rest now
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
       })()}
       {(kept.value || (keepState.value && keepState.value !== 'saving')) && (
         <div class="px-4 pb-2">
           {kept.value ? (
-            <KeptLine kept={kept} aiId={props.message.model} aiName={props.message.aiLabel || props.aiName} selection={keptSelection.value} />
+            <KeptLine kept={kept} />
           ) : (
             <span class="text-[11px] text-[var(--text-muted)]" data-testid="keep-failed">{keepState.value}</span>
           )}
@@ -1399,9 +1409,13 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
         class="group flex flex-col items-end mb-4"
         data-testid="chat-message"
         data-role="user"
-        {...(props.message.content && props.turnAiId
-          ? { 'data-remember-aiid': props.turnAiId, 'data-remember-role': 'user', 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
-          : {})}
+        // Selected words in the person's own message can be kept: the
+        // marks a selection is found by. Plain attributes, each absent
+        // until the AI of the turn is known.
+        data-remember-aiid={props.message.content && props.turnAiId ? props.turnAiId : undefined}
+        data-remember-role={props.message.content && props.turnAiId ? 'user' : undefined}
+        data-remember-id={props.message.content && props.turnAiId ? props.message.id : undefined}
+        data-remember-seq={props.message.content && props.turnAiId && typeof props.message.sequence === 'number' ? String(props.message.sequence) : undefined}
       >
       <div class="flex justify-end items-start gap-2 w-full">
         <div class="bg-[var(--bg-user-message)] chat-bubble-border text-[var(--text-primary)] text-sm mt-1 py-1.5 px-4 leading-loose tracking-wide font-light max-w-[calc(100%)] rounded-2xl">
@@ -1447,7 +1461,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           {captureState.value === 'saved-rule' ? (
             <span data-testid="rule-kept" data-for={ruleFor.value}>{ruleKeptWords(ruleFor.value, props.turnAiName || '')}</span>
           ) : captureState.value === 'saved-note' && keptOwn.value ? (
-            <KeptLine kept={keptOwn} aiId={props.turnAiId ?? ''} aiName={props.turnAiName || ''} own selection={keptOwnSelection.value} />
+            <KeptLine kept={keptOwn} />
           ) : captureState.value === 'error' ? (
             <span>{keepFailed.value || 'Could not save it just now.'}</span>
           ) : offeredRule.value ? (

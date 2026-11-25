@@ -3,6 +3,7 @@ import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '.
 import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
 import { ModelChip } from './ModelChip';
+import { canAnswerOnline } from '../utils/memorySent';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import { Callout } from './Callout';
 import { ONLINE_UNLOCK_TIP_ID, clearOnlineUnlockPending, onlineUnlockPending } from '../utils/entitlement';
@@ -256,6 +257,24 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
               snapshot of the selected AI, so patch it alongside the
               context-level save the chip performs. */}
           <span class="ml-auto pl-2 inline-flex min-w-0 items-center gap-3">
+            {/* Sharing turned off for an AI that may answer off this computer:
+                said where the AI is chosen, with the way back one press away. */}
+            {selectedAi.aiConfig && canAnswerOnline(selectedAi.aiConfig.model) && selectedAi.aiConfig.memoryOnline === false && (
+              <span class="hidden sm:inline-flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap" data-testid="memory-not-shared">
+                Memory not shared
+                <button
+                  type="button"
+                  class="underline hover:text-[var(--text-primary)]"
+                  data-testid="memory-not-shared-on"
+                  onClick$={async () => {
+                    const { setMemoryShared } = await import('./memory/SentLine');
+                    await setMemoryShared(selectedAi.aiConfig.id, true);
+                  }}
+                >
+                  Turn on
+                </button>
+              </span>
+            )}
             {selectedAi.aiConfig?.model && showModelChip.value && (
               <span class="hidden sm:inline-flex min-w-0">
                 <ModelChip

@@ -81,6 +81,16 @@ export interface Sent {
   note: boolean;
   /** Lines the person keeps about themselves, sent with every message. */
   about?: number;
+  /** Found messages kept on this computer because they are about the person's health. */
+  held?: number;
+}
+
+/** "2 more were found and kept on this computer, because they are about your health." */
+export function heldWords(held: number | undefined): string {
+  if (!held) return "";
+  return held === 1
+    ? " 1 more was found and kept on this computer, because it is about your health."
+    : ` ${held} more were found and kept on this computer, because they are about your health.`;
 }
 
 /** Did anything from memory go with the message? */
@@ -109,6 +119,7 @@ export function sentWords(sent: Sent, servedBy: string): string {
   const n = sent.passages + sent.lines;
   const about = sent.about ?? 0;
   if (!sentAnything(sent)) {
+    if (sent.held) return `Nothing from memory was sent. Only this conversation and your rules went to ${where}.${heldWords(sent.held)}`;
     return `Nothing from memory was sent. Memory found nothing for this question. Only this conversation and your rules went to ${where}.`;
   }
   const parts = [
@@ -117,7 +128,7 @@ export function sentWords(sent: Sent, servedBy: string): string {
     about > 0 ? `${about} ${about === 1 ? "thing" : "things"} you keep about yourself` : "",
   ].filter(Boolean);
   const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
-  return `Sent to ${where}. With your question: ${what}.`;
+  return `Sent to ${where}. With your question: ${what}.${heldWords(sent.held)}`;
 }
 
 /** "March 3" from "2026-03-03" (the year too when it is not this one). */
@@ -127,4 +138,34 @@ export function dayWords(day: string, thisYear: number = new Date().getFullYear(
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const text = `${months[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`;
   return Number(m[1]) === thisYear ? text : `${text}, ${m[1]}`;
+}
+
+/** The one line a reply shows at rest, or nothing. Nothing when memory
+ *  looked and found nothing: the reply stands by itself, and what the
+ *  search did is still under the Model button. */
+export function quietLine(line: ReplyLine | undefined | null, sent: Sent | undefined, ai: string, servedBy: string): { text: string; show: boolean } | null {
+  // Made off this computer: what went with the question comes first.
+  if (sent && (sentAnything(sent) || sent.held)) {
+    const n = sent.passages + sent.lines + (sent.about ?? 0) + (sent.note ? 1 : 0);
+    const where = whereWords(servedBy);
+    if (n === 0) return { text: `Nothing from your memory was sent to ${where}.${heldWords(sent.held)}`, show: true };
+    return { text: `Sent to ${where}, with ${n} ${n === 1 ? "thing" : "things"} from your memory.${heldWords(sent.held)}`, show: true };
+  }
+  if (!line) return null;
+  switch (line.kind) {
+    case "given":
+    case "quoted-none":
+      return { text: "From your memory", show: true };
+    case "did-not-fit":
+      return line.given > 0 ? { text: "From your memory", show: true } : null;
+    case "read-so-far":
+      return line.found > 0 ? { text: "From your memory", show: true } : null;
+    case "no-mention":
+      return null;
+    case "withheld":
+      return { text: givenLineWords(line, ai).text, show: true };
+    case "did-not-look":
+      if (line.why === "switched_off_for_this_ai") return { text: `Memory is not shared with ${ai}.`, show: true };
+      return { text: givenLineWords(line, ai).text, show: false };
+  }
 }

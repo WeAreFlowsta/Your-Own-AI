@@ -15,6 +15,7 @@ import { waitForChat, ask, waitForReplyDone, invoke, shot } from "./_helpers";
 const PROXY = process.env.YOAI_PROXY_URL ?? "";
 const MODEL = "stand-in-model";
 const KEPT = "My oven is a Rofco B40.";
+const MEDICINE = "sumatriptan";
 
 type Sent = { url: string; body: string };
 
@@ -78,6 +79,7 @@ describe("memory and an AI that answers online", () => {
   };
 
   let aiName = "";
+  let aiId = "";
 
   it("the first message to an online AI is sent with nothing to answer first, with what memory keeps about the person", async function () {
     if (!server) this.skip();
@@ -99,6 +101,9 @@ describe("memory and an AI that answers online", () => {
     ).catch((e) => {
       throw new Error(`${String(e)}: ${why}`);
     });
+    // A health exchange, held while the AI still answers on this computer.
+    await ask(`I have had migraines every morning this week and I take ${MEDICINE} for them. Reply with one short sentence.`);
+    await waitForReplyDone();
     // Something the person keeps about themselves, kept on this computer.
     await invoke("memory_keep_words", { text: KEPT });
     // Signed in, as a Vault sign-in would leave it, and the AI set to answer online.
@@ -120,6 +125,11 @@ describe("memory and an AI that answers online", () => {
       await store.save();
       return ais[0].name;
     }, MODEL)) as string;
+    aiId = (await browser.execute(async () => {
+      const T = (window as any).__TAURI__;
+      const store = await T.store.load(await T.core.invoke("profile_store_path", { name: "ai-data.json" }));
+      return ((((await store.get("custom-ais")) || []) as { id?: string }[])[0]?.id ?? "") as string;
+    })) as string;
     await browser.url("tauri://localhost/your-ais/");
     await browser.url("tauri://localhost/chat/");
     await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
@@ -134,11 +144,16 @@ describe("memory and an AI that answers online", () => {
     // What the person keeps about themselves went with the question.
     expect(sent.all).toContain(KEPT);
     // The reply is the service's, and the line under it says what was sent.
+    // At rest: one short line and one link.
+    const quiet = await textOf(under("given-line"));
+    console.log(`e2e: the line under the reply, at rest: ${JSON.stringify(quiet)}`);
+    expect(quiet.replace(/\s+/g, " ").trim()).toBe("Sent to stand-in-model, online, with 1 thing from your memory. Show");
+    // Show: exactly what went, and the one-time line for an AI's first online reply.
+    await press(under("given-show"));
     const line = await textOf(under("given-sent"));
-    console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
+    console.log(`e2e: under Show: ${JSON.stringify(line)}`);
     expect(line).toContain("Sent to");
     expect(line).toContain("1 thing you keep about yourself");
-    // The first online reply of an AI carries the one-time line.
     const first = await textOf(under("sent-first"));
     console.log(`e2e: the one-time line: ${JSON.stringify(first)}`);
     expect(first.length).toBeGreaterThan(20);
@@ -159,9 +174,13 @@ describe("memory and an AI that answers online", () => {
     expect(sent.all).not.toContain(KEPT);
     const line = await textOf(under("given-line"));
     console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
-    expect(line).toContain("Memory is not shared with");
-    // The one-time line does not come a second time.
+    expect(line.replace(/\s+/g, " ").trim()).toBe(`Memory is not shared with ${aiName}. Show`);
+    // Show says the rest; the one-time line does not come a second time.
+    await press(under("given-show"));
+    expect(await textOf(under("given-details"))).toContain("Your rules were still sent.");
     expect(await (await $(under("sent-first"))).isExisting()).toBe(false);
+    // Where the AI is chosen, the Ask row says so too, with "Turn on".
+    await (await $('[data-testid="memory-not-shared"]')).waitForExist({ timeout: 30_000 });
     await shot("memory-online-not-shared");
     // The same holds for a program that asks this AI through the app's own port.
     const port = await invoke<number>("inference_port");
@@ -213,6 +232,36 @@ describe("memory and an AI that answers online", () => {
     await waitForReplyDone();
     for (const c of chats.slice(before)) expect(c.body).not.toContain(KEY);
     console.log(`e2e: sent without the key: ${chats.length - before} request(s), none holds it`);
+  });
+
+  it("a health exchange found for an online AI stays on this computer, and the line says so", async function () {
+    if (!server) this.skip();
+    this.timeout(600_000);
+    // The exchange is in memory's index: an AI on this computer would be given it.
+    const held = async () => {
+      const res = await fetch("http://127.0.0.1:11435/internal/memory-assemble", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ai: aiId, question: "What do I take for my migraines?", surface: "chat", online: true }) });
+      return (await res.json()) as { memory?: { beforeQuestion?: string | null; given?: { sent?: { passages: number; held?: number } } | null } };
+    };
+    let seen: Awaited<ReturnType<typeof held>> = {};
+    await browser.waitUntil(async () => { seen = await held(); return (seen.memory?.given?.sent?.held ?? 0) > 0; }, { timeout: 180_000, interval: 5_000, timeoutMsg: "the health exchange was never found and held back" }).catch((e) => {
+      console.log(`e2e: the builder said: ${JSON.stringify(seen).slice(0, 600)}`);
+      throw e;
+    });
+    console.log(`e2e: for an online turn the builder held back ${seen.memory?.given?.sent?.held}, gave ${seen.memory?.given?.sent?.passages}`);
+    expect(seen.memory?.beforeQuestion ?? "").not.toContain(MEDICINE);
+
+    // Asked in a new conversation of the online AI: nothing of it arrives, and the line counts it.
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="new-chat"]'));
+    await browser.waitUntil(async () => browser.execute(() => document.querySelectorAll('[data-testid="chat-message"]').length === 0), { timeout: 15_000 });
+    const before = chats.length;
+    await ask("What do I take for my migraines?");
+    await waitForReplyDone();
+    expect(chats.length).toBeGreaterThan(before);
+    for (const c of chats.slice(before)) expect(lastUserText(c).all).not.toContain(MEDICINE);
+    const line = await textOf(under("given-line"));
+    console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
+    expect(line).toMatch(/more (was|were) found and kept on this computer, because (it is|they are) about your health\./);
+    await shot("memory-online-health-held");
   });
 
   after(async () => {

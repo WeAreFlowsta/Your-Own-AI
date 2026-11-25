@@ -289,16 +289,6 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
                   <span class="w-4 h-4 rounded-full border-[1.5px] border-dotted border-[var(--text-secondary)]" />
                   For one project
                 </div>
-                {d?.projects.map((p) => (
-                  <div key={p.id} class="flex items-center gap-2">
-                    <span class="w-2.5 h-2.5 mx-[3px] rounded-full" style={{ background: p.color == null ? 'var(--map-quiet)' : `var(--map-project-${p.color + 1})` }} />
-                    {p.name}
-                  </div>
-                ))}
-                <div class="flex items-center gap-2">
-                  <span class="w-2.5 h-2.5 mx-[3px] rounded-full" style={{ background: 'var(--map-none)' }} />
-                  Not in a project
-                </div>
               </div>
               {(d?.unplaced ?? 0) > 0 && <p class="text-xs text-[var(--text-muted)]">{countWords(d!.unplaced, 'kept item is', 'kept items are')} not in a subject yet.</p>}
             </>
@@ -358,7 +348,8 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
                 {subject.lastCameUp ? `Last came up ${ago(subject.lastCameUp)}.` : 'Has not come up in an answer on this computer yet.'}
                 {together.length > 0 ? ` Comes up together with ${together.join(', ')}.` : ''}
               </p>
-              <SubjectItems subject={subject} subjects={subjects} held={held.value} all={allShown.value} onAll$={() => (allShown.value = true)} />
+              {subject.kind === 'about_you' && <AboutYouAdd />}
+              <SubjectItems subject={subject} subjects={subjects} ais={ais.value} held={held.value} all={allShown.value} onAll$={() => (allShown.value = true)} />
             </>
           )}
         </aside>
@@ -367,12 +358,70 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   );
 });
 
+/** Something the person writes about themselves: kept as theirs, for all
+ *  their AIs, and listed in Recently with Undo. */
+const AboutYouAdd = component$(() => {
+  const adding = useSignal(false);
+  const words = useSignal('');
+  const keeping = useSignal(false);
+  const said = useSignal('');
+
+  const keep = $(async () => {
+    const text = words.value.trim();
+    if (!text || keeping.value) return;
+    keeping.value = true;
+    said.value = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const kept = await invoke<{ already: boolean }>('memory_keep_words', { text });
+      said.value = kept.already ? 'That is already kept.' : '';
+      words.value = '';
+      adding.value = kept.already;
+      window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
+    } catch (e) {
+      said.value = `That could not be kept just now. ${String(e)}`;
+    }
+    keeping.value = false;
+  });
+
+  if (!adding.value) {
+    return (
+      <button type="button" class="self-start text-sm text-[var(--text-link)] hover:underline" data-testid="about-add" onClick$={() => (adding.value = true)}>
+        Add something about you
+      </button>
+    );
+  }
+  return (
+    <div class="flex flex-col gap-2">
+      <textarea
+        class="w-full px-3 py-2 rounded-lg bg-[var(--bg-input)] border border-[var(--border-input)] text-[var(--text-primary)] text-sm"
+        rows={2}
+        placeholder="In your own words, for example: I am vegetarian"
+        data-testid="about-add-text"
+        value={words.value}
+        onInput$={(_, el) => (words.value = el.value)}
+      />
+      {said.value && <p class="text-xs text-[var(--text-secondary)]">{said.value}</p>}
+      <div class="flex justify-end gap-2">
+        <LiquidMetalButton variant="secondary" class="px-3 py-1.5 text-sm" onClick$={() => (adding.value = false)}>
+          Cancel
+        </LiquidMetalButton>
+        <LiquidMetalButton class="px-3 py-1.5 text-sm" testId="about-add-save" disabled={keeping.value || !words.value.trim()} onClick$={keep}>
+          Keep
+        </LiquidMetalButton>
+      </div>
+    </div>
+  );
+});
+
 /** What a subject holds, newest first. Each item can be corrected, moved
  *  to another subject, or forgotten; every one of these is in Recently
  *  with Undo. */
-const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; held: KeptItem[]; all: boolean; onAll$: () => void }>((props) => {
+const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; ais: Ai[]; held: KeptItem[]; all: boolean; onAll$: () => void }>((props) => {
   const editing = useSignal('');
   const moving = useSignal('');
+  /** The item whose "who can use this" choices are open. */
+  const sharing = useSignal('');
   const draft = useSignal('');
   const busy = useSignal('');
   const problem = useSignal('');
@@ -401,6 +450,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; h
       await invoke('memory_item_change', { id, edit });
       editing.value = '';
       moving.value = '';
+      sharing.value = '';
       window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
     } catch (e) {
       problem.value = `That could not be saved just now. ${String(e)}`;
@@ -444,11 +494,28 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; h
           ) : (
             <>
               <div class="text-sm text-[var(--text-primary)] break-words">{i.text}</div>
-              <div class="text-xs text-[var(--text-muted)]">
+              <div class="text-xs text-[var(--text-muted)]" data-testid="item-meta">
                 {dayOf(i.asOf)}
                 {i.item.state === 'open' ? ' · open' : ''}
+                {i.item.audience?.kind === 'ai' ? ` · only for ${props.ais.find((a) => a.founding === (i.item.audience as { ai: string }).ai)?.name ?? 'one AI'}` : ''}
+                {i.item.audience?.kind === 'project' ? ' · for one project' : ''}
               </div>
-              {moving.value === i.id ? (
+              {sharing.value === i.id ? (
+                <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-audience-list">
+                  <span class="text-xs text-[var(--text-secondary)]">Who can use this</span>
+                  <button type="button" class={act} data-testid="item-audience-to" data-ai="" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'audience', audience: { kind: 'all' } })}>
+                    All your AIs
+                  </button>
+                  {props.ais.map((a) => (
+                    <button key={a.founding} type="button" class={act} data-testid="item-audience-to" data-ai={a.founding} disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'audience', audience: { kind: 'ai', ai: a.founding } })}>
+                      Only {a.name}
+                    </button>
+                  ))}
+                  <button type="button" class="text-xs text-[var(--text-muted)] hover:underline" onClick$={() => (sharing.value = '')}>
+                    Cancel
+                  </button>
+                </div>
+              ) : moving.value === i.id ? (
                 <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-move-list">
                   <span class="text-xs text-[var(--text-secondary)]">Move to</span>
                   {others.map((s) => (
@@ -478,6 +545,9 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; h
                       Move
                     </button>
                   )}
+                  <button type="button" class={act} data-testid="item-audience" onClick$={() => (sharing.value = i.id)}>
+                    Who can use this
+                  </button>
                   <button type="button" class={act} data-testid="item-forget" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
                     Forget
                   </button>

@@ -667,6 +667,17 @@ pub(crate) async fn is_medical_turn_with_margin(
     medical_check(app, query, query_vec, min_margin).await.0
 }
 
+/// The health gate's verdict on a message, for the record of the turn:
+/// `None` when only the keyword stage could run and found nothing (the
+/// question was not checked, which is not a "no").
+pub(crate) async fn health_verdict(app: &AppHandle, query: &str) -> Option<bool> {
+    if query.trim().is_empty() {
+        return Some(false);
+    }
+    let (medical, semantic_ran) = medical_check(app, query, None, MEDICAL_MARGIN).await;
+    (medical || semantic_ran).then_some(medical)
+}
+
 /// The health gate with its own honesty flag: `(medical, semantic_ran)`.
 /// `semantic_ran == false` means only the keyword stage could run (no
 /// embedding model, or the embed server would not start) - the router must

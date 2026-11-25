@@ -512,6 +512,9 @@ async fn pass(app: &AppHandle) -> Result<bool, String> {
             if e.stopped {
                 flags |= index::FLAG_STOPPED;
             }
+            if e.health {
+                flags |= index::FLAG_HEALTH;
+            }
             let passages = index::cut(&masked.text);
             if !texts.is_empty() && texts.len() + passages.len() > BATCH {
                 break;

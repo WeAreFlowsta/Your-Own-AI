@@ -6,7 +6,7 @@
 // press says it is already kept.
 import { waitForChat, ask, waitForReplyDone, invoke, shot } from "./_helpers";
 
-type Item = { id: string; text: string; item: { state: string; audience?: { kind: string; ai?: string }; source?: { kind: string; ptr?: { c: number; s: number } | null } | null } };
+type Item = { id: string; text: string; item: { state: string; subject?: string | null; audience?: { kind: string; ai?: string }; source?: { kind: string; ptr?: { c: number; s: number } | null } | null } };
 const items = () => invoke<Item[]>("memory_items");
 const current = async () => (await items()).filter((i) => i.item.state === "current");
 
@@ -29,9 +29,8 @@ describe("Remember keeps the exchange", () => {
     await line.waitForExist({ timeout: 60_000 });
     const words = await textOf(line);
     console.log(`e2e: kept line: ${JSON.stringify(words)}`);
-    expect(words).toContain("Kept.");
-    expect(words).toContain("This exchange, your message and the reply together.");
-    expect(words).toContain("For all your AIs.");
+    // The line is "Kept" and Undo, nothing more.
+    expect(words.replace(/\s+/g, " ").trim()).toBe("Kept Undo");
     const kept = await current();
     expect(kept.length).toBe(1);
     expect(kept[0].item.source?.kind).toBe("exchange");
@@ -40,13 +39,23 @@ describe("Remember keeps the exchange", () => {
     await shot("remember-kept-line");
   });
 
-  it("the other audience is one press away, and back", async () => {
-    await press(await within("assistant", "kept-only-ai"));
+  it("who can use it is chosen in Memory, on the item: one AI, and back to all", async () => {
+    const subject = (await current())[0].item.subject ?? "";
+    expect(subject).not.toBe("");
+    await browser.url("tauri://localhost/your-memory/");
+    await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiMap?.select === "function"), { timeout: 60_000, timeoutMsg: "the map never came up" });
+    await browser.waitUntil(async () => ((await browser.execute(() => ((window as any).__yoaiMap.placed() as unknown[]).length)) as number) >= 2, { timeout: 60_000, timeoutMsg: "the kept item's subject has no circle" });
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), subject);
+    await press(await $('[data-testid="item-audience"]'));
+    // The first AI in the list after "All your AIs".
+    await press(await $('[data-testid="item-audience-to"]:not([data-ai=""])'));
     await browser.waitUntil(async () => (await current())[0]?.item.audience?.kind === "ai", { timeout: 60_000, timeoutMsg: "the item's audience did not become the one AI" });
-    expect(await textOf(await within("assistant", "kept-line"))).toContain("Only for ");
+    await browser.waitUntil(async () => ((await textOf(await $('[data-testid="item-meta"]'))) as string).includes("only for "), { timeout: 30_000, timeoutMsg: "the item does not say whom it is for" });
     await shot("remember-only-this-ai");
-    await press(await within("assistant", "kept-for-all"));
+    await press(await $('[data-testid="item-audience"]'));
+    await press(await $('[data-testid="item-audience-to"][data-ai=""]'));
     await browser.waitUntil(async () => ((await current())[0]?.item.audience?.kind ?? "all") === "all", { timeout: 60_000, timeoutMsg: "the item's audience did not go back to all AIs" });
+    await waitForChat();
   });
 
   it("a second press says it is already kept, and writes nothing", async () => {
@@ -67,7 +76,7 @@ describe("Remember keeps the exchange", () => {
     await press(await within("assistant", "remember-reply"));
     const line = await within("assistant", "kept-line");
     await line.waitForExist({ timeout: 60_000 });
-    expect(await textOf(line)).toContain("Kept.");
+    expect(await textOf(line)).toContain("Kept");
     const kept = await current();
     expect(kept.length).toBe(2);
     await shot("remember-later-reply");
@@ -103,7 +112,7 @@ describe("Remember keeps the exchange", () => {
     await press(button);
     const line = await within("assistant", "kept-line");
     await line.waitForExist({ timeout: 60_000 });
-    expect(await textOf(line)).toContain("The words you selected.");
+    expect(await textOf(line)).toContain("Kept");
     const kept = await current();
     console.log(`e2e: selection ${JSON.stringify(picked)} kept as ${JSON.stringify(kept.map((i) => i.text))}`);
     expect(kept.some((i) => i.item.source?.kind === "selection" && i.text === picked)).toBe(true);
@@ -128,7 +137,7 @@ describe("Remember keeps the exchange", () => {
     await press(await $('[data-testid="remember-selection"]'));
     const line = await within("user", "kept-line");
     await line.waitForExist({ timeout: 60_000 });
-    expect(await textOf(line)).toContain("The words you selected.");
+    expect(await textOf(line)).toContain("Kept");
     const kept = await current();
     console.log(`e2e: own selection ${JSON.stringify(picked)} kept as ${JSON.stringify(kept.map((i) => i.text))}`);
     expect(kept.some((i) => i.item.source?.kind === "selection" && i.text === picked)).toBe(true);
@@ -141,7 +150,7 @@ describe("Remember keeps the exchange", () => {
     await waitForReplyDone();
     const own = await within("user", "kept-line");
     await own.waitForExist({ timeout: 90_000 });
-    expect(await textOf(own)).toContain("Kept.");
+    expect(await textOf(own)).toContain("Kept");
     let kept = await current();
     expect(kept.length).toBe(before + 1);
     expect(kept.some((i) => i.text.includes("closes at 3 pm on Sundays"))).toBe(true);

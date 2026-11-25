@@ -38,6 +38,9 @@ pub(crate) const FLAG_GIVEN_A_BLOCK: u8 = 2;
 pub(crate) const FLAG_STOPPED: u8 = 4;
 /// Embedded from a shortened text (the embedder refused the whole passage).
 pub(crate) const FLAG_SHORTENED: u8 = 8;
+/// The turn was about the person's health: never given to an AI that
+/// answers off this computer.
+pub(crate) const FLAG_HEALTH: u8 = 16;
 
 pub(crate) const ROLE_PERSON: u8 = 0;
 pub(crate) const ROLE_AI: u8 = 1;

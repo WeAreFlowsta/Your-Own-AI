@@ -82,6 +82,13 @@ describe("one builder for what memory adds to a request", () => {
 
   it("the chat page sends exactly what the builder gives for the turn", async () => {
     await waitForChat();
+    // The update from the older memory has run (the app does it by itself a
+    // little after it starts; here it is asked for, so the step does not
+    // depend on how fast this start was).
+    await browser.waitUntil(
+      async () => !!(await invoke("memory_update_report").catch(() => null)) || (await invoke("memory_update_run", { learningWasPaused: false }).then(() => true, () => false)),
+      { timeout: 180_000, interval: 5_000, timeoutMsg: "the update's pass never finished" },
+    );
     await ask(QUESTION);
     await waitForReplyDone();
     const { request } = await (await fetch(`${BASE}/last-chat-request`)).json();

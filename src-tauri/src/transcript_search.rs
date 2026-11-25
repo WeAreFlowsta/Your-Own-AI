@@ -62,6 +62,9 @@ struct EntryText {
     /// The person stopped the reply before its end.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     stopped: bool,
+    /// The turn was about the person's health.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    health: bool,
 }
 
 fn cache_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -303,7 +306,7 @@ async fn build(app: &AppHandle, agent_key: &str) -> Result<(), String> {
             source: c.source.clone(),
             started_at: c.started_at,
         };
-        store_conversation(app, &key, &c.hash, &meta, entries.iter().map(|e| (e.sequence, EntryText { role: e.role.clone(), at: e.timestamp, content: e.content.clone(), given: e.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), stopped: e.stopped == Some(true) })), touched)?;
+        store_conversation(app, &key, &c.hash, &meta, entries.iter().map(|e| (e.sequence, EntryText { role: e.role.clone(), at: e.timestamp, content: e.content.clone(), given: e.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), stopped: e.stopped == Some(true), health: crate::memory_health::marked(e.health, e.routing_reason.as_deref()) })), touched)?;
         done += 1;
         let _ = app.emit("transcript-search-progress", SearchProgress { done, total, finished: false, cancelled: false });
     }
@@ -336,6 +339,7 @@ pub(crate) struct CachedEntry {
     pub content: String,
     pub given: bool,
     pub stopped: bool,
+    pub health: bool,
 }
 
 /// Every conversation the text cache holds.
@@ -368,7 +372,7 @@ pub(crate) fn cached_entries(app: &AppHandle, k: &str, from: i64) -> Result<Vec<
     let mut out = Vec::new();
     for (seq, blob) in rows.flatten() {
         let e: EntryText = serde_json::from_slice(&dec(&key, &blob)?).map_err(|e| e.to_string())?;
-        out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content, given: e.given, stopped: e.stopped });
+        out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content, given: e.given, stopped: e.stopped, health: e.health });
     }
     Ok(out)
 }
@@ -479,7 +483,8 @@ fn store_conversation(
 
 /// A turn just recorded: into the cache (when the conversation is known to
 /// it) and the loaded index, so search sees it without a rebuild.
-pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content: &str, at: i64, given: bool, stopped: bool) {
+#[allow(clippy::too_many_arguments)]
+pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content: &str, at: i64, given: bool, stopped: bool, health: bool) {
     if content.trim().is_empty() {
         return;
     }
@@ -494,7 +499,7 @@ pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content:
         .and_then(|b| dec(&key, &b).ok())
         .and_then(|p| serde_json::from_slice(&p).ok());
     let Some(meta) = meta else { return }; // not read yet: the next build takes it whole
-    let e = EntryText { role: role.to_string(), at, content: content.to_string(), given, stopped };
+    let e = EntryText { role: role.to_string(), at, content: content.to_string(), given, stopped, health };
     let Ok(plain) = serde_json::to_vec(&e) else { return };
     let Ok(blob) = enc(&key, &plain) else { return };
     let _ = cache.execute("INSERT OR REPLACE INTO entries (k, seq, blob_enc) VALUES (?1, ?2, ?3)", params![k, seq, blob]);
@@ -689,9 +694,9 @@ mod tests {
     fn the_index_finds_words_and_marks_them() {
         let idx = fresh_index().unwrap();
         let m = ConvMeta { hash: "h1".into(), agent_key: "a".into(), ai_id: "ai".into(), ai_name: "Reeves".into(), title: Some("Boat".into()), source: None, started_at: 1 };
-        index_insert(&idx, "h1", 1, &EntryText { role: "user".into(), at: 1, content: "The survey of the sloop Wren was done at Port Quillon.".into(), given: false, stopped: false }, &m).unwrap();
-        index_insert(&idx, "h1", 2, &EntryText { role: "assistant".into(), at: 2, content: "Two planks on the starboard side need refastening.".into(), given: false, stopped: false }, &m).unwrap();
-        index_insert(&idx, "h2", 1, &EntryText { role: "user".into(), at: 3, content: "what colour is the sky".into(), given: false, stopped: false }, &m).unwrap();
+        index_insert(&idx, "h1", 1, &EntryText { role: "user".into(), at: 1, content: "The survey of the sloop Wren was done at Port Quillon.".into(), given: false, stopped: false, health: false }, &m).unwrap();
+        index_insert(&idx, "h1", 2, &EntryText { role: "assistant".into(), at: 2, content: "Two planks on the starboard side need refastening.".into(), given: false, stopped: false, health: false }, &m).unwrap();
+        index_insert(&idx, "h2", 1, &EntryText { role: "user".into(), at: 3, content: "what colour is the sky".into(), given: false, stopped: false, health: false }, &m).unwrap();
         let q = fts_query("quill");
         let snip: String = idx
             .query_row("SELECT snippet(e, 0, char(1), char(2), ' … ', 18) FROM e WHERE e MATCH ?1 AND agent_key = 'a'", params![q], |r| r.get(0))
