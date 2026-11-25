@@ -129,6 +129,11 @@ fn write_queue(app: &AppHandle, queue: &[Waiting]) {
     }
 }
 
+/// Nothing waits to be looked at any more (all memory was deleted).
+pub(crate) fn clear_queue(app: &AppHandle) {
+    write_queue(app, &[]);
+}
+
 /// A reply was recorded: its exchange waits for idle time.
 pub(crate) fn recorded(app: &AppHandle, t: &RecordedTurn, w: Waiting) {
     if !queues(t) {

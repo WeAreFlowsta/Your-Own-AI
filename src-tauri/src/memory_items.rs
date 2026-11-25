@@ -564,6 +564,13 @@ fn write_changes(app: &tauri::AppHandle, key: &[u8; 32], log: &[Change]) -> Resu
     Ok(())
 }
 
+/// This device's list of changes, emptied (all memory was deleted).
+pub(crate) fn clear_changes(app: &tauri::AppHandle) {
+    if let Ok(root) = crate::profile::root(app) {
+        let _ = std::fs::remove_file(root.join(CHANGES_FILE));
+    }
+}
+
 /// Note a change in this device's log.
 pub(crate) fn log_change(app: &tauri::AppHandle, key: &[u8; 32], change: Change) -> Result<(), String> {
     write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))

@@ -7,6 +7,7 @@ mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (
 #[cfg(test)]
 mod spawn_guard;          // no program start without the no-window flag (Windows consoles)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
+mod memory_delete;        // what goes with a conversation, an AI, and all of memory
 mod memory_health;        // health turns are never given to an AI that answers off this computer
 mod dreaming;             // memory consolidation when idle (the memory design §6)
 mod machine;              // the whole-machine check every background job asks
@@ -895,6 +896,13 @@ pub fn run() {
             memory_quotes::memory_reply_checked,
             memory_reading::memory_given_texts,
             memory_reading::memory_conversation_at,
+            memory_delete::memory_delete_preview,
+            memory_delete::memory_conversation_deleted,
+            memory_delete::memory_ai_delete_preview,
+            memory_delete::memory_ai_deleted,
+            memory_delete::memory_delete_all_preview,
+            memory_delete::memory_delete_all,
+            memory_delete::memory_deleted_all_at,
             memory_items::memory_items,
             memory_items::memory_keep,
             memory_items::memory_item_change,

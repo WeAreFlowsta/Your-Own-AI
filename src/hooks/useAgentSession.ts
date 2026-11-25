@@ -594,6 +594,9 @@ export function useAgentSession(props: UseAgentSessionProps) {
     try {
       const turn = await invoke<{ question: string; given: Record<string, unknown> | null; givenTexts: string[] } | null>("memory_session_given");
       const typed = lastTyped.value.trim();
+      if (!(turn?.given && typed && turn.question.trim().endsWith(typed))) {
+        uiLog(`[memory] session reply has no record: turn ${turn ? "kept" : "none"}, given ${!!turn?.given}, typed ${typed.length} chars, question ends with it ${!!turn && !!typed && turn.question.trim().endsWith(typed)}`);
+      }
       if (turn?.given && typed && turn.question.trim().endsWith(typed)) {
         given = turn.given;
         const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: import("../utils/memory").ReplyLine | null }>(
@@ -601,6 +604,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
           { reply: bubble.content, given, texts: turn.givenTexts, question: turn.question },
         ).catch(() => null);
         if (checked?.given) given = checked.given;
+        uiLog(`[memory] session reply checked: ${checked ? `line ${checked.line?.kind ?? "none"}` : "the check did not answer"}`);
         const shown = { given, givenLine: checked?.line ?? undefined, givenLive: turn.givenTexts.length ? turn.givenTexts : undefined, quotesNotGiven: checked?.check.notGiven.length ? checked.check.notGiven : undefined };
         props.chatState.messages = props.chatState.messages.map((m) => (m.id === bubble.id ? { ...m, ...shown } : m));
         if (checked?.check.quoted.some(Boolean)) {

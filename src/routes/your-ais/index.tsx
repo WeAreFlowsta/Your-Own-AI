@@ -375,6 +375,17 @@ export default component$(() => {
 
   // Archived-AI purge goes through a styled confirm (not the native dialog).
   const archivedToPurge = useSignal<UserDefinedAI | null>(null);
+  /** What the AI about to be deleted kept: how much stays and how much goes. */
+  const purgeKept = useSignal<{ stay: number; go: number } | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const ai = track(() => archivedToPurge.value);
+    purgeKept.value = null;
+    const founding = ai ? ai.foundingKey || ai.agentPubKey || "" : "";
+    if (!founding) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    purgeKept.value = await invoke<{ stay: number; go: number }>("memory_ai_delete_preview", { founding }).catch(() => null);
+  });
 
   const handlePurgeArchivedAi = $((ai: UserDefinedAI) => {
     archivedToPurge.value = ai;
@@ -824,7 +835,11 @@ export default component$(() => {
         isOpen={!!archivedToPurge.value}
         variant="danger"
         title={`Permanently delete ${archivedToPurge.value?.name ?? "this AI"}?`}
-        message="This erases its signed conversations and everything it learned about you. It can't be undone."
+        message={`This erases ${archivedToPurge.value?.name ?? "this AI"}'s conversations. ${
+          purgeKept.value && purgeKept.value.stay + purgeKept.value.go > 0
+            ? `${archivedToPurge.value?.name ?? "It"} kept ${purgeKept.value.stay + purgeKept.value.go} memory ${purgeKept.value.stay + purgeKept.value.go === 1 ? "item" : "items"}. ${purgeKept.value.stay} ${purgeKept.value.stay === 1 ? "is" : "are"} for all your AIs and will be kept, without the conversations they came from. ${purgeKept.value.go} ${purgeKept.value.go === 1 ? "was" : "were"} for ${archivedToPurge.value?.name ?? "it"} only and will be deleted. `
+            : ""
+        }It can't be undone.`}
         confirmLabel="Delete permanently"
         busy={!!archivedToPurge.value && deletingAiId.value === archivedToPurge.value?.id}
         onConfirm$={doPurgeArchivedAi}

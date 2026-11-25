@@ -547,8 +547,20 @@ async fn raw_rows(manager: &crate::holochain::HolochainManager, agent: &str, anc
     Ok(rows)
 }
 
+/// A read of the records takes a moment, and a row may be saved on this
+/// device while it runs: the read's answer does not hold that row yet, and
+/// writing it over this device's copy would lose the row until the next
+/// read. So the rows the copy got since the read started are kept in.
+pub(crate) fn with_written_since(read: Vec<MemoryRow>, copy: Vec<MemoryRow>, started_ms: i64) -> Vec<MemoryRow> {
+    let mut all = read;
+    all.extend(copy.into_iter().filter(|r| r.updated_at >= started_ms));
+    all
+}
+
 async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     let key = manager.data_key()?;
+    // A little before now: a row stamped by the page a moment ago counts.
+    let started = now_ms() - 3_000;
     let anchor = scope_anchor(scope, &key)?;
     let mut rows = raw_rows(manager, agent, anchor, &key).await?;
     // What an offline device's backup copy brought stays in the list.
@@ -569,7 +581,7 @@ async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainMa
             rows.extend(read_sealed_rows(siblings_path(app, &twin_scope), &key));
         }
     }
-    let reduced = reduce(rows);
+    let reduced = reduce(with_written_since(rows, read_cache(app, &key, scope), started));
     write_cache(app, &key, scope, &reduced);
     Ok(reduced)
 }
@@ -1179,6 +1191,23 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_saved_while_the_records_were_being_read_is_not_lost_from_this_devices_copy() {
+        let row = |id: &str, text: &str, at: i64| -> MemoryRow {
+            serde_json::from_value(serde_json::json!({ "id": id, "scope": "memory", "kind": "note", "text": text, "as_of": at, "saved_by": "person", "provenance": "authored", "pinned": false, "deleted": false, "updated_at": at })).expect("a row")
+        };
+        // The read started at 1,000 and answers with what the records held then.
+        let read = vec![row("a", "old", 100), row("b", "from another device", 900)];
+        // Meanwhile this device saved a new row, and a newer revision of an old one.
+        let copy = vec![row("a", "old", 100), row("c", "saved during the read", 1_200), row("a2", "older, not in the records' answer", 50)];
+        let merged = reduce(with_written_since(read, copy, 1_000));
+        let ids: Vec<&str> = merged.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"c"), "the row saved during the read stays: {ids:?}");
+        assert!(ids.contains(&"a") && ids.contains(&"b"), "what the records answered is all there: {ids:?}");
+        assert!(!ids.contains(&"a2"), "a row the copy held from before the read, which the records no longer answer with, is not kept alive: {ids:?}");
+    }
+
 
     #[test]
     fn a_backup_carries_memorys_scope_and_each_projects() {

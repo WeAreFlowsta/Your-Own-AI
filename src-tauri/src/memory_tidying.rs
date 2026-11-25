@@ -52,6 +52,11 @@ fn write_queue(app: &AppHandle, queue: &[String]) {
     }
 }
 
+/// No item waits to be tidied any more (all memory was deleted).
+pub(crate) fn clear_queue(app: &AppHandle) {
+    write_queue(app, &[]);
+}
+
 /// The queue with one more item, once.
 pub(crate) fn queued(mut queue: Vec<String>, id: &str) -> Vec<String> {
     if !queue.iter().any(|q| q == id) {

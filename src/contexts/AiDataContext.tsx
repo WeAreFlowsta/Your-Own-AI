@@ -511,6 +511,9 @@ export function useAiDataActions() {
    * (the conductor may be down); local cleanup proceeds regardless.
    */
   const purgeCustomAi = $(async (id: string): Promise<boolean> => {
+    // Who it is, before it is gone: what it kept is settled by its key.
+    const doomed = state.userDefinedAis.find((a) => a.id === id);
+    const founding = doomed ? doomed.foundingKey || doomed.agentPubKey || "" : "";
     try {
       await invoke("purge_ai_app", { aiId: id });
     } catch (e) {
@@ -520,10 +523,11 @@ export function useAiDataActions() {
       );
     }
     try {
-      const { forgetAll } = await import("../utils/memory");
-      await forgetAll(id);
+      // What it kept for this AI alone goes with it; what it kept for all
+      // the person's AIs stays, and says its conversation went with the AI.
+      if (founding) await invoke("memory_ai_deleted", { founding, name: doomed?.name ?? "" });
     } catch (e) {
-      console.warn("[AiDataContext] forgetAll failed:", e);
+      console.warn("[AiDataContext] what the AI kept could not be settled:", e);
     }
     try {
       await invoke("delete_ai_thumbnail", { aiId: id });

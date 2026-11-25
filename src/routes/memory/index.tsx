@@ -290,6 +290,16 @@ export default component$(() => {
   // Export-options modal: which conversation, and whether it's open.
   const exportModalConv = useSignal<HolochainConversation | null>(null);
   const deleteModalConv = useSignal<HolochainConversation | null>(null);
+  /** How many memory items were made from the conversation about to be deleted. */
+  const deleteModalItems = useSignal(0);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const conv = track(() => deleteModalConv.value);
+    deleteModalItems.value = 0;
+    if (!conv) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    deleteModalItems.value = await invoke<number>("memory_delete_preview", { startedAt: conv.started_at }).catch(() => 0);
+  });
   const deletingConv = useSignal(false);
   // A failed delete says so where the row was - never a silent no-op.
   const deleteError = useSignal<string | null>(null);
@@ -647,6 +657,7 @@ export default component$(() => {
                     </button>
                     <button
                       onClick$={() => (deleteModalConv.value = conv)}
+                      data-testid="record-delete"
                       title="Delete this conversation from your records"
                       class="flex-shrink-0 p-2 rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-main)] hover:text-red-400 transition-colors"
                     >
@@ -928,8 +939,9 @@ export default component$(() => {
 
       <ConfirmModal
         isOpen={deleteModalConv.value !== null}
+        testId="conversation-delete-confirm"
         title="Delete this conversation?"
-        message="This removes the conversation and all its messages from your records. The deletion itself is signed into your chain - the record that something was deleted remains, the content does not. This can't be undone."
+        message={`This removes the conversation and all its messages from your records, on this computer and on your other devices when they next connect. ${deleteModalItems.value > 0 ? `${deleteModalItems.value} memory ${deleteModalItems.value === 1 ? "item" : "items"} made from it will be deleted too. ` : ""}Replies in other conversations that quote it are not rewritten. This cannot be undone.`}
         confirmLabel="Delete conversation"
         cancelLabel="Cancel"
         variant="danger"
@@ -944,6 +956,9 @@ export default component$(() => {
               "../../utils/holochainTranscripts"
             );
             await deleteConversation(conv.agent_key || agentKey.value, conv.hash);
+            // What memory kept from it goes with it.
+            const { invoke: call } = await import("@tauri-apps/api/core");
+            await call("memory_conversation_deleted", { startedAt: conv.started_at }).catch(() => undefined);
             conversations.value = conversations.value.filter(
               (c) => c.hash !== conv.hash,
             );

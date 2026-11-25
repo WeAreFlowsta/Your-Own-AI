@@ -275,6 +275,7 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                   />
                 ) : (
                   <button
+                    data-testid="conversation-open"
                     onClick$={() => onResume$(item)}
                     class="min-w-0 flex-1 text-left bg-transparent border-none cursor-pointer"
                   >

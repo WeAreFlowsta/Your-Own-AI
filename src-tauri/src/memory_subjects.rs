@@ -365,6 +365,13 @@ fn write_came_up(app: &tauri::AppHandle, key: &[u8; 32], held: &CameUp) {
     }
 }
 
+/// What came up together on this device, emptied (all memory was deleted).
+pub(crate) fn clear_came_up(app: &tauri::AppHandle) {
+    if let Ok(root) = crate::profile::root(app) {
+        let _ = std::fs::remove_file(root.join(CAME_UP_FILE));
+    }
+}
+
 /// An answer was given these items: their subjects came up.
 pub(crate) fn came_up(app: &tauri::AppHandle, key: &[u8; 32], rows: &[MemoryRow], item_ids: &[String]) {
     if item_ids.is_empty() {

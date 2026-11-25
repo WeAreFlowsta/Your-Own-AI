@@ -41,6 +41,8 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const stage = useSignal<HTMLDivElement>();
   const handle = useSignal<NoSerialize<MapHandle>>();
 
+  /** When the person deleted all memory, if they did (ms). */
+  const deletedAll = useSignal<number | null>(null);
   const asked = useSignal(0);
   // The records open a little after the app does: a read that cannot be
   // made yet is made again, quietly, and only a lasting failure is said.
@@ -52,6 +54,8 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
         if (mine !== asked.value) return;
         data.value = map;
         failed.value = '';
+        const { invoke } = await import('@tauri-apps/api/core');
+        deletedAll.value = await invoke<number | null>('memory_deleted_all_at').catch(() => null);
         return;
       } catch (e) {
         if (mine !== asked.value) return;
@@ -234,7 +238,9 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
             <div ref={stage} class="absolute inset-0" data-testid="memory-map-stage" />
             {d && subjects.length <= 3 && (
               <div class="absolute inset-x-0 bottom-4 px-4 text-center text-sm text-[var(--text-secondary)] pointer-events-none" data-testid="map-grow-line">
-                Your map grows as memory learns more.
+                {deletedAll.value && items === 0
+                  ? `Memory is empty. You deleted all memory on ${dayOf(deletedAll.value)}. Your conversations and rules are still here.`
+                  : 'Your map grows as memory learns more.'}
               </div>
             )}
             <div class="absolute right-3 top-3 flex flex-col gap-1.5">
@@ -424,6 +430,8 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
   const moving = useSignal('');
   /** The item whose "who can use this" choices are open. */
   const sharing = useSignal('');
+  /** The item Forget was pressed on: it says what forgetting does, once more. */
+  const forgetting = useSignal('');
   const draft = useSignal('');
   const busy = useSignal('');
   const problem = useSignal('');
@@ -477,6 +485,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
       editing.value = '';
       moving.value = '';
       sharing.value = '';
+      forgetting.value = '';
       window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
     } catch (e) {
       problem.value = `That could not be saved just now. ${String(e)}`;
@@ -541,6 +550,20 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                     Cancel
                   </button>
                 </div>
+              ) : forgetting.value === i.id ? (
+                <div class="mt-1.5 flex flex-col items-start gap-1.5" data-testid="item-forget-ask">
+                  <span class="text-xs text-[var(--text-secondary)]">
+                    Forget this? Your AIs will no longer use this item or the exchange it came from. The conversation stays in your conversations. You can undo this from Recently.
+                  </span>
+                  <div class="flex gap-3">
+                    <button type="button" class={act} data-testid="item-forget-yes" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
+                      Forget it
+                    </button>
+                    <button type="button" class="text-xs text-[var(--text-muted)] hover:underline" onClick$={() => (forgetting.value = '')}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
               ) : moving.value === i.id ? (
                 <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-move-list">
                   <span class="text-xs text-[var(--text-secondary)]">Move to</span>
@@ -583,7 +606,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                       </button>
                     );
                   })()}
-                  <button type="button" class={act} data-testid="item-forget" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
+                  <button type="button" class={act} data-testid="item-forget" onClick$={() => (forgetting.value = i.id)}>
                     Forget
                   </button>
                   {(() => {

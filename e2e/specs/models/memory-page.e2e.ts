@@ -105,8 +105,8 @@ describe("the Memory page", () => {
     await browser.execute((e) => (e as HTMLElement).click(), keepOut);
     await browser.waitUntil(async () => (await (await $('[data-testid="conversation-item"] [data-testid="conversation-private"]')).getAttribute("data-on")) === "1", { timeout: 30_000, timeoutMsg: "the button did not show the conversation as kept out" });
     await shot("memory-page-keep-out-button");
-    const set = await invoke<{ private: boolean }>("memory_conversation_use", { startedAt: started });
-    expect(set.private).toBe(true);
+    // The button shows it at once; the record of it is saved a moment later.
+    await browser.waitUntil(async () => (await invoke<{ private: boolean }>("memory_conversation_use", { startedAt: started })).private === true, { timeout: 30_000, timeoutMsg: "the conversation was not recorded as kept out of memory" });
     await browser.url("tauri://localhost/chat/");
     await browser.url("tauri://localhost/your-memory/#recently");
     const row = await $('[data-testid="not-used-row"]');

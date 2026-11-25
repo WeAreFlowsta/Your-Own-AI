@@ -204,6 +204,11 @@ describe("the Map", () => {
     await browser.execute((id) => (window as any).__yoaiMap.select(id), other.id);
     await browser.waitUntil(async () => (await panelItems()) === 2, { timeout: 30_000, timeoutMsg: "the subject's two items were not listed" });
     await press(await $('[data-testid="item-forget"]'));
+    // Forget says once more what it does, and that it can be undone.
+    const ask = await $('[data-testid="item-forget-ask"]');
+    await ask.waitForExist({ timeout: 20_000 });
+    expect((await browser.execute((e) => (e as HTMLElement).innerText, ask)) as string).toContain("You can undo this from Recently.");
+    await press(await $('[data-testid="item-forget-yes"]'));
     await browser.waitUntil(async () => (await map()).subjects.find((s) => s.id === other.id)?.items === 1, { timeout: 60_000, timeoutMsg: "the item was not forgotten" });
     const whats = (await invoke<{ what: string }[]>("memory_changes")).map((c) => c.what);
     console.log(`e2e: changes: ${JSON.stringify(whats)}`);
