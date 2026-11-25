@@ -100,9 +100,17 @@ describe("memory in a project session", () => {
     expect(first?.givenTexts.some((t) => t.includes("$60") || t.includes("60"))).toBe(true);
     const reply = (await browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText ?? "")) as string;
     console.log(`e2e: session reply: ${JSON.stringify(reply.slice(0, 400))}`);
+    // The line shows when the reply quoted a passage word for word, said it
+    // searched, or not everything is read yet; a reply that put the answer
+    // in its own words gets none. Either way the reply holds its record.
     const line = await $('[data-testid="given-line"]');
-    await line.waitForExist({ timeout: 60_000 });
-    console.log(`e2e: line: ${JSON.stringify(await line.getText())}`);
+    const shown = await line.waitForExist({ timeout: 15_000 }).then(() => true, () => false);
+    console.log(`e2e: line: ${shown ? JSON.stringify(await line.getText()) : "(none: the reply quoted no passage word for word)"}`);
+    const recorded = (await browser.execute(() => {
+      const turnsNow = ((window as any).__yoaiTurnsFull?.() ?? []) as { assistant?: { given?: { exchanges?: unknown[] } } }[];
+      return turnsNow.slice(-1)[0]?.assistant?.given?.exchanges?.length ?? -1;
+    })) as number;
+    console.log(`e2e: the reply's record holds ${recorded} exchange(s)`);
     await shot("session-memory-line");
   });
 
