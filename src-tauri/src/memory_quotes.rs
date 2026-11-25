@@ -196,16 +196,60 @@ pub struct Checked {
 /// The page's door when a reply finishes. `texts` are the passages as the
 /// model saw them: one per exchange of the record, then the dated lines.
 #[tauri::command]
-pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Vec<String>) -> Checked {
+pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Vec<String>, question: Option<String>) -> Checked {
     let check = check(&reply, &texts);
-    let line = line_for(given.as_ref(), &check, &reply);
+    // An answer in the reply's own words that carries a figure or names
+    // from what it was given is from memory too: recorded, so the line is
+    // the same when the conversation is opened again.
+    let took = took_from(&reply, question.as_deref().unwrap_or(""), &texts);
     let given = given.map(|mut g| {
         for (e, q) in g.exchanges.iter_mut().zip(&check.quoted) {
             e.quoted = *q;
         }
+        if took {
+            g.more.insert("used".into(), serde_json::Value::Bool(true));
+        }
         g
     });
+    let line = line_for(given.as_ref(), &check, &reply);
     Checked { check, given, line }
+}
+
+/// The words of a text that could only have come from somewhere: figures
+/// ("$60", "12.5", "2019") and names (a capital inside a sentence, four
+/// letters or more), folded.
+fn telling_words(text: &str) -> (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>) {
+    let (mut figures, mut names) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let mut starts_sentence = true;
+    for raw in text.split_whitespace() {
+        let word: String = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        let ends = raw.ends_with(['.', '!', '?', ':']);
+        if !word.is_empty() {
+            let letters_and_figures = word.chars().filter(|c| c.is_alphanumeric()).count();
+            if word.chars().any(|c| c.is_ascii_digit()) && letters_and_figures >= 2 {
+                figures.insert(word.to_lowercase());
+            } else if !starts_sentence && word.chars().next().is_some_and(char::is_uppercase) && word.chars().count() >= 4 && word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-') {
+                names.insert(word.to_lowercase());
+            }
+        }
+        starts_sentence = ends || word.is_empty() && starts_sentence;
+    }
+    (figures, names)
+}
+
+/// Did the reply take its answer from what it was given, without quoting
+/// it? It did when it carries a figure, or two names, that stand in a
+/// passage's own lines and that the question did not already hold.
+pub(crate) fn took_from(reply: &str, question: &str, texts: &[String]) -> bool {
+    let (figures, names) = telling_words(reply);
+    if figures.is_empty() && names.len() < 2 {
+        return false;
+    }
+    let asked = question.to_lowercase();
+    // The passage's own lines: its heading (date, title) is the app's, not the conversation's.
+    let said: Vec<String> = texts.iter().map(|t| t.split_once('\n').map_or(t.as_str(), |(_, lines)| lines).to_lowercase()).collect();
+    let stands = |w: &String| !asked.contains(w.as_str()) && said.iter().any(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '.' || c == '\'' || c == '-')).any(|x| x.trim_matches('.') == w));
+    figures.iter().any(stands) || names.iter().filter(|n| stands(n)).count() >= 2
 }
 
 /// The line a recorded reply gets when its conversation is opened again:
@@ -265,7 +309,7 @@ pub(crate) fn line_for(given: Option<&GivenRecord>, check: &QuoteCheck, reply: &
     if s.given < s.found {
         return Some(ReplyLine::DidNotFit { given: s.given, found: s.found });
     }
-    if check.quoted.iter().any(|q| *q) {
+    if check.quoted.iter().any(|q| *q) || (s.given > 0 && g.more.get("used").and_then(serde_json::Value::as_bool) == Some(true)) {
         return Some(ReplyLine::Given { passages: s.given });
     }
     if s.given > 0 && reports_a_search(reply) {
@@ -292,6 +336,27 @@ mod tests {
 
     fn ran(found: u32, given: u32) -> SearchReport {
         SearchReport { ran: true, found, given, read_share: 1.0, ..Default::default() }
+    }
+
+    #[test]
+    fn an_answer_in_the_replys_own_words_is_from_memory_when_it_carries_a_figure_or_names_from_it() {
+        let g = given();
+        assert!(took_from("The free delivery threshold is $60, effective from Monday, March 9.", "What is the free delivery threshold?", &g));
+        assert!(took_from("You went with Hartwell Mills in the end, over Dunmore Grain.", "which supplier did we pick?", &g), "two names from a passage");
+        assert!(!took_from("A sourdough starter needs feeding every day.", "how do I keep a starter?", &g), "an ordinary answer");
+        assert!(!took_from("Yes, $60 is a common threshold.", "is $60 a normal threshold?", &g), "a figure the question already held is not from memory");
+        assert!(!took_from("It is 2026 now.", "what year is it?", &g), "a passage's heading (its date and title) is the app's, not the conversation's");
+        assert!(!took_from("I would ask Hartwell about it.", "who should I ask?", &g), "one name by itself is not enough");
+        assert!(!took_from("", "anything", &g));
+        // Recorded on the reply's record, the line is the same when the conversation is opened again.
+        let none = QuoteCheck { quoted: vec![false, false], ..Default::default() };
+        let mut used = record(ran(2, 2));
+        assert_eq!(line_for(Some(&used), &none, "x"), None);
+        used.more.insert("used".into(), serde_json::Value::Bool(true));
+        assert_eq!(line_for(Some(&used), &none, "x"), Some(ReplyLine::Given { passages: 2 }));
+        assert_eq!(line_from_record(Some(&used), "x"), Some(ReplyLine::Given { passages: 2 }));
+        let checked = memory_reply_checked("The threshold is $60.".into(), Some(record(ran(2, 2))), g, Some("What is the free delivery threshold?".into()));
+        assert_eq!(checked.line, Some(ReplyLine::Given { passages: 2 }));
     }
 
     #[test]
@@ -369,19 +434,19 @@ mod tests {
         let ptr = |s: u32| Ptr { c: 1, s, t: 2, a: 0, b: 10 };
         let mut rec = record(ran(2, 2));
         rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }];
-        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some(rec), given());
+        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some(rec), given(), None);
         let g = done.given.unwrap();
         assert_eq!((g.exchanges[0].quoted, g.exchanges[1].quoted), (false, true));
         assert_eq!(done.line, Some(ReplyLine::Given { passages: 2 }));
         // More texts than exchanges (a saved note rode along): the record keeps its own length.
         let mut rec = record(ran(3, 3));
         rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }];
-        let done = memory_reply_checked("\"Free delivery starts at $60 from Monday March 9.\"".into(), Some(rec), given());
+        let done = memory_reply_checked("\"Free delivery starts at $60 from Monday March 9.\"".into(), Some(rec), given(), None);
         assert_eq!(done.given.unwrap().exchanges.len(), 1);
         assert_eq!(done.check.quoted, vec![false, true]);
-        assert!(memory_reply_checked("no record".into(), None, vec![]).line.is_none());
+        assert!(memory_reply_checked("no record".into(), None, vec![], None).line.is_none());
         // Opened again later: the same line, from the record alone.
-        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some({ let mut r = record(ran(2, 2)); r.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }]; r }), given());
+        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some({ let mut r = record(ran(2, 2)); r.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }]; r }), given(), None);
         assert_eq!(line_from_record(done.given.as_ref(), "As you said..."), done.line);
         assert_eq!(line_from_record(None, "x"), None);
     }

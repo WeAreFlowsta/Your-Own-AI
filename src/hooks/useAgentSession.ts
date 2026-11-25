@@ -598,7 +598,7 @@ export function useAgentSession(props: UseAgentSessionProps) {
         given = turn.given;
         const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: import("../utils/memory").ReplyLine | null }>(
           "memory_reply_checked",
-          { reply: bubble.content, given, texts: turn.givenTexts },
+          { reply: bubble.content, given, texts: turn.givenTexts, question: turn.question },
         ).catch(() => null);
         if (checked?.given) given = checked.given;
         const shown = { given, givenLine: checked?.line ?? undefined, givenLive: turn.givenTexts.length ? turn.givenTexts : undefined, quotesNotGiven: checked?.check.notGiven.length ? checked.check.notGiven : undefined };

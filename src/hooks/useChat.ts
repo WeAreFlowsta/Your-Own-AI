@@ -2148,7 +2148,7 @@ export function useChat(props: UseChatProps) {
         if (givenRecord) {
           const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null }>(
             "memory_reply_checked",
-            { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [] },
+            { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [], question: userInput },
           ).catch(() => null);
           if (checked) {
             if (checked.given) givenRecord = checked.given;
