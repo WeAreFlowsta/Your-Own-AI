@@ -157,7 +157,7 @@ describe("memory and an AI that answers online", () => {
     const sent = lastUserText(chats[chats.length - 1]);
     console.log(`e2e: with sharing off, the request (role:characters): ${sent.shape}`);
     expect(sent.all).not.toContain(KEPT);
-    const line = await textOf(under("given-sent"));
+    const line = await textOf(under("given-line"));
     console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
     expect(line).toContain("Memory is not shared with");
     // The one-time line does not come a second time.

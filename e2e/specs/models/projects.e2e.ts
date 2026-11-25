@@ -275,6 +275,7 @@ describe("projects: the agent in a project", () => {
     const person = [...(request?.messages ?? [])].reverse().find((m) => m.role === "user" && text(m.content).includes("<user_query>"));
     console.log(`e2e: the person's prompt as sent: ${JSON.stringify(text(person?.content).slice(0, 1500))}`);
     console.log(`e2e: the end of that prompt: ${JSON.stringify(text(person?.content).slice(-700))}`);
+    console.log(`e2e: each message of that call (role, has the project heading, has the other rule): ${JSON.stringify((request?.messages ?? []).map((m) => [m.role, text(m.content).includes("Rules for this project:"), text(m.content).includes("npm test")]))}`);
     console.log(`e2e: the project's rules in the records now: ${JSON.stringify((await invoke<{ kind: string; text: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pid}` })).filter((r) => !r.deleted).map((r) => [r.kind, r.text.slice(0, 50)]))}; the session: ${JSON.stringify(await invoke("build_agent_status"))}`);
     expect(shape.some((x) => x.endsWith("*"))).toBe(true);
     // The rule rides beside the person's prompt too, under its heading.

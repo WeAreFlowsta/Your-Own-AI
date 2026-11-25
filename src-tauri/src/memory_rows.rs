@@ -175,6 +175,7 @@ struct RowsInput {
 /// write a person- or project-scope row, since the anchor is the scope's.
 #[tauri::command]
 pub async fn save_memory_row(
+    app: tauri::AppHandle,
     agent_key: Option<String>,
     row: MemoryRow,
     hc_state: State<'_, Arc<HolochainState>>,
@@ -193,7 +194,15 @@ pub async fn save_memory_row(
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await
+    let hash = save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await?;
+    // The scope's copy on this device holds the row at once: a rule saved
+    // now is in the very next message, before any read of the records.
+    let mut saved = row;
+    saved.action_hash = Some(hash.clone());
+    let mut after: Vec<MemoryRow> = read_cache(&app, &key, &saved.scope).into_iter().filter(|r| r.id != saved.id).collect();
+    after.push(saved.clone());
+    write_cache(&app, &key, &saved.scope, &reduce(after));
+    Ok(hash)
 }
 
 /// Save one row through any provisioned agent and put it in the scope's
