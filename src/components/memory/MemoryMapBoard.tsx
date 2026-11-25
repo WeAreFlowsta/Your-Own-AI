@@ -220,7 +220,11 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
         </div>
       </div>
 
-      {failed.value && <p class="text-sm text-[var(--text-secondary)] mb-3">The map could not be read just now. {failed.value}</p>}
+      {failed.value && (
+        <p class="text-sm text-[var(--text-secondary)] mb-3" data-testid="map-not-read" title={failed.value}>
+          The map could not be read yet. Your records are still opening; it will show when they are ready.
+        </p>
+      )}
 
       <div class="grid gap-4 md:grid-cols-[minmax(0,1fr)_280px]">
         <div class={mode.value === 'map' ? 'min-w-0' : 'hidden'}>
