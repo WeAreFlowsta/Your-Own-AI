@@ -149,6 +149,27 @@ pub(crate) fn project_rules_beside(app: &tauri::AppHandle, project: Option<&str>
     rules_beside(&crate::memory_rows::read_cache(app, &key, &scope))
 }
 
+/// An online turn's record of what was sent, with the lines the person
+/// keeps about themselves counted in. A turn that searched nothing still
+/// gets a record when such lines went, so the reply can say so.
+pub(crate) fn sent_about(given: Option<crate::memory_block::GivenRecord>, online: bool, about: usize, today: &str) -> Option<crate::memory_block::GivenRecord> {
+    if !online || about == 0 {
+        return given;
+    }
+    let mut rec = given.unwrap_or_else(|| crate::memory_block::GivenRecord {
+        v: 1,
+        search: crate::memory_block::SearchReport { ran: false, why_not: None, today: today.to_string(), ..Default::default() },
+        mask_version: crate::secret_mask::MASK_VERSION.to_string(),
+        cut_version: crate::memory_block::CUT_VERSION.to_string(),
+        ..Default::default()
+    });
+    let sent = rec.more.entry("sent".to_string()).or_insert_with(|| serde_json::json!({ "passages": 0, "lines": 0, "note": false }));
+    if let Some(o) = sent.as_object_mut() {
+        o.insert("about".into(), serde_json::json!(about));
+    }
+    Some(rec)
+}
+
 /// The rows of `all` that are among `kept`, in the order of `all`.
 fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a MemoryRow> {
     all.iter().copied().filter(|r| kept.iter().any(|k| std::ptr::eq(*k, *r))).collect()
@@ -512,6 +533,10 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     } else {
         (None, None, Vec::new(), None)
     };
+    // What the person keeps about themselves rides in the system part: for
+    // an AI that answers elsewhere it left the computer too, and the line
+    // under the reply counts it.
+    let given = sent_about(given, input.online, about_you.len(), &today);
     let after_question = match remember {
         None => after_question,
         Some(r) => {
@@ -914,6 +939,25 @@ mod tests {
 
     fn with_rows(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
         block(&Held { facts: &[], rows, project_rows, recall: None, question_vector: None, conversation: None })
+    }
+
+    #[test]
+    fn what_the_person_keeps_about_themselves_is_counted_in_what_an_online_turn_sent() {
+        // On this computer nothing is "sent": no record is made or changed.
+        assert_eq!(sent_about(None, false, 3, "Today is 2026-03-02."), None);
+        // Online with nothing kept about them: as it was.
+        assert_eq!(sent_about(None, true, 0, "Today is 2026-03-02."), None);
+        // Online, no search ran, two kept lines went in the system part: the reply has a record that says so.
+        let rec = sent_about(None, true, 2, "Today is 2026-03-02.").unwrap();
+        assert_eq!(rec.more["sent"], serde_json::json!({ "passages": 0, "lines": 0, "note": false, "about": 2 }));
+        assert!(!rec.search.ran && rec.search.why_not.is_none());
+        // Online with a search: its counts stay, and the kept lines are added.
+        let mut searched = crate::memory_block::GivenRecord { v: 1, ..Default::default() };
+        searched.search.ran = true;
+        searched.more.insert("sent".into(), serde_json::json!({ "passages": 4, "lines": 1, "note": true }));
+        let rec = sent_about(Some(searched), true, 2, "x").unwrap();
+        assert_eq!(rec.more["sent"], serde_json::json!({ "passages": 4, "lines": 1, "note": true, "about": 2 }));
+        assert!(rec.search.ran);
     }
 
     #[test]

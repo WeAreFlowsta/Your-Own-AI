@@ -5,7 +5,7 @@
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
 import { useNavigate } from "@builder.io/qwik-city";
-import { firstSentWords, sentWords, type Sent } from "../../utils/givenLine";
+import { firstSentWords, sentWords, type Sent, sentAnything } from "../../utils/givenLine";
 import {
   getLocalCustomAis,
   updateLocalCustomAi,
@@ -56,7 +56,7 @@ export const SentLine = component$<{
       !props.isLast ||
       props.off ||
       !props.sent ||
-      (props.sent.passages + props.sent.lines === 0 && !props.sent.note)
+      !sentAnything(props.sent)
     )
       return;
     if (claimed.has(props.aiId)) return;

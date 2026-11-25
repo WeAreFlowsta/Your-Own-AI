@@ -79,7 +79,12 @@ export interface Sent {
   passages: number;
   lines: number;
   note: boolean;
+  /** Lines the person keeps about themselves, sent with every message. */
+  about?: number;
 }
+
+/** Did anything from memory go with the message? */
+export const sentAnything = (sent: Sent) => sent.passages + sent.lines + (sent.about ?? 0) > 0 || sent.note;
 
 /** Where a reply was made, from its recorded model. */
 export function whereWords(servedBy: string): string {
@@ -102,10 +107,16 @@ export function firstSentWords(ai: string, servedBy: string, changed: boolean): 
 export function sentWords(sent: Sent, servedBy: string): string {
   const where = whereWords(servedBy);
   const n = sent.passages + sent.lines;
-  if (n === 0 && !sent.note) {
+  const about = sent.about ?? 0;
+  if (!sentAnything(sent)) {
     return `Nothing from memory was sent. Memory found nothing for this question. Only this conversation and your rules went to ${where}.`;
   }
-  const what = [n > 0 ? `${passages(n)} from your conversations` : "", sent.note ? "what memory holds now" : ""].filter(Boolean).join(" and ");
+  const parts = [
+    n > 0 ? `${passages(n)} from your conversations` : "",
+    sent.note ? "what memory holds now" : "",
+    about > 0 ? `${about} ${about === 1 ? "thing" : "things"} you keep about yourself` : "",
+  ].filter(Boolean);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
   return `Sent to ${where}. With your question: ${what}.`;
 }
 

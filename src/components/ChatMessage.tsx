@@ -624,14 +624,22 @@ const ActionBar = component$<ActionBarProps>((props) => {
 
       {/* The line under a reply: what memory gave it, in one sentence,
           with the passages one step away. */}
-      {props.message.givenLine && !props.message.isLoading && (() => {
-        const w = givenLineWords(props.message.givenLine!, props.message.aiLabel || 'This AI');
+      {(props.message.givenLine || (props.message.given as { sent?: Sent } | undefined)?.sent) && !props.message.isLoading && (() => {
         // A reply made elsewhere: what memory sent with the question.
         const sent = (props.message.given as { sent?: Sent } | undefined)?.sent;
-        const line = props.message.givenLine!;
+        const line = props.message.givenLine;
+        // No search ran for this turn, and something from memory still went: only the sent line.
+        if (!line) {
+          return (
+            <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind="sent-only">
+              <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} isLast={props.isLast} />
+            </div>
+          );
+        }
+        const w = givenLineWords(line, props.message.aiLabel || 'This AI');
         const switchedOff = line.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
         return (
-          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={props.message.givenLine!.kind}>
+          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={line.kind}>
             {(sent || switchedOff) && (
               <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
             )}

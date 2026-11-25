@@ -90,6 +90,7 @@ export default component$(() => {
               <ul class={item}>
                 <li>The passages from your conversations that the search found for that question, with their dates.</li>
                 <li>What memory holds now about the things the question names.</li>
+                <li>What you keep about yourself, listed under About you.</li>
                 <li>Your rules, and the rules of the project you are in.</li>
                 <li>Your first name, when you have given one.</li>
                 <li>The instruction to quote what it uses and give its date.</li>
