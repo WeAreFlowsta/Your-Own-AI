@@ -5,6 +5,7 @@
  * Tapping a conversation shows the full transcript.
  */
 
+import { ConversationUse } from "../../components/memory/ConversationUse";
 import {
   component$,
   useSignal,
@@ -681,7 +682,8 @@ export default component$(() => {
                       {/* Every view offers re-entry - a conversation is a
                           place, not a document. Handoff via sessionStorage
                           (query params are unreliable in the packaged app). */}
-                      <div class="flex justify-end">
+                      <div class="flex items-start justify-between gap-3">
+                        <ConversationUse startedAt={conv.started_at} />
                         <button
                           onClick$={() => {
                             try {

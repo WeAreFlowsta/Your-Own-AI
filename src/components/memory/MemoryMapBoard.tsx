@@ -534,6 +534,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                 {i.item.state === 'open' ? ' · open' : ''}
                 {i.item.audience?.kind === 'ai' ? ` · only for ${props.ais.find((a) => a.founding === (i.item.audience as { ai: string }).ai)?.name ?? 'one AI'}` : ''}
                 {i.item.audience?.kind === 'project' ? ' · for one project' : ''}
+                {i.item.audience?.kind === 'local_ais' ? ' · only for AIs on your devices' : ''}
               </div>
               {sharing.value === i.id ? (
                 <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-audience-list">
@@ -546,6 +547,9 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                       Only {a.name}
                     </button>
                   ))}
+                  <button type="button" class={act} data-testid="item-audience-to" data-ai="local_ais" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'audience', audience: { kind: 'local_ais' } })}>
+                    Only AIs on your devices
+                  </button>
                   <button type="button" class="text-xs text-[var(--text-muted)] hover:underline" onClick$={() => (sharing.value = '')}>
                     Cancel
                   </button>

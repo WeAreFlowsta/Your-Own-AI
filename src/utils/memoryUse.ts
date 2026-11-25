@@ -30,6 +30,16 @@ export function setPrivate(startedAt: number, on: boolean): Promise<ConvUse> {
   return change({ startedAt, private: on });
 }
 
+/** What the person decided about one conversation (the default when nothing). */
+export function conversationUse(startedAt: number): Promise<ConvUse | null> {
+  return invoke<ConvUse>("memory_conversation_use", { startedAt }).catch(() => null);
+}
+
+/** Who can use a conversation. */
+export function setAudience(startedAt: number, audience: Audience): Promise<ConvUse> {
+  return change({ startedAt, audience });
+}
+
 /** Leave one message out, or use it again. */
 export function setMessageUsed(startedAt: number, seq: number, used: boolean): Promise<ConvUse> {
   return change(used ? { startedAt, include: seq } : { startedAt, exclude: seq });
