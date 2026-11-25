@@ -19,6 +19,8 @@ interface Ai {
 }
 
 const LIVE = ['current', 'open', 'done'];
+/** About you, as it stands before memory has been read. */
+const ABOUT_YOU_FIRST: MapSubject = { id: 'sub-about-you', ids: ['sub-about-you'], name: 'About you', nameAccepted: true, kind: 'about_you', project: null, items: 0, open: 0, audience: 'all', lastKept: 0, lastCameUp: null, title: null, first: null, last: null };
 const PANEL_ITEMS = 6;
 
 /** `aiId`: the AI whose view is shown (its id on this device), chosen with
@@ -38,12 +40,23 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const stage = useSignal<HTMLDivElement>();
   const handle = useSignal<NoSerialize<MapHandle>>();
 
+  const asked = useSignal(0);
+  // The records open a little after the app does: a read that cannot be
+  // made yet is made again, quietly, and only a lasting failure is said.
   const load = $(async () => {
-    try {
-      data.value = await loadMap({ ai: viewAi.value, project: viewProject.value });
-      failed.value = '';
-    } catch (e) {
-      failed.value = String(e);
+    const mine = ++asked.value;
+    for (let attempt = 0; attempt < 20; attempt++) {
+      try {
+        const map = await loadMap({ ai: viewAi.value, project: viewProject.value });
+        if (mine !== asked.value) return;
+        data.value = map;
+        failed.value = '';
+        return;
+      } catch (e) {
+        if (mine !== asked.value) return;
+        if (attempt === 19) failed.value = String(e);
+        await new Promise((r) => setTimeout(r, 2000));
+      }
     }
   });
 
@@ -99,8 +112,10 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   // What is drawn follows the data and the chosen project.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ track }) => {
-    const [d, h] = [track(() => data.value), track(() => handle.value)];
-    if (!d || !h) return;
+    const [read, h] = [track(() => data.value), track(() => handle.value)];
+    if (!h) return;
+    // About you is on the map from the first moment, before anything is read.
+    const d = read ?? { subjects: [ABOUT_YOU_FIRST], links: [], projects: [], unplaced: 0 };
     const center = d.projects.find((p) => p.id === viewProject.value) ?? (props.project && props.project.id === viewProject.value ? props.project : undefined);
     h.setData({ subjects: d.subjects, links: d.links, projects: d.projects, centerProject: center ? { id: center.id, name: center.name } : null });
     if (selected.value && !d.subjects.some((s) => s.id === selected.value)) selected.value = null;

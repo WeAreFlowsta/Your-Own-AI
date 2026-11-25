@@ -279,6 +279,7 @@ export async function mountMap(el: HTMLElement, on: { select: (id: string | null
   sizeWatch.observe(el);
   resize();
   let first = true;
+  let fits = 0;
 
   return {
     setData(data) {
@@ -320,6 +321,9 @@ export async function mountMap(el: HTMLElement, on: { select: (id: string | null
       graph.d3ReheatSimulation();
       refreshNear();
       setTimeout(() => alive && fit(first ? 0 : 700), first ? 50 : 650);
+      // Once the circles have spread to their places, the whole map is brought into view again.
+      const mine = ++fits;
+      setTimeout(() => alive && mine === fits && fit(600), 2200);
       first = false;
     },
     select(id, glide) {
