@@ -29,7 +29,7 @@ import {
   LuPuzzle,
 } from "@qwikest/icons/lucide";
 
-import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
+import { ThemeContext, type AppTheme } from "../routes/layout";
 import {
   fetchUsage,
   formatUsage,
@@ -191,7 +191,6 @@ export default component$<AppHeaderProps>(
     });
     // The project-memory modal lives at the layout root (route stacking
     // contexts would bury it here) - this signal opens it.
-    const memoryFolder = useContext(ProjectMemoryContext);
 
     // Optional online-usage ticker (Settings -> Your Flowsta Account, OFF by
     // default). Polls only while enabled; hides itself signed-out or on free.
@@ -553,7 +552,11 @@ export default component$<AppHeaderProps>(
                           data-testid="open-project-memory"
                           onClick$={() => {
                             workspaceMenuOpen.value = false;
-                            memoryFolder.value = folderPath;
+                            // Memory opens on this project.
+                            void import("../utils/memoryProject").then(async ({ openProjectMemory }) => {
+                              await openProjectMemory(folderPath);
+                              await nav("/your-memory/");
+                            });
                           }}
                           class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] active:scale-[0.98] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
                         >

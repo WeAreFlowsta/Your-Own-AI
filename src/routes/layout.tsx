@@ -17,7 +17,6 @@ import { UpdateNotices } from "../components/UpdateNotices";
 import { useProvideTurns } from "../contexts/TurnsContext";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
-import { openProjectMemory } from "../utils/memoryProject";
 import ConfirmModal from "../components/ConfirmModal";
 import LiquidMetalButton from "../components/LiquidMetalButton";
 import { Callout } from "../components/Callout";
@@ -31,14 +30,6 @@ export type AppTheme = "light" | "dark";
 export const ThemeContext = createContextId<{
   theme: Signal<AppTheme>;
 }>("app.theme");
-
-/** The project-memory modal's control: set a folder path to open it. The
- *  modal itself renders HERE at the layout root - every route wraps its
- *  content (and the header) in its own stacking contexts, so a modal
- *  rendered inside them can never layer above the page. */
-export const ProjectMemoryContext = createContextId<Signal<string | null>>(
-  "app.project-memory",
-);
 
 export default component$(() => {
   const theme = useSignal<AppTheme>("dark");
@@ -302,8 +293,6 @@ export default component$(() => {
   // for the whole app - the chat page attaches, the tray shows them.
   useProvideTurns();
 
-  const projectMemoryFolder = useSignal<string | null>(null);
-  useContextProvider(ProjectMemoryContext, projectMemoryFolder);
 
   // UI-stall watchdog. CSS spinners animate on the compositor thread, so
   // the app can look alive while the main thread - which handles every
@@ -345,19 +334,6 @@ export default component$(() => {
   // yourownai:// links ("Add to Your Own AI" on the site). The path maps
   // onto the app's own routes; a skills link carries the source to add.
   const nav = useNavigate();
-  // "Project memory" opens Memory with that project chosen.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(
-    async ({ track }) => {
-      const folder = track(() => projectMemoryFolder.value);
-      if (!folder) return;
-      projectMemoryFolder.value = null;
-      await openProjectMemory(folder);
-      await nav("/your-memory/");
-    },
-    { strategy: "document-ready" },
-  );
-
   // The Vault moved to another Flowsta identity while the app runs: this
   // window still shows the previous identity's AIs; a restart opens the new
   // one's. Asked on mount too - the event may have fired before we listened.
