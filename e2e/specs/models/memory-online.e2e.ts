@@ -163,6 +163,22 @@ describe("memory and an AI that answers online", () => {
     // The one-time line does not come a second time.
     expect(await (await $(under("sent-first"))).isExisting()).toBe(false);
     await shot("memory-online-not-shared");
+    // The same holds for a program that asks this AI through the app's own port.
+    const port = await invoke<number>("inference_port");
+    const viaPort = async () => {
+      const at = chats.length;
+      const r = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer local" },
+        body: JSON.stringify({ model: aiName, messages: [{ role: "user", content: "What oven do I have?" }], max_tokens: 60, stream: false }),
+      });
+      await r.text();
+      return { status: r.status, arrived: chats.slice(at).map((c) => lastUserText(c).all).join("\n") };
+    };
+    const offPort = await viaPort();
+    console.log(`e2e: through the port with sharing off: status ${offPort.status}, ${offPort.arrived.length} characters arrived at the stand-in service`);
+    expect(offPort.arrived.length).toBeGreaterThan(0);
+    expect(offPort.arrived).not.toContain(KEPT);
     // The page that says what is sent shows this AI, online, with sharing off.
     await browser.url("tauri://localhost/memory-sent/");
     const row = await $('[data-testid="sent-ai"][data-online="1"]');
@@ -172,6 +188,10 @@ describe("memory and an AI that answers online", () => {
     await shot("memory-online-sent-page");
     await press('[data-testid="sent-ai"][data-online="1"] [data-testid="sent-ai-switch"]');
     await browser.waitUntil(async () => (await (await $('[data-testid="sent-ai"][data-online="1"]')).getAttribute("data-shared")) === "1", { timeout: 30_000, timeoutMsg: "the switch on the sent page did not turn sharing on" });
+    // Turned on again: through the port, what the person keeps about themselves goes with the question.
+    const onPort = await viaPort();
+    console.log(`e2e: through the port with sharing on: status ${onPort.status}, holds the kept line: ${onPort.arrived.includes(KEPT)}`);
+    expect(onPort.arrived).toContain(KEPT);
   });
 
   it("a message that looks like it holds a key is asked about before anything is sent", async function () {

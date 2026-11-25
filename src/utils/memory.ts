@@ -383,6 +383,11 @@ export async function memoryForTurn(
      *  this room. Absent: only the system part is built (the early call of
      *  a turn, before the model is chosen; the warm-up). */
     room?: TurnRoom;
+    /** For the early call, which has no room yet: may this turn be answered
+     *  off this computer, and has the person left sharing on for this AI.
+     *  With sharing off for an AI that may answer elsewhere, nothing memory
+     *  holds is in the system part (their rules still are). */
+    sharing?: { online: boolean; memoryShared: boolean };
   },
 ): Promise<TurnMemory> {
   // Bound on the query embedding so a cold/slow/stuck embed server can
@@ -406,9 +411,9 @@ export async function memoryForTurn(
       skipSearch: !opts?.room,
       windowTokens: opts?.room?.windowTokens || null,
       roomTokens: opts?.room?.roomTokens ?? null,
-      online: opts?.room?.online ?? false,
+      online: opts?.room?.online ?? opts?.sharing?.online ?? false,
       previousQuestion: opts?.room?.previousQuestion ?? null,
-      memoryShared: opts?.room?.memoryShared ?? null,
+      memoryShared: opts?.room?.memoryShared ?? opts?.sharing?.memoryShared ?? null,
       // The open conversation is sent whole with the turn.
       onWireFrom: 0,
     },

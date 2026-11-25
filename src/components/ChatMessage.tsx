@@ -625,8 +625,11 @@ const ActionBar = component$<ActionBarProps>((props) => {
       {/* The line under a reply: what memory gave it, in one sentence,
           with the passages one step away. */}
       {(props.message.givenLine || (props.message.given as { sent?: Sent } | undefined)?.sent) && !props.message.isLoading && (() => {
-        // A reply made elsewhere: what memory sent with the question.
-        const sent = (props.message.given as { sent?: Sent } | undefined)?.sent;
+        // A reply made elsewhere: what memory sent with the question. A
+        // reply made on this computer sent nothing, whatever was readied.
+        const madeElsewhere = /^(online|external):/.test(props.message.servedBy || '');
+        const sent = madeElsewhere ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined;
+        if (!props.message.givenLine && !sent) return null;
         const line = props.message.givenLine;
         // No search ran for this turn, and something from memory still went: only the sent line.
         if (!line) {

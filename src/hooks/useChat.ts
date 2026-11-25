@@ -42,6 +42,7 @@ import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
 import { extractOnlineError, providerErrorCode, providerErrorText, FALLBACK_CODES } from "../utils/onlineErrors";
+import { canAnswerOnline } from "../utils/memorySent";
 import {
   getMedicalModel,
   isOnlineMedicalChoice,
@@ -728,8 +729,15 @@ export function useChat(props: UseChatProps) {
         foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
+        // The model is not chosen yet. An AI that may answer off this
+        // computer, with sharing turned off, is given nothing memory holds
+        // in this part, wherever this turn ends up being answered: a turn
+        // that falls back to an online model must not carry it either.
+        sharing: {
+          online: canAnswerOnline(aiModelSetting) || !!modelOverride?.startsWith("online:") || !!modelOverride?.startsWith("external:"),
+          memoryShared: selectedAi.aiConfig?.memoryOnline !== false,
+        },
       }).catch(() => null);
-      void aiModelSetting;
 
       // Live information this AI could not look up: the reply carries the
       // offer above the composer. At most once a conversation, never for a

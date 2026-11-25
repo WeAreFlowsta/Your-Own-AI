@@ -468,6 +468,9 @@ async fn turn_memory_as(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory
     let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
     let online = ai.model.starts_with("online:");
     let window = if online { None } else { crate::llm::window_if_loaded(app, &ai.model).await.map(|(w, _)| w.min(u64::from(u32::MAX)) as u32) };
+    // For what memory may give, an AI whose reply may be made off this
+    // computer is treated as one that is: its switch holds for every turn.
+    let online = crate::memory_prompt::may_answer_elsewhere(&ai.model);
     crate::memory_prompt::for_turn(app, crate::memory_prompt::TurnInput {
         ai_id: Some(ai.id.clone()),
         founding_key: founding,
@@ -585,7 +588,10 @@ async fn agent_memory_message(app: &AppHandle, ai: &ResolvedAi, caller: AgentCal
         AgentCaller::InProject(p) => (crate::memory_prompt::Surface::Session, p),
     };
     let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
-    let key = crate::memory_prompt::KeptPart::key(&ai.id, project.as_deref(), &crate::memory_prompt::rules_revision(app, founding.as_deref(), project.as_deref()));
+    // The person's switch for this AI is part of the key: turned off, the
+    // very next step is given the part built without what memory holds.
+    let revision = format!("{}|shared:{}", crate::memory_prompt::rules_revision(app, founding.as_deref(), project.as_deref()), ai.memory_online);
+    let key = crate::memory_prompt::KeptPart::key(&ai.id, project.as_deref(), &revision);
     let part = match KEPT.get(&key) {
         Some(part) => part,
         None => {

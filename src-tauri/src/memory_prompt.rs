@@ -563,6 +563,14 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     }
 }
 
+/// May an AI with this model setting be answered off this computer: an
+/// online model, a server the person runs elsewhere, or an automatic
+/// choice that may pick an online model.
+pub(crate) fn may_answer_elsewhere(model: &str) -> bool {
+    let m = model.trim();
+    m.starts_with("online:") || m.starts_with("external:") || m == "auto:online-offline" || m == "auto:online"
+}
+
 /// Is what memory holds given to this turn's AI? Always for a local AI.
 /// For an online one, unless the person turned sharing off for it.
 pub(crate) fn shares_memory(online: bool, memory_shared: Option<bool>) -> bool {
@@ -939,6 +947,19 @@ mod tests {
 
     fn with_rows(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
         block(&Held { facts: &[], rows, project_rows, recall: None, question_vector: None, conversation: None })
+    }
+
+    #[test]
+    fn the_switch_holds_for_every_ai_that_may_answer_off_this_computer() {
+        for model in ["online:gpt-x", "external:llama", "auto:online-offline", "auto:online", " online:gpt-x "] {
+            assert!(may_answer_elsewhere(model), "{model}");
+            assert!(!shares_memory(may_answer_elsewhere(model), Some(false)), "{model}: switched off, nothing memory holds is given");
+            assert!(shares_memory(may_answer_elsewhere(model), None), "{model}: sharing is on until the person turns it off");
+        }
+        for model in ["auto:offline", "Qwen3.5-4B-Q4_K_M.gguf", ""] {
+            assert!(!may_answer_elsewhere(model), "{model}");
+            assert!(shares_memory(may_answer_elsewhere(model), Some(false)), "{model}: an AI on this computer is always given its person's memory");
+        }
     }
 
     #[test]
