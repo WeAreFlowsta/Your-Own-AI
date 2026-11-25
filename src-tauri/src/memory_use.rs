@@ -1,6 +1,6 @@
 //! Who may draw on what: a conversation's audience, its private mark and
 //! the messages the person chose not to have used; forgetting and deleting
-//! that say exactly what happens.
+//! that says exactly what happens (deleting is in `memory_delete`).
 //!
 //! What the person decides about a conversation is kept as a system row
 //! in memory's scope, named by the conversation's start (the same on
@@ -8,7 +8,6 @@
 //! travels to the person's other devices, and comes back with a restore.
 //! A change takes effect at once: nothing is read or imported again.
 
-use crate::memory_block::GivenRecord;
 use crate::memory_items::{Audience, Item, ItemState, SCOPE};
 use crate::memory_rows::MemoryRow;
 use serde::{Deserialize, Serialize};
@@ -197,59 +196,10 @@ pub(crate) fn forgotten_sources(items: &[Item]) -> Vec<(i64, u32)> {
     items.iter().filter(|i| i.meta.state == ItemState::Forgotten).filter_map(|i| i.meta.source.ptr.map(|p| (p.c, p.s))).collect()
 }
 
-// ── what a delete will do, said before it is done ───────────────────────
-
-/// What deleting a conversation takes with it.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationDelete {
-    /// Memory items made from it: deleted with it.
-    pub items: Vec<String>,
-    /// Replies in other conversations that were given passages from it:
-    /// they are not rewritten.
-    pub replies_quoting: usize,
-}
-
-/// `replies`: the records of what replies in OTHER conversations were
-/// given, as this device holds them.
-pub(crate) fn delete_preview(started_at: i64, items: &[Item], replies: &[GivenRecord]) -> ConversationDelete {
-    let made_here: Vec<String> = items.iter().filter(|i| i.meta.source.ptr.is_some_and(|p| p.c == started_at)).map(|i| i.row.id.clone()).collect();
-    let points_here = |g: &GivenRecord| g.exchanges.iter().any(|e| e.hit.c == started_at || e.before.is_some_and(|p| p.c == started_at) || e.after.is_some_and(|p| p.c == started_at));
-    ConversationDelete { items: made_here, replies_quoting: replies.iter().filter(|g| points_here(g)).count() }
-}
-
-/// What deleting an AI does to the items it kept.
-#[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AiDelete {
-    /// For all the person's AIs (or a project, or local AIs): kept,
-    /// without their source conversations.
-    pub kept: Vec<String>,
-    /// For that AI only: deleted.
-    pub deleted: Vec<String>,
-}
-
-/// `ai`: the founding key of the AI being deleted.
-pub(crate) fn ai_delete_plan(ai: &str, items: &[Item]) -> AiDelete {
-    let its: Vec<&Item> = items.iter().filter(|i| i.row.saved_by == format!("ai:{ai}") || matches!(&i.meta.audience, Audience::Ai { ai: a } if a == ai)).collect();
-    let (deleted, kept): (Vec<&Item>, Vec<&Item>) = its.into_iter().partition(|i| matches!(&i.meta.audience, Audience::Ai { ai: a } if a == ai));
-    AiDelete { kept: kept.iter().map(|i| i.row.id.clone()).collect(), deleted: deleted.iter().map(|i| i.row.id.clone()).collect() }
-}
-
-/// "Delete all memory", memory only: every row of memory's scope goes
-/// (items, subjects, the "Not used" list and memory's other rows). Rows of
-/// other scopes (the person's rules) and the conversations are untouched.
-pub(crate) fn delete_memory_only(rows: &[MemoryRow], now: i64) -> Vec<MemoryRow> {
-    rows.iter()
-        .filter(|r| r.scope == SCOPE && !r.deleted)
-        .map(|r| MemoryRow { deleted: true, updated_at: now, action_hash: None, text: String::new(), structured: None, ..r.clone() })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory_block::{GivenExchange, Ptr, SearchReport};
+    use crate::memory_block::Ptr;
     use crate::memory_items::{forget, keep, may_use, meta_of, set_audience, ItemType, Keep};
 
     const C1: i64 = 1_768_896_000_000_000;
@@ -348,48 +298,6 @@ mod tests {
         let wider_item = Item { meta: meta_of(&wider).unwrap(), row: wider };
         let (back, _) = crate::memory_items::undo(&change, &wider_item, 12).unwrap();
         assert!(!may_use(&meta_of(&back).unwrap(), "juno", None, false));
-    }
-
-    #[test]
-    fn delete_preview_counts() {
-        let items = vec![item("it-1", C1, 2, "person", None), item("it-2", C1, 8, "ai:juno", None), item("it-3", C2, 0, "person", None)];
-        let ptr = |c: i64, s: u32| Ptr { c, s, t: c + 1, a: 0, b: 9 };
-        let given = |hits: Vec<(i64, u32)>, before: Option<(i64, u32)>| GivenRecord { v: 1, search: SearchReport { ran: true, ..Default::default() }, exchanges: hits.into_iter().map(|(c, s)| GivenExchange { before: before.map(|(c, s)| ptr(c, s)), hit: ptr(c, s), after: None, score: 0.5, quoted: false }).collect(), ..Default::default() };
-        let replies = vec![given(vec![(C1, 2), (C2, 0)], None), given(vec![(C2, 1)], None), given(vec![(C2, 5)], Some((C1, 4))), given(vec![(C1, 9), (C1, 2)], None)];
-        let p = delete_preview(C1, &items, &replies);
-        assert_eq!(p, ConversationDelete { items: vec!["it-1".into(), "it-2".into()], replies_quoting: 3 });
-        assert_eq!(delete_preview(999, &items, &replies), ConversationDelete { items: vec![], replies_quoting: 0 });
-        assert_eq!(serde_json::to_value(&p).unwrap()["repliesQuoting"], 3);
-    }
-
-    #[test]
-    fn items_for_all_survive_an_ai_delete() {
-        let items = vec![
-            item("for-all", C1, 0, "ai:atlas", None),
-            item("atlas-only", C1, 1, "ai:atlas", Some(Audience::Ai { ai: "atlas".into() })),
-            item("the-persons-for-atlas", C1, 2, "person", Some(Audience::Ai { ai: "atlas".into() })),
-            item("project", C1, 3, "ai:atlas", Some(Audience::Project { project: "id:p1".into() })),
-            item("junos", C2, 0, "ai:juno", Some(Audience::Ai { ai: "juno".into() })),
-            item("the-persons", C2, 1, "person", None),
-        ];
-        let plan = ai_delete_plan("atlas", &items);
-        assert_eq!(plan.kept, vec!["for-all", "project"]);
-        assert_eq!(plan.deleted, vec!["atlas-only", "the-persons-for-atlas"]);
-        assert!(!plan.kept.iter().chain(&plan.deleted).any(|id| id == "junos" || id == "the-persons"), "another AI's and the person's own are not touched");
-    }
-
-    #[test]
-    fn delete_memory_only_keeps_conversations_and_rules() {
-        let rule: MemoryRow = serde_json::from_value(serde_json::json!({ "id": "r1", "scope": "person", "kind": "rule", "text": "Prices are in dollars.", "as_of": 1, "saved_by": "person", "provenance": "authored", "updated_at": 1 })).unwrap();
-        let project_rule: MemoryRow = serde_json::from_value(serde_json::json!({ "id": "r2", "scope": "project:id:p1", "kind": "rule", "text": "Bread only.", "as_of": 1, "saved_by": "person", "provenance": "authored", "updated_at": 1 })).unwrap();
-        let rows = vec![item("it-1", C1, 0, "person", None).row, conv_row(&ConvUse { started_at: C1, audience: None, private: true, excluded: vec![] }, 3), rule.clone(), project_rule.clone()];
-        let gone = delete_memory_only(&rows, 100);
-        assert_eq!(gone.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["it-1", &format!("sys-conv-{C1}")[..]]);
-        assert!(gone.iter().all(|r| r.deleted && r.text.is_empty() && r.structured.is_none()), "the deletion record holds none of the words");
-        // After the deletions are saved, a reader sees the rules and nothing of memory.
-        let after = crate::memory_rows::reduce([rows, gone].concat());
-        assert_eq!(after.iter().map(|r| r.id.as_str()).collect::<Vec<_>>().len(), 2);
-        assert!(after.contains(&rule) && after.contains(&project_rule));
     }
 
     #[test]
