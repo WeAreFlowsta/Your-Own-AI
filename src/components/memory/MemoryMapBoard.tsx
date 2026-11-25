@@ -64,15 +64,16 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   // The AIs to choose from, the first load, and a new load whenever memory changes.
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ cleanup }) => {
+    // Listening from the first moment: a change made while the first read is under way is not missed.
+    const again = () => void load();
+    window.addEventListener('yoai-memory-changed', again);
+    cleanup(() => window.removeEventListener('yoai-memory-changed', again));
     const [{ getLocalCustomAis }, { foundingOf }] = await Promise.all([import('../../utils/localAiStorage'), import('../../utils/lookalikes')]);
     const list = await getLocalCustomAis().catch(() => []);
     ais.value = list.filter((a) => a.status !== 'archived' && foundingOf(a)).map((a) => ({ id: a.id, name: a.name, founding: foundingOf(a) }));
     viewAi.value = ais.value.find((a) => a.id === props.aiId)?.founding ?? '';
     viewProject.value = props.project?.id ?? '';
     await load();
-    const again = () => void load();
-    window.addEventListener('yoai-memory-changed', again);
-    cleanup(() => window.removeEventListener('yoai-memory-changed', again));
   });
 
   // The face chosen above the Map changes whose view is shown.
