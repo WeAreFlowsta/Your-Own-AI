@@ -598,6 +598,13 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                     Who can use this
                   </button>
                   {(() => {
+                    const gone = (i.item as { source_gone?: { with?: string } | null }).source_gone;
+                    if (gone)
+                      return (
+                        <span class="text-xs text-[var(--text-muted)]" data-testid="item-source-gone">
+                          The conversation this came from was deleted{gone.with ? ` with ${gone.with}` : ''}.
+                        </span>
+                      );
                     const ptr = (i.item.source as { ptr?: { c: number; s: number } | null } | null | undefined)?.ptr;
                     if (!ptr || !(ptr.c > 0)) return null;
                     return (

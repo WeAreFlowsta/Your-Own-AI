@@ -514,6 +514,11 @@ export function useAiDataActions() {
     // Who it is, before it is gone: what it kept is settled by its key.
     const doomed = state.userDefinedAis.find((a) => a.id === id);
     const founding = doomed ? doomed.foundingKey || doomed.agentPubKey || "" : "";
+    // Its conversations' starts, read before they go: an item kept from one
+    // of them stays and says its conversation was deleted with the AI.
+    const conversations: number[] = doomed?.agentPubKey
+      ? await invoke<{ started_at: number }[]>("get_conversations_cached", { agentKey: doomed.agentPubKey }).then((l) => l.map((c) => c.started_at), () => [])
+      : [];
     try {
       await invoke("purge_ai_app", { aiId: id });
     } catch (e) {
@@ -525,7 +530,7 @@ export function useAiDataActions() {
     try {
       // What it kept for this AI alone goes with it; what it kept for all
       // the person's AIs stays, and says its conversation went with the AI.
-      if (founding) await invoke("memory_ai_deleted", { founding, name: doomed?.name ?? "" });
+      if (founding) await invoke("memory_ai_deleted", { founding, name: doomed?.name ?? "", conversations });
     } catch (e) {
       console.warn("[AiDataContext] what the AI kept could not be settled:", e);
     }

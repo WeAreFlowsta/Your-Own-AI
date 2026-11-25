@@ -128,4 +128,97 @@ describe("deleting memory", () => {
     expect((await invoke<unknown[]>("get_conversations_cached", { agentKey: agent })).length).toBe(0);
     await browser.waitUntil(async () => removedSoFar() > removedBefore, { timeout: 180_000, interval: 3_000, timeoutMsg: "the item's earlier copy was not removed from the record" });
   });
+  it("deleting an AI says what happens to what it kept: its own items go, and an item kept from its conversation says where its source went", async function () {
+    this.timeout(900_000);
+    await browser.url("tauri://localhost/chat/");
+    await waitForChat();
+    await ask("We order yeast from Lesaffre every second Monday. Reply with one short sentence.");
+    await waitForReplyDone();
+    await keepTheLastReply();
+    await browser.waitUntil(async () => (await live()).length === 1, { timeout: 60_000, timeoutMsg: "the reply was not kept" });
+    const fromConversation = (await live())[0];
+    const who = (await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const store = await t.store.load(await t.core.invoke("profile_store_path", { name: "ai-data.json" }));
+      const ais = ((await store.get("custom-ais")) || []) as { id: string; name: string; agentPubKey?: string; foundingKey?: string }[];
+      const asked = (((window as any).__yoaiTurnsFull?.() ?? []) as { agentKey: string }[]).slice(-1)[0]?.agentKey ?? "";
+      const a = ais.find((x) => x.agentPubKey === asked) ?? ais[0];
+      return { id: a.id, name: a.name, founding: a.foundingKey || a.agentPubKey || "", count: ais.length };
+    })) as { id: string; name: string; founding: string; count: number };
+    expect(who.founding).toBeTruthy();
+    // One more item, for this AI alone.
+    const ONLY = "Only one AI needs this note about the proofing room.";
+    await invoke("memory_keep_words", { text: ONLY });
+    const only = (await live()).find((i) => i.text === ONLY)!;
+    await invoke("memory_item_change", { id: only.id, edit: { do: "audience", audience: { kind: "ai", ai: who.founding } } });
+    expect(await invoke("memory_ai_delete_preview", { founding: who.founding })).toEqual({ stay: 0, go: 1 });
+
+    await browser.url("tauri://localhost/your-ais/");
+    await press(`[data-ai-id="${who.id}"] [title="Delete AI"]`);
+    await browser.waitUntil(async () => (await textOf('[data-testid="delete-ai-words"]')).includes(`${who.name} kept 1 memory item, for ${who.name} only. It will be deleted.`), { timeout: 30_000, timeoutMsg: "the dialog did not say what happens to what the AI kept" });
+    console.log(`e2e: the dialog: ${JSON.stringify((await textOf('[data-testid="delete-ai-words"]')).replace(/\s+/g, " "))}`);
+    await shot("memory-delete-ai-dialog");
+    await press('[data-testid="delete-ai-purge"]');
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(async (id) => {
+          const t = (window as any).__TAURI__;
+          const store = await t.store.load(await t.core.invoke("profile_store_path", { name: "ai-data.json" }));
+          return !(((await store.get("custom-ais")) || []) as { id: string }[]).some((a) => a.id === id);
+        }, who.id)) as boolean,
+      { timeout: 180_000, interval: 2_000, timeoutMsg: "the AI was not deleted" },
+    );
+    // Its own item is gone; the one kept from its conversation stays and says where its source went.
+    await browser.waitUntil(async () => !(await live()).some((i) => i.id === only.id), { timeout: 60_000, timeoutMsg: "the item for the AI alone was not deleted with it" });
+    let stays: (Item & { item: { source_gone?: { with?: string } } }) | undefined;
+    await browser.waitUntil(async () => {
+      stays = (await live()).find((i) => i.id === fromConversation.id) as typeof stays;
+      return stays?.item.source_gone?.with === who.name;
+    }, { timeout: 60_000, timeoutMsg: "the item kept from the AI's conversation does not say its source went with the AI" });
+    await browser.url("tauri://localhost/your-memory/");
+    await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiMap?.select === "function"), { timeout: 60_000, timeoutMsg: "the map never came up" });
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), stays!.item.subject ?? "sub-about-you");
+    await browser.waitUntil(async () => (await textOf(`[data-testid="map-panel-item"][data-id="${fromConversation.id}"] [data-testid="item-source-gone"]`)) === `The conversation this came from was deleted with ${who.name}.`, { timeout: 30_000, timeoutMsg: "the item does not say on the page where its source went" });
+    await shot("memory-delete-ai-source-gone");
+  });
+
+  it("Memory and every conversation takes both, and leaves the AIs and the rules", async function () {
+    this.timeout(900_000);
+    await browser.url("tauri://localhost/chat/");
+    await waitForChat();
+    await ask("The oven is serviced each March. Reply with one short sentence.");
+    await waitForReplyDone();
+    await keepTheLastReply();
+    await browser.waitUntil(async () => (await live()).length >= 2, { timeout: 60_000, timeoutMsg: "the reply was not kept" });
+    const state = async () =>
+      (await browser.execute(async () => {
+        const t = (window as any).__TAURI__;
+        const store = await t.store.load(await t.core.invoke("profile_store_path", { name: "ai-data.json" }));
+        const ais = ((await store.get("custom-ais")) || []) as { agentPubKey?: string }[];
+        let conversations = 0;
+        for (const a of ais) if (a.agentPubKey) conversations += ((await t.core.invoke("get_conversations_cached", { agentKey: a.agentPubKey })) as unknown[]).length;
+        return { ais: ais.length, conversations };
+      })) as { ais: number; conversations: number };
+    const before = await state();
+    expect(before.conversations).toBeGreaterThanOrEqual(1);
+
+    await browser.url("tauri://localhost/your-memory/");
+    await press('[data-testid="delete-all-open"]');
+    await (await $('[data-testid="delete-all-dialog"]')).waitForDisplayed({ timeout: 30_000 });
+    await press('[data-testid="delete-all-with-conversations"]');
+    await browser.execute(() => {
+      const el = document.querySelector('[data-testid="delete-all-word"]') as HTMLInputElement;
+      el.focus();
+      el.value = "DELETE";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press('[data-testid="delete-all-go"]');
+    await (await $('[data-testid="delete-all-dialog"]')).waitForExist({ reverse: true, timeout: 300_000 });
+    expect((await invoke<Item[]>("memory_items")).length).toBe(0);
+    const after = await state();
+    console.log(`e2e: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`);
+    expect(after).toEqual({ ais: before.ais, conversations: 0 });
+    const rules = await invoke<{ kind: string; text: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rules.some((r) => r.kind === "rule" && r.text === RULE && !r.deleted)).toBe(true);
+  });
 });

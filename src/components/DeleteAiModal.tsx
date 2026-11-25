@@ -76,6 +76,7 @@ export default component$<DeleteAiModalProps>(({
 
           {/* Purge — irreversible */}
           <button
+            data-testid="delete-ai-purge"
             onClick$={() => onPurge$()}
             disabled={busy}
             class="w-full text-left p-4 rounded-xl border border-[var(--border-subtle)] hover:border-red-500/50 hover:bg-red-500/5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed flex items-start gap-3"

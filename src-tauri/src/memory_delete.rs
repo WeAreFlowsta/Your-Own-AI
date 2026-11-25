@@ -52,6 +52,19 @@ pub(crate) fn ai_plan(items: &[Item], founding: &str) -> AiPlan {
     plan
 }
 
+/// The items that stay but lose their source when an AI is deleted: what
+/// the AI kept for everyone, and anything else kept from one of its
+/// conversations (`conversations`: their starts). Ids, in the items' order.
+pub(crate) fn sources_gone(items: &[Item], plan: &AiPlan, conversations: &[i64]) -> Vec<String> {
+    items
+        .iter()
+        .filter(|i| !plan.go.contains(&i.row.id))
+        .filter(|i| !i.meta.more.contains_key("source_gone"))
+        .filter(|i| plan.stay.contains(&i.row.id) || i.meta.source.ptr.is_some_and(|p| conversations.contains(&p.c)))
+        .map(|i| i.row.id.clone())
+        .collect()
+}
+
 /// An item that stays after its AI was deleted says so: the conversation
 /// it came from went with the AI.
 pub(crate) fn source_gone(item: &Item, ai_name: &str, now: i64) -> MemoryRow {
@@ -172,10 +185,11 @@ pub fn memory_ai_delete_preview(app: tauri::AppHandle, founding: String) -> Resu
     Ok(AiPreview { stay: plan.stay.len(), go: plan.go.len() })
 }
 
-/// An AI was deleted: its own items go, the rest stay and say where their
-/// conversations went.
+/// An AI was deleted: its own items go; what it kept for everyone stays,
+/// and so does anything else kept from its conversations (`conversations`:
+/// their starts, read before they went). Those say where their source went.
 #[tauri::command]
-pub async fn memory_ai_deleted(app: tauri::AppHandle, founding: String, name: String) -> Result<AiPreview, String> {
+pub async fn memory_ai_deleted(app: tauri::AppHandle, founding: String, name: String, conversations: Option<Vec<i64>>) -> Result<AiPreview, String> {
     let (_, rows) = rows_now(&app)?;
     let items = crate::memory_items::items(&rows);
     let plan = ai_plan(&items, &founding);
@@ -183,7 +197,8 @@ pub async fn memory_ai_deleted(app: tauri::AppHandle, founding: String, name: St
     for i in items.iter().filter(|i| plan.go.contains(&i.row.id)) {
         crate::memory_rows::save_and_cache(&app, deleted(&i.row, now)).await?;
     }
-    for i in items.iter().filter(|i| plan.stay.contains(&i.row.id)) {
+    let unsourced = sources_gone(&items, &plan, &conversations.unwrap_or_default());
+    for i in items.iter().filter(|i| unsourced.contains(&i.row.id)) {
         crate::memory_rows::save_and_cache(&app, source_gone(i, &name, now)).await?;
     }
     crate::memory_tidying::words_changed(&app);
@@ -268,6 +283,10 @@ mod tests {
         let meta = meta_of(&stays).unwrap();
         assert_eq!(meta.more["source_gone"], serde_json::json!({ "with": "Atlas" }));
         assert_eq!((meta.state, stays.text.as_str()), (ItemState::Current, "Item for-all."), "the item is as it was, and says where its conversation went");
+        // What the person kept from one of Atlas's conversations (started at 100) loses its source too; Juno's, from another, does not.
+        let rows = vec![item("for-all", "ai:atlas", Audience::All, 100), item("persons-from-atlas", "person", Audience::All, 100), item("junos", "ai:juno", Audience::All, 200), item("only-atlas", "ai:atlas", Audience::Ai { ai: "atlas".into() }, 100)];
+        let all = items(&rows);
+        assert_eq!(sources_gone(&all, &ai_plan(&all, "atlas"), &[100]), vec!["for-all".to_string(), "persons-from-atlas".to_string()]);
     }
 
     #[test]
