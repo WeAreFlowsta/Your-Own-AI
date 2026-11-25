@@ -2,8 +2,10 @@
 //! with all of memory. Each has a count the person is shown before they
 //! decide, taken from the same rule the delete then follows.
 //!
-//! An item that is deleted is a row marked deleted, so it goes on every
-//! device and is not brought back by a read of the records. Forgetting an
+//! An item that is deleted is a row marked deleted, with none of its words,
+//! so it goes on every device and is not brought back by a read of the
+//! records; its earlier copies are then removed from the record, each
+//! device removing the ones it wrote. Forgetting an
 //! item is a different thing (it can be undone, from Recently) and lives
 //! with the items.
 
@@ -11,9 +13,11 @@ use crate::memory_items::{Audience, Item, ItemState};
 use crate::memory_rows::MemoryRow;
 use serde::Serialize;
 
-/// The row as it is saved to delete it.
+/// The row as it is saved to delete it: its id, its place, the mark and
+/// the ids it replaced (so nothing it replaced comes back), and none of its
+/// words.
 pub(crate) fn deleted(row: &MemoryRow, now: i64) -> MemoryRow {
-    MemoryRow { deleted: true, updated_at: now, action_hash: None, ..row.clone() }
+    MemoryRow { deleted: true, updated_at: now, action_hash: None, text: String::new(), structured: None, topics: Vec::new(), ..row.clone() }
 }
 
 /// The items made from a conversation, by its start.
@@ -108,7 +112,13 @@ pub(crate) fn all_preview(rows: &[MemoryRow]) -> AllPreview {
     let all = crate::memory_subjects::subjects(rows);
     let live = |i: &&Item| matches!(i.meta.state, ItemState::Current | ItemState::Open | ItemState::Done | ItemState::Replaced);
     let held: Vec<&Item> = items.iter().filter(live).collect();
-    let subjects = all.iter().filter(|s| s.merged_into.is_none()).filter(|s| held.iter().any(|i| i.meta.subject.as_deref().and_then(|id| crate::memory_subjects::standing(&all, id)).is_some_and(|x| x.id == s.id))).count();
+    // The same count the Map gives: every subject that holds something, and
+    // "About you" among them (an item in no subject is drawn there).
+    let subjects = held
+        .iter()
+        .map(|i| i.meta.subject.as_deref().and_then(|id| crate::memory_subjects::standing(&all, id)).map_or(crate::memory_subjects::ABOUT_YOU, |s| s.id.as_str()))
+        .collect::<std::collections::BTreeSet<&str>>()
+        .len();
     AllPreview { items: held.len(), subjects, not_used: crate::memory_use::conv_uses(rows).iter().filter(|u| crate::memory_use::restricts(u)).count() }
 }
 
@@ -143,6 +153,7 @@ pub async fn memory_conversation_deleted(app: tauri::AppHandle, started_at: i64)
     }
     if n > 0 {
         crate::memory_tidying::words_changed(&app);
+        crate::memory_rows::removal_after_delete(&app, crate::memory_items::SCOPE);
     }
     Ok(n)
 }
@@ -176,6 +187,9 @@ pub async fn memory_ai_deleted(app: tauri::AppHandle, founding: String, name: St
         crate::memory_rows::save_and_cache(&app, source_gone(i, &name, now)).await?;
     }
     crate::memory_tidying::words_changed(&app);
+    if !plan.go.is_empty() {
+        crate::memory_rows::removal_after_delete(&app, crate::memory_items::SCOPE);
+    }
     Ok(AiPreview { stay: plan.stay.len(), go: plan.go.len() })
 }
 
@@ -202,6 +216,7 @@ pub async fn memory_delete_all(app: tauri::AppHandle) -> Result<usize, String> {
     crate::memory_keeping::clear_queue(&app);
     crate::memory_tidying::clear_queue(&app);
     crate::memory_tidying::words_changed(&app);
+    crate::memory_rows::removal_after_delete(&app, crate::memory_items::SCOPE);
     log::info!("[memory] all memory deleted: {n} row(s)");
     Ok(n)
 }
@@ -232,6 +247,7 @@ mod tests {
         assert_eq!(items_from(&all, 300).len(), 0);
         let gone = deleted(&rows[0], 9);
         assert!(gone.deleted && gone.updated_at == 9 && gone.id == "a" && gone.action_hash.is_none());
+        assert!(gone.text.is_empty() && gone.structured.is_none() && gone.topics.is_empty(), "the saved mark carries none of the item's words");
         // A deleted row is no item any more.
         assert_eq!(items(&[gone, rows[1].clone()]).len(), 1);
     }

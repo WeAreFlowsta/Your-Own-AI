@@ -3,6 +3,21 @@
 // conversations and the rules; deleting a conversation says how many
 // memory items go with it, and they go.
 import { waitForChat, ask, waitForReplyDone, invoke, shot } from "./_helpers";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+// What the app's log said: the removal of earlier copies happens in the
+// background and says how many went.
+const LOG_DIR = path.join(process.env.YOAI_E2E_HOME ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../profile"), ".local/share/com.solar.yourowai/logs");
+function removedSoFar(): number {
+  let n = 0;
+  for (const f of fs.existsSync(LOG_DIR) ? fs.readdirSync(LOG_DIR) : []) {
+    if (!f.endsWith(".log")) continue;
+    for (const m of fs.readFileSync(path.join(LOG_DIR, f), "utf8").matchAll(/\[memory\] (\d+) earlier copies of deleted rows removed from the record/g)) n += Number(m[1]);
+  }
+  return n;
+}
 
 type Item = { id: string; text: string; item: { state: string; subject?: string | null; source?: { ptr?: { c: number } | null } | null } };
 const live = async () => (await invoke<Item[]>("memory_items")).filter((i) => i.item.state === "current");
@@ -47,6 +62,7 @@ describe("deleting memory", () => {
     const conversationsBefore = (await invoke<unknown[]>("get_conversations_cached", { agentKey: agent })).length;
     expect(conversationsBefore).toBeGreaterThanOrEqual(1);
 
+    const removedBefore = removedSoFar();
     await browser.url("tauri://localhost/your-memory/");
     await press('[data-testid="delete-all-open"]');
     await (await $('[data-testid="delete-all-dialog"]')).waitForDisplayed({ timeout: 30_000 });
@@ -79,6 +95,10 @@ describe("deleting memory", () => {
     expect((await invoke<unknown[]>("get_conversations_cached", { agentKey: agent })).length).toBe(conversationsBefore);
     const rules = await invoke<{ kind: string; text: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: "person" });
     expect(rules.some((r) => r.kind === "rule" && r.text === RULE && !r.deleted)).toBe(true);
+    // The deleted items' earlier copies leave the stored record too: the two
+    // items, and the subject made for the conversation.
+    await browser.waitUntil(async () => removedSoFar() >= removedBefore + 3, { timeout: 180_000, interval: 3_000, timeoutMsg: `the earlier copies were not removed from the record (${removedSoFar() - removedBefore} so far)` });
+    console.log(`e2e: earlier copies removed from the record: ${removedSoFar() - removedBefore}`);
   });
 
   it("deleting a conversation says how many memory items go with it, and they go", async function () {
@@ -91,6 +111,7 @@ describe("deleting memory", () => {
     await (await $('(//*[@data-testid="chat-message"][@data-role="assistant"])[last()]')).waitForExist({ timeout: 60_000 });
     await keepTheLastReply();
     await browser.waitUntil(async () => (await live()).length === 1, { timeout: 60_000, timeoutMsg: "the reply was not kept again" });
+    const removedBefore = removedSoFar();
 
     // Its record, and the delete there.
     await browser.execute((e) => (e as HTMLElement).click(), await $('button[title^="Conversations"]'));
@@ -105,5 +126,6 @@ describe("deleting memory", () => {
     await press('[data-testid="conversation-delete-confirm"] [data-testid="confirm-ok"]');
     await browser.waitUntil(async () => (await invoke<Item[]>("memory_items")).length === 0, { timeout: 120_000, timeoutMsg: "the item made from the conversation was not deleted with it" });
     expect((await invoke<unknown[]>("get_conversations_cached", { agentKey: agent })).length).toBe(0);
+    await browser.waitUntil(async () => removedSoFar() > removedBefore, { timeout: 180_000, interval: 3_000, timeoutMsg: "the item's earlier copy was not removed from the record" });
   });
 });

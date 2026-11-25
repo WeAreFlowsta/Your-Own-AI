@@ -21,7 +21,13 @@ pub const APP_ID_PREFIX: &str = "transcript_v2_";
 /// The bundle (in `resources/`), copied from `dna/v2/workdir`; never rebuilt.
 pub const HAPP_FILENAME: &str = "yourown_ai_transcript_v2_happ.happ";
 /// Its SHA-256, as `DNA_VERSION_HISTORY.md` records it.
-pub const HAPP_SHA256: &str = "d46fbbcc0ab73f43e7b2acaa4009b22a6bacecc13f3e8d903c4db9ac920b52e5";
+pub const HAPP_SHA256: &str = "724f25f6892baf364d56ff0fe8559360df5e3830ddccc9a19bcf36f3f78c4add";
+/// The bundle's coordinator by itself (in `resources/`, copied from
+/// `dna/v2/workdir`): a cell installed from an earlier bundle is brought to
+/// it at every start of the line. The DNA hash covers the integrity zome
+/// only, so the cell keeps its records and gains the new calls.
+pub const COORDINATOR_FILENAME: &str = "transcript_v2_coordinator.wasm";
+pub const COORDINATOR_SHA256: &str = "edadf452741b361159d382283a592feeae623bac60e5b2d0b0dc60ba6ea37495";
 
 /// The v2 app id for a v1 app id; None for an app that is not a transcript.
 pub fn app_id_for(v1_app_id: &str) -> Option<String> {
@@ -84,6 +90,7 @@ pub async fn ensure_apps_on(admin: &AdminClient, resource_dir: &Path, network_se
     }
     let have = admin.list_apps().await.map_err(|e| format!("0.7 list_apps: {e}"))?;
     let mut installed = 0;
+    let mut fresh: Vec<String> = Vec::new();
     for (v1_app_id, agent) in v1_apps {
         let Some(app_id) = app_id_for(v1_app_id) else { continue };
         match have.iter().find(|a| a.app_id == app_id) {
@@ -100,10 +107,55 @@ pub async fn ensure_apps_on(admin: &AdminClient, resource_dir: &Path, network_se
                 admin.enable(&app_id).await.map_err(|e| format!("0.7 enable {app_id}: {e}"))?;
                 log::info!("[0.7] installed {app_id}");
                 installed += 1;
+                fresh.push(app_id);
             }
         }
     }
+    apply_coordinator(admin, resource_dir, &fresh).await;
     Ok(installed)
+}
+
+/// Bring v2 cells to the coordinator this build ships: every transcript
+/// cell the first time in a run of the app, and after that the apps just
+/// installed. A cell that cannot take it now keeps the one it has until the
+/// next start; nothing else waits on this.
+async fn apply_coordinator(admin: &AdminClient, resource_dir: &Path, fresh: &[String]) {
+    static SWEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let all = !SWEPT.swap(true, std::sync::atomic::Ordering::SeqCst);
+    if !all && fresh.is_empty() {
+        return;
+    }
+    let wasm = match std::fs::read(resource_dir.join(COORDINATOR_FILENAME)) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("[0.7] the coordinator is missing from the app's resources ({e}); cells keep the one they have");
+            return;
+        }
+    };
+    let apps = match admin.list_apps().await {
+        Ok(a) => a,
+        Err(e) => {
+            log::warn!("[0.7] the coordinator was not applied: list_apps: {e}");
+            SWEPT.store(false, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+    };
+    let (mut done, mut failed) = (0u32, 0u32);
+    for app in apps.iter().filter(|a| a.app_id.starts_with(APP_ID_PREFIX) && (all || fresh.contains(&a.app_id))) {
+        for cell in &app.cells {
+            match admin.update_coordinators(cell, flowsta_hc_lines::CoordinatorZome { name: ZOME, wasm: wasm.clone() }).await {
+                Ok(()) => done += 1,
+                Err(e) => {
+                    failed += 1;
+                    log::warn!("[0.7] the coordinator was not applied to {}: {e}", app.app_id);
+                }
+            }
+        }
+    }
+    if failed > 0 {
+        SWEPT.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    log::info!("[0.7] coordinator applied to {done} cell(s){}", if failed > 0 { format!(", {failed} not yet") } else { String::new() });
 }
 
 // ── Purges and tidies, on both lines ────────────────────────────────────
@@ -333,6 +385,12 @@ pub struct SaveMemoryRow {
     pub cipher: Vec<u8>,
     pub nonce: Vec<u8>,
     pub anchor: AnyLinkableHash,
+}
+
+#[derive(Serialize)]
+pub struct RemoveMemoryRows {
+    pub anchor: AnyLinkableHash,
+    pub hashes: Vec<holochain_types::prelude::ActionHash>,
 }
 
 #[derive(Serialize)]
@@ -666,6 +724,14 @@ pub fn bundle_path(resource_dir: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+
+    #[test]
+    fn the_staged_v2_coordinator_is_the_bundles() {
+        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let staged = std::fs::read(manifest.join("resources").join(COORDINATOR_FILENAME)).expect("staged");
+        let built = std::fs::read(manifest.join("../dna/v2/workdir/transcript_coordinator.wasm")).expect("the bundle's coordinator");
+        assert_eq!(hex::encode(Sha256::digest(&staged)), hex::encode(Sha256::digest(&built)), "resources/ holds the coordinator the bundle was packed with");
+    }
 
     #[test]
     fn the_bundled_v2_happ_is_the_canonical_one() {

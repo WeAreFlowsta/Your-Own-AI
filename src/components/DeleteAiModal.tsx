@@ -7,6 +7,8 @@ interface DeleteAiModalProps {
   onArchive$: QRL<() => void>;
   onPurge$: QRL<() => void>;
   aiName: string;
+  /** What deleting does to the memory items this AI kept, in words; empty when it kept none. */
+  keptWords?: string;
   /** Which action is in flight, so we can show a spinner + lock both. */
   busyAction?: 'archive' | 'purge' | null;
 }
@@ -17,6 +19,7 @@ export default component$<DeleteAiModalProps>(({
   onArchive$,
   onPurge$,
   aiName,
+  keptWords = '',
   busyAction = null,
 }) => {
   if (!isOpen) return null;
@@ -87,8 +90,9 @@ export default component$<DeleteAiModalProps>(({
             <div class="min-w-0">
               <p class="text-sm font-semibold text-red-600 dark:text-red-400">Delete permanently</p>
               <p class="text-xs text-[var(--text-muted)] mt-0.5">
-                Erase {aiName}, its signed conversations, and everything it
-                learned about you. This can't be undone.
+                <span data-testid="delete-ai-words">
+                  Erase {aiName} and its conversations. {keptWords}This can't be undone.
+                </span>
               </p>
             </div>
           </button>

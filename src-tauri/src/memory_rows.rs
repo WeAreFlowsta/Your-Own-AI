@@ -557,12 +557,136 @@ pub(crate) fn with_written_since(read: Vec<MemoryRow>, copy: Vec<MemoryRow>, sta
     all
 }
 
+/// The copies the record should no longer hold: for every id whose newest
+/// copy is the mark of a delete, every other copy of it (their hashes). The
+/// mark stays, so the delete reaches every device.
+pub(crate) fn copies_to_remove(raw: &[MemoryRow]) -> Vec<String> {
+    let mut newest: std::collections::HashMap<&str, &MemoryRow> = std::collections::HashMap::new();
+    for r in raw {
+        match newest.get(r.id.as_str()) {
+            Some(n) if !newer(r, n) => {}
+            _ => {
+                newest.insert(r.id.as_str(), r);
+            }
+        }
+    }
+    let mut out: Vec<String> = raw
+        .iter()
+        .filter(|r| newest.get(r.id.as_str()).is_some_and(|n| n.deleted && n.action_hash != r.action_hash))
+        .filter_map(|r| r.action_hash.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[derive(Serialize, Debug)]
+struct RemoveInput {
+    anchor: AnyLinkableHash,
+    hashes: Vec<holochain_types::prelude::ActionHash>,
+}
+
+fn action_hashes(hex_hashes: &[String]) -> Vec<holochain_types::prelude::ActionHash> {
+    hex_hashes.iter().filter_map(|h| hex::decode(h).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::ActionHash::from_raw_39)).collect()
+}
+
+/// Hashes already asked for in this run of the app: a copy another device
+/// wrote stays until that device removes it, and is not asked for again.
+fn asked_to_remove() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ASKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    ASKED.get_or_init(Default::default)
+}
+
+/// Take the earlier copies of deleted rows out of the record, in the
+/// background: each of this device's cells removes what it wrote, on the
+/// line the copies were read from, and the same on the 0.7 line when the
+/// read was of the 0.6 line (a copy there has its own hash). A cell that
+/// cannot do it yet leaves the copies for the next run of the app.
+fn remove_copies(app: &tauri::AppHandle, anchor: AnyLinkableHash, read_from: &str, raw: &[MemoryRow]) {
+    let (fresh, first_look): (Vec<String>, bool) = {
+        let mut asked = asked_to_remove().lock().unwrap_or_else(|p| p.into_inner());
+        let fresh = copies_to_remove(raw).into_iter().filter(|h| asked.insert(h.clone())).collect();
+        // Once a run, an anchor that holds a delete has its 0.7 copies looked at too.
+        let first_look = raw.iter().any(|r| r.deleted) && asked.insert(format!("anchor:{}", hex::encode(anchor.get_raw_39())));
+        (fresh, first_look)
+    };
+    if fresh.is_empty() && !first_look {
+        return;
+    }
+    let app = app.clone();
+    let read_from = read_from.to_string();
+    tauri::async_runtime::spawn(async move {
+        let hc = app.state::<Arc<HolochainState>>();
+        let Ok(manager) = hc.get() else { return };
+        let Ok(key) = manager.data_key() else { return };
+        let on_06 = manager.is_provisioned(&read_from).await;
+        let mut removed = 0u32;
+        if on_06 && !fresh.is_empty() {
+            let agents: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+            for agent in agents {
+                let Ok(payload) = ExternIO::encode(RemoveInput { anchor: anchor.clone(), hashes: action_hashes(&fresh) }) else { continue };
+                match manager.call_zome(&agent, "transcript", "remove_memory_rows", payload).await {
+                    Ok(out) => removed += ExternIO::decode::<u32>(&out).unwrap_or(0),
+                    Err(e) => log::info!("[memory] earlier copies of deleted rows not removed by one cell yet ({e})"),
+                }
+            }
+        }
+        // The 0.7 line: its own read when the first was of the 0.6 line.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            let Ok(on_07) = crate::hc07::agents_with_apps().await else { return };
+            let mut on_07: Vec<String> = on_07.into_iter().collect();
+            on_07.sort();
+            let there: Vec<String> = if on_06 {
+                let Some(reader) = on_07.first() else { return };
+                // A row reaches the 0.7 line a moment after the 0.6 line: when
+                // copies were just removed there, the mark is waited for here.
+                let mut found: Vec<String> = Vec::new();
+                for wait in [0u64, 5, 15, 30] {
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    let Ok(Ok(views)) = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().memory_rows(reader, anchor.clone())).await else { break };
+                    let rows: Vec<MemoryRow> = views
+                        .iter()
+                        .filter_map(|view| {
+                            let ee = view.entry_as::<crate::commands_holochain::EncryptedEntryRaw>().ok()?;
+                            let plain = crate::transcript_crypto::decrypt(&key, &ee.nonce, &ee.cipher).ok()?;
+                            let mut row = serde_json::from_slice::<MemoryRow>(&plain).ok()?;
+                            row.action_hash = Some(hex::encode(&view.action_hash));
+                            Some(row)
+                        })
+                        .collect();
+                    let mut asked = asked_to_remove().lock().unwrap_or_else(|p| p.into_inner());
+                    found = copies_to_remove(&rows).into_iter().filter(|h| asked.insert(h.clone())).collect();
+                    if !found.is_empty() || fresh.is_empty() {
+                        break;
+                    }
+                }
+                found
+            } else {
+                fresh.clone()
+            };
+            if !there.is_empty() {
+                for agent in &on_07 {
+                    match crate::hc07::app_cells().write::<_, u32>(agent, "remove_memory_rows", &crate::hc07::RemoveMemoryRows { anchor: anchor.clone(), hashes: action_hashes(&there) }).await {
+                        Ok(n) => removed += n,
+                        Err(e) => log::info!("[memory] earlier copies of deleted rows not removed on the 0.7 line by one cell yet ({e})"),
+                    }
+                }
+            }
+        }
+        if removed > 0 {
+            log::info!("[memory] {removed} earlier copies of deleted rows removed from the record");
+        }
+    });
+}
+
 async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     let key = manager.data_key()?;
     // A little before now: a row stamped by the page a moment ago counts.
     let started = now_ms() - 3_000;
     let anchor = scope_anchor(scope, &key)?;
-    let mut rows = raw_rows(manager, agent, anchor, &key).await?;
+    let mut rows = raw_rows(manager, agent, anchor.clone(), &key).await?;
+    // A deleted row's earlier copies leave the record too.
+    remove_copies(app, anchor, agent, &rows);
     // What an offline device's backup copy brought stays in the list.
     rows.extend(read_sealed_rows(siblings_path(app, scope), &key));
     // One memory for an AI and the twins folded into it (two starters that
@@ -716,6 +840,21 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     after.push(row.clone());
     write_cache(app, &key, &row.scope, &reduce(after));
     Ok((hash, replaced))
+}
+
+/// After a delete: read the scope's records in the background, which takes
+/// the deleted rows' earlier copies out of the record.
+pub(crate) fn removal_after_delete(app: &tauri::AppHandle, scope: &str) {
+    let app = app.clone();
+    let scope = scope.to_string();
+    tauri::async_runtime::spawn(async move {
+        let hc = app.state::<Arc<HolochainState>>();
+        let Ok(manager) = hc.get() else { return };
+        let Some(agent) = any_agent(&manager).await else { return };
+        if let Err(e) = rows_at(&app, &manager, &agent, &scope).await {
+            log::info!("[memory] the records were not read after a delete ({e}); the earlier copies go at the next read");
+        }
+    });
 }
 
 /// Live rows of a scope through `agent` (refreshes the cache) - for dreaming.
@@ -1191,6 +1330,22 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deleted_rows_earlier_copies_are_the_ones_to_remove() {
+        let at = |id: &str, text: &str, t: i64, deleted: bool, hash: &str| {
+            let mut r = row(id, text, t);
+            r.deleted = deleted;
+            r.action_hash = Some(hash.to_string());
+            r
+        };
+        let raw = vec![at("a", "first", 10, false, "h1"), at("a", "second", 20, false, "h2"), at("a", "", 30, true, "h3"), at("b", "kept", 10, false, "h4"), at("b", "kept, changed", 20, false, "h5")];
+        assert_eq!(copies_to_remove(&raw), vec!["h1".to_string(), "h2".to_string()], "every copy of the deleted row but its mark; a live row keeps its history");
+        // Brought back after the delete (a newer live copy): nothing is removed.
+        let mut back = raw.clone();
+        back.push(at("a", "again", 40, false, "h6"));
+        assert!(copies_to_remove(&back).is_empty());
+    }
 
     #[test]
     fn a_row_saved_while_the_records_were_being_read_is_not_lost_from_this_devices_copy() {

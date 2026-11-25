@@ -225,13 +225,22 @@ describe("an agent turn keeps going when you leave the chat", () => {
     expect(rowText).toContain("needs you");
     expect(rowText).toContain("Allow");
     await shot("agent-ask-in-tray");
-    await browser.execute(() => {
-      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
-      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
-      b?.click();
-    });
-    // The turn goes on and finishes; the file is there.
-    await browser.waitUntil(async () => (await turns()).every((t) => t.kind !== "project" || (t.state !== "waiting" && t.state !== "running")), { timeout: 600_000, interval: 1000, timeoutMsg: "the turn did not finish after Allow" });
+    const allowFromTray = () =>
+      browser.execute(() => {
+        const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
+        const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
+        b?.click();
+        return !!b;
+      });
+    expect(await allowFromTray()).toBe(true);
+    // The turn goes on and finishes; the file is there. A small model may
+    // ask a second time (a first call under the wrong name, then the real
+    // one): each ask is answered from the tray, as the person would.
+    let asks = 1;
+    await browser.waitUntil(async () => {
+      if ((await turns()).some((t) => t.kind === "project" && t.state === "waiting") && (await allowFromTray())) console.log(`e2e: allowed ask ${++asks} from the tray`);
+      return (await turns()).every((t) => t.kind !== "project" || (t.state !== "waiting" && t.state !== "running"));
+    }, { timeout: 600_000, interval: 1000, timeoutMsg: "the turn did not finish after Allow" });
     const written = existsSync(resolve(folder, "hello.txt"));
     console.log(`e2e: hello.txt written: ${written}`);
     expect(written).toBe(true);

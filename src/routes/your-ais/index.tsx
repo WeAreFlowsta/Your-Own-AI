@@ -34,6 +34,7 @@ import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import AiFormModal from "../../components/AiFormModal";
 import DeleteAiModal from "../../components/DeleteAiModal";
+import { aiKeptWords } from "../../utils/memoryDeleteWords";
 import ConfirmModal from "../../components/ConfirmModal";
 import LastActiveAiModal from "../../components/LastActiveAiModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
@@ -379,7 +380,9 @@ export default component$(() => {
   const purgeKept = useSignal<{ stay: number; go: number } | null>(null);
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(async ({ track }) => {
-    const ai = track(() => archivedToPurge.value);
+    const archived = track(() => archivedToPurge.value);
+    const asked = track(() => aiToDelete.value?.id);
+    const ai = archived ?? (asked ? aiData.userDefinedAis.find((a) => a.id === asked) : undefined);
     purgeKept.value = null;
     const founding = ai ? ai.foundingKey || ai.agentPubKey || "" : "";
     if (!founding) return;
@@ -817,6 +820,7 @@ export default component$(() => {
         onArchive$={handleArchiveConfirm}
         onPurge$={handlePurgeConfirm}
         aiName={aiToDelete.value?.name || ""}
+        keptWords={aiKeptWords(aiToDelete.value?.name || "It", purgeKept.value)}
         busyAction={deleteBusyAction.value}
       />
 
@@ -835,11 +839,7 @@ export default component$(() => {
         isOpen={!!archivedToPurge.value}
         variant="danger"
         title={`Permanently delete ${archivedToPurge.value?.name ?? "this AI"}?`}
-        message={`This erases ${archivedToPurge.value?.name ?? "this AI"}'s conversations. ${
-          purgeKept.value && purgeKept.value.stay + purgeKept.value.go > 0
-            ? `${archivedToPurge.value?.name ?? "It"} kept ${purgeKept.value.stay + purgeKept.value.go} memory ${purgeKept.value.stay + purgeKept.value.go === 1 ? "item" : "items"}. ${purgeKept.value.stay} ${purgeKept.value.stay === 1 ? "is" : "are"} for all your AIs and will be kept, without the conversations they came from. ${purgeKept.value.go} ${purgeKept.value.go === 1 ? "was" : "were"} for ${archivedToPurge.value?.name ?? "it"} only and will be deleted. `
-            : ""
-        }It can't be undone.`}
+        message={`This erases ${archivedToPurge.value?.name ?? "this AI"}'s conversations. ${aiKeptWords(archivedToPurge.value?.name ?? "It", purgeKept.value)}It can't be undone.`}
         confirmLabel="Delete permanently"
         busy={!!archivedToPurge.value && deletingAiId.value === archivedToPurge.value?.id}
         onConfirm$={doPurgeArchivedAi}

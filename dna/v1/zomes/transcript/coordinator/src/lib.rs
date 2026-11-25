@@ -137,6 +137,36 @@ pub fn get_memory_rows(input: MemoryRowsInput) -> ExternResult<Vec<Record>> {
     Ok(rows)
 }
 
+#[derive(Serialize, Deserialize, Debug)]
+pub struct RemoveMemoryRowsInput {
+    pub anchor: AnyLinkableHash,
+    pub hashes: Vec<ActionHash>,
+}
+
+/// Remove memory rows this cell wrote: the sealed entry and its link at the
+/// anchor. A deleted row is hidden by a later row that marks it; this takes
+/// the earlier copies out of the record too. Only an author may delete, so
+/// each device removes its own. Returns how many entries were deleted.
+#[hdk_extern]
+pub fn remove_memory_rows(input: RemoveMemoryRowsInput) -> ExternResult<u32> {
+    let me = agent_info()?.agent_initial_pubkey;
+    let mut deleted = 0u32;
+    for link in get_links(LinkQuery::try_new(input.anchor, LinkTypes::AllConversations)?, GetStrategy::Local)? {
+        if !is_memory(&link) || link.author != me {
+            continue;
+        }
+        let Ok(hash) = ActionHash::try_from(link.target.clone()) else { continue };
+        if !input.hashes.contains(&hash) {
+            continue;
+        }
+        if authored_here(&hash) && delete_entry(hash).is_ok() {
+            deleted += 1;
+        }
+        let _ = delete_link(link.create_link_hash, GetOptions::default());
+    }
+    Ok(deleted)
+}
+
 /// Did this cell author the action? Only the author may delete an entry
 /// (the integrity zome refuses the whole commit otherwise), so a delete
 /// from another device must leave the entries to the author.

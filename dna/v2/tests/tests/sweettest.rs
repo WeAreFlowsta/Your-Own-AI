@@ -15,7 +15,7 @@ use holochain::sweettest::*;
 use std::path::Path;
 use transcript_coordinator::{
     ConversationKeys, ConversationsPageInput, DeleteConversationInput, EntriesPageInput, KeyItem, MemoryRowsInput, MyEntriesPage, MyEntriesPageInput,
-    RecordMessageInput, RecordsPage, SaveMemoryRowInput, StartConversationInput,
+    RecordMessageInput, RecordsPage, RemoveMemoryRowsInput, SaveMemoryRowInput, StartConversationInput,
 };
 
 const ZOME: &str = "transcript";
@@ -126,6 +126,44 @@ async fn two_devices_share_a_conversation_by_its_anchor() {
     }
     let mine: MyEntriesPage = conductor.call(&az, "get_my_entries_page", MyEntriesPageInput { anchor: founding.clone(), after_seq: None, limit: 10 }).await;
     assert_eq!(mine.total, 0, "a tombstoned conversation's messages are not listed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deleted_memory_rows_earlier_copies_leave_the_record() {
+    // A memory row is deleted by a later row that marks it. The earlier
+    // copies are then removed, each device removing the ones it wrote.
+    let dna = dna(false).await;
+    let mut conductor = SweetConductor::standard().await;
+    let a = conductor.setup_app("device-a", [&dna]).await.unwrap().into_cells().remove(0);
+    let b = conductor.setup_app("device-b", [&dna]).await.unwrap().into_cells().remove(0);
+    let (az, bz) = (a.zome(ZOME), b.zome(ZOME));
+    let scope: AnyLinkableHash = anchor(9).into();
+    let row = |n: u8| SaveMemoryRowInput { cipher: vec![n; 32], nonce: vec![n; 24], anchor: scope.clone() };
+    let first: ActionHash = conductor.call(&az, "save_memory_row", row(1)).await;
+    let second: ActionHash = conductor.call(&bz, "save_memory_row", row(2)).await;
+    let other: ActionHash = conductor.call(&az, "save_memory_row", row(3)).await;
+    let mark: ActionHash = conductor.call(&az, "save_memory_row", row(4)).await;
+    await_consistency([&a, &b]).await.expect("the rows arrive");
+    let rows: Vec<Record> = conductor.call(&bz, "get_memory_rows", MemoryRowsInput { anchor: scope.clone() }).await;
+    assert_eq!(rows.len(), 4);
+
+    // Device A removes the two earlier copies: only its own goes.
+    let wanted = vec![first.clone(), second.clone()];
+    let removed: u32 = conductor.call(&az, "remove_memory_rows", RemoveMemoryRowsInput { anchor: scope.clone(), hashes: wanted.clone() }).await;
+    assert_eq!(removed, 1, "A removes the copy it wrote, not B's");
+    // Device B, at its next read, removes its own.
+    await_consistency([&a, &b]).await.expect("the removal arrives");
+    let removed: u32 = conductor.call(&bz, "remove_memory_rows", RemoveMemoryRowsInput { anchor: scope.clone(), hashes: wanted.clone() }).await;
+    assert_eq!(removed, 1, "B removes the copy it wrote");
+    await_consistency([&a, &b]).await.expect("the second removal arrives");
+    for z in [&az, &bz] {
+        let rows: Vec<Record> = conductor.call(z, "get_memory_rows", MemoryRowsInput { anchor: scope.clone() }).await;
+        let left: Vec<ActionHash> = rows.iter().map(|r| r.action_address().clone()).collect();
+        assert_eq!(left, vec![other.clone(), mark.clone()], "the mark and the other row stay; the earlier copies are gone on both devices");
+    }
+    // Asked again, nothing is left to remove.
+    let removed: u32 = conductor.call(&az, "remove_memory_rows", RemoveMemoryRowsInput { anchor: scope.clone(), hashes: wanted }).await;
+    assert_eq!(removed, 0);
 }
 
 #[tokio::test(flavor = "multi_thread")]
