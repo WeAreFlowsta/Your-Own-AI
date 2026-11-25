@@ -724,7 +724,16 @@ export function useChat(props: UseChatProps) {
       // adding to them. Wasted work on the rare aborted turn (vision card,
       // consent) is fine: it's read-only.
       const aiModelSetting = selectedAi.aiConfig?.model || "";
-      const memoryPromise = memoryForTurn(userInput, {
+      // The person's switch for this AI, read where it is saved: the AI
+      // held by the open page may be from before the switch was changed.
+      const sharedNow: Promise<boolean> = import("../utils/localAiStorage")
+        .then(({ getLocalCustomAis }) => getLocalCustomAis())
+        .then((list) => {
+          const saved = list.find((a) => a.id === selectedAi.id || a.id === selectedAi.aiConfig?.id);
+          return (saved ?? selectedAi.aiConfig)?.memoryOnline !== false;
+        })
+        .catch(() => selectedAi.aiConfig?.memoryOnline !== false);
+      const memoryPromise = sharedNow.then((memoryShared) => memoryForTurn(userInput, {
         aiId: selectedAi.id,
         foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
         conversationHash: state.conversationHash,
@@ -735,9 +744,9 @@ export function useChat(props: UseChatProps) {
         // that falls back to an online model must not carry it either.
         sharing: {
           online: canAnswerOnline(aiModelSetting) || !!modelOverride?.startsWith("online:") || !!modelOverride?.startsWith("external:"),
-          memoryShared: selectedAi.aiConfig?.memoryOnline !== false,
+          memoryShared,
         },
-      }).catch(() => null);
+      })).catch(() => null);
 
       // Live information this AI could not look up: the reply carries the
       // offer above the composer. At most once a conversation, never for a
@@ -1753,7 +1762,7 @@ export function useChat(props: UseChatProps) {
               windowTokens: roomCtx > 0 ? roomCtx : null,
               roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
               online: isOnlineModel || isExternalModel,
-              memoryShared: selectedAi.aiConfig?.memoryOnline !== false,
+              memoryShared: await sharedNow,
               previousQuestion: before ?? null,
             },
           }).catch(() => null);
