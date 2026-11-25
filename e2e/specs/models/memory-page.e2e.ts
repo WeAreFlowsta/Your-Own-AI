@@ -121,4 +121,44 @@ describe("the Memory page", () => {
     const back = await invoke<{ private: boolean; excluded?: number[] }>("memory_conversation_use", { startedAt: started });
     expect(back.private).toBe(false);
   });
+
+  it("an AI's face makes the page about that AI: its rules first, and what the person gave it", async function () {
+    this.timeout(300_000);
+    await browser.url("tauri://localhost/your-memory/");
+    const face = await $(`[data-testid="memory-owner-ai"][data-ai-id="${ai.id}"]`);
+    await face.waitForExist({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), face);
+    const given = await $('[data-testid="given-to-ai"]');
+    await given.waitForExist({ timeout: 30_000 });
+    expect((await browser.execute((e) => (e as HTMLElement).innerText, given)) as string).toMatch(/^What you gave /);
+    // The page stays one page: no link away, and the map is still here.
+    expect(await (await $('[data-testid="open-ai-memory"]')).isExisting()).toBe(false);
+    expect(await (await $('[data-testid="memory-map-stage"]')).isExisting()).toBe(true);
+    await shot("memory-page-one-ai");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
+    const rules = await $('[data-testid="ai-rules"]');
+    await rules.waitForExist({ timeout: 30_000 });
+    expect((await browser.execute((e) => (e as HTMLElement).innerText, rules)) as string).toMatch(/^Rules .+ follows/);
+    // Back to all the person's AIs: the AI's own sections go.
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-owner-you"]'));
+    await rules.waitForExist({ reverse: true, timeout: 30_000 });
+  });
+
+  it("Show the record, on a conversation, opens its signed record", async function () {
+    this.timeout(300_000);
+    await browser.url("tauri://localhost/chat/");
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), await $('button[title^="Conversations"]'));
+    const record = await $('[data-testid="conversation-item"] [data-testid="conversation-record"]');
+    await record.waitForExist({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), record);
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/memory/", { timeout: 30_000, timeoutMsg: "the record did not open" });
+    const open = await $('[data-testid="record-conversation"][data-open="1"]');
+    await open.waitForExist({ timeout: 120_000 });
+    const words = (await browser.execute(() => document.body.innerText)) as string;
+    expect(words).toContain("The record");
+    expect(words).toContain("The signed record");
+    expect(words).not.toContain("Provenance");
+    await shot("memory-page-record");
+  });
 });

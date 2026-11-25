@@ -1,5 +1,6 @@
 import { component$, useSignal, useVisibleTask$, $, type QRL } from "@builder.io/qwik";
-import { LuEyeOff, LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
+import { LuEyeOff, LuFileCheck, LuFolderOpen, LuPencil, LuX } from "@qwikest/icons/lucide";
+import { useNavigate } from "@builder.io/qwik-city";
 import { CONV_USE_EVENT, conversationsNotUsed, setPrivate } from "../utils/memoryUse";
 import { lastActiveAt, type ConversationListItem } from "../utils/conversationResume";
 import { useTurns } from "../contexts/TurnsContext";
@@ -55,6 +56,7 @@ function whenText(us: number): string {
  */
 export const ConversationsDrawer = component$<ConversationsDrawerProps>(
   ({ open, items, loading, warming, arriving, onClose$, onResume$, onRename$ }) => {
+    const nav = useNavigate();
     const renamingHash = useSignal<string | null>(null);
     const renameDraft = useSignal("");
     /** Filter by AI - null = all. Cleared when the filtered AI has no rows. */
@@ -313,6 +315,21 @@ export const ConversationsDrawer = component$<ConversationsDrawerProps>(
                   }`}
                 >
                   <LuEyeOff class="h-3.5 w-3.5" />
+                </button>
+                <button
+                  data-testid="conversation-record"
+                  onClick$={async () => {
+                    // The signed record of this conversation: every message as it was saved, and where each reply came from.
+                    sessionStorage.setItem("memory-ai-id", item.aiId);
+                    sessionStorage.setItem("memory-agent-key", "");
+                    sessionStorage.setItem("record-conversation", item.conversation.hash);
+                    await onClose$();
+                    await nav("/memory/");
+                  }}
+                  title="Show the record: every message as it was saved, and where each reply came from"
+                  class="shrink-0 opacity-0 group-hover:opacity-60 hover:!opacity-100 text-[var(--text-muted)] hover:text-[var(--text-primary)] bg-transparent border-none cursor-pointer"
+                >
+                  <LuFileCheck class="h-3.5 w-3.5" />
                 </button>
                 {item.folderPath && (
                   <LuFolderOpen class="h-3.5 w-3.5 shrink-0 text-[var(--text-muted)]" />

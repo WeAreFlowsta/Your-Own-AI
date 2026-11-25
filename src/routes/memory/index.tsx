@@ -7,26 +7,17 @@
 
 import {
   component$,
-  useContext,
   useSignal,
   useComputed$,
   useVisibleTask$,
   $,
   type Signal,
 } from "@builder.io/qwik";
-import { LuFolderOpen } from "@qwikest/icons/lucide";
-import {
-  cachedWorkspaceMemories,
-  listWorkspaceMemories,
-  type WorkspaceMemory,
-} from "../../utils/workspaceMemory";
 import { useNavigate, type DocumentHead } from "@builder.io/qwik-city";
-import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuBrain, LuUser, LuTrash2 } from "@qwikest/icons/lucide";
+import { LuArrowLeft, LuMessageSquare, LuChevronDown, LuChevronUp, LuInfo, LuDownload, LuPencil, LuShieldCheck, LuUser, LuTrash2 } from "@qwikest/icons/lucide";
 import ConfirmModal from "../../components/ConfirmModal";
-import MemoryOwners from "../../components/MemoryOwners";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
-import { ProjectMemoryContext } from "../layout";
 import { useAiData } from "../../contexts/AiDataContext";
 import {
   getConversations,
@@ -45,14 +36,10 @@ import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { renderMarkdown } from "../../utils/renderMarkdown";
 import { exportConversation, describeSignError, type ExportOptions } from "../../utils/exportConversation";
 import { ExportConversationModal } from "../../components/ExportConversationModal";
-import AiEpisodicMemory from "../../components/AiEpisodicMemory";
-import AiKnowledge from "../../components/AiKnowledge";
-import MemoryRowsPanel from "../../components/MemoryRowsPanel";
 import { RememberEntryButton } from "../../components/RememberEntryButton";
-import AiKnowledgeDocuments from "../../components/AiKnowledgeDocuments";
 import { Callout } from "../../components/Callout";
 import ConversationSearch from "../../components/ConversationSearch";
-import { emptyMayBeWarmup, noteRecordsSeen, readThroughWarmup, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
+import { emptyMayBeWarmup, noteRecordsSeen, WARMUP_POLL_MS } from "../../utils/recordsWarmup";
 
 /**
  * Header subtitle in its own component so the signal reads get a clean
@@ -259,6 +246,22 @@ export default component$(() => {
     await loadTranscript(hash, convAgentKey);
   });
 
+  // "Show the record", pressed on a conversation: it is opened here once the list is in.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    const list = track(() => conversations.value);
+    let wanted = "";
+    try {
+      wanted = sessionStorage.getItem("record-conversation") || "";
+    } catch {
+      /* nothing was asked for */
+    }
+    if (!wanted || !list.some((c) => c.hash === wanted)) return;
+    sessionStorage.removeItem("record-conversation");
+    if (expandedHash.value !== wanted) void toggleConversation(wanted);
+    setTimeout(() => document.querySelector(`[data-record-conversation="${wanted}"]`)?.scrollIntoView({ block: "start" }), 300);
+  });
+
   const formatDate = (timestamp: number) => {
     // Holochain timestamps are in microseconds
     const ms = timestamp > 1e15 ? timestamp / 1000 : timestamp;
@@ -318,60 +321,6 @@ export default component$(() => {
   // Tabs: Conversations (the per-AI ledger, default) | Knows (read-only
   // mirror) | Workspaces (per-folder memory, shared by all AIs).
   const activeTab = useSignal<"knows" | "conversations" | "workspaces">("conversations");
-  // The faces row on this page switches AI in place (the page reads its AI
-  // from session storage once; a reload keeps the choice).
-  const pickAi = $((id: string, key: string) => {
-    sessionStorage.setItem("memory-ai-id", id);
-    sessionStorage.setItem("memory-agent-key", key);
-    aiId.value = id;
-    agentKey.value = key;
-  });
-
-  // From the faces row on Your Memory: straight to what this AI keeps.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(() => {
-    if (sessionStorage.getItem("memory-tab") === "knows") {
-      sessionStorage.removeItem("memory-tab");
-      activeTab.value = "knows";
-    }
-  }, { strategy: "document-ready" });
-  const workspaceMemories = useSignal<WorkspaceMemory[]>([]);
-  const workspacesLoading = useSignal(false);
-  // The modal renders at the layout root (route stacking contexts
-  // would bury it) - this shared signal opens it.
-  const memoryFolder = useContext(ProjectMemoryContext);
-
-  const workspacesWarming = useSignal(false);
-  // useVisibleTask$, NOT useTask$ (gotcha #21): a tracked useTask$ that
-  // awaits blocks the component's re-renders until it settles - and
-  // readThroughWarmup deliberately polls for minutes during records
-  // warmup, which froze every tab switch on this page.
-  // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track, cleanup }) => {
-    const tab = track(() => activeTab.value);
-    const reopened = track(() => memoryFolder.value);
-    if (tab !== "workspaces" || reopened) return;
-    let alive = true;
-    cleanup(() => (alive = false));
-    // Last known list first, instantly - the fresh scan replaces it when
-    // it lands. Loading UI only when there is nothing to show meanwhile.
-    const cached = cachedWorkspaceMemories();
-    if (cached && workspaceMemories.value.length === 0) {
-      workspaceMemories.value = cached;
-    }
-    workspacesLoading.value = workspaceMemories.value.length === 0;
-    try {
-      // Project memories read through the conductor - an early empty is
-      // "not yet", not "none" (readThroughWarmup holds the line).
-      workspaceMemories.value = await readThroughWarmup(
-        listWorkspaceMemories,
-        (w) => (workspacesWarming.value = w),
-        () => alive,
-      );
-    } finally {
-      workspacesLoading.value = false;
-    }
-  });
 
   return (
     <div class="flex flex-col h-screen bg-[var(--bg-main)]">
@@ -395,7 +344,7 @@ export default component$(() => {
           {/* Header */}
           <div class="flex items-center gap-3 mb-6">
             <LiquidMetalButton
-              onClick$={() => nav("/your-ais/")}
+              onClick$={() => history.back()}
               class="p-2"
             >
               <LuArrowLeft class="w-5 h-5" />
@@ -417,52 +366,13 @@ export default component$(() => {
 
             <div class="min-w-0 flex-1">
               <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela leading-tight">
-                {aiName.value}'s Memory
+                The record
               </h2>
               <MemorySubtitle loading={loading} warming={warming} conversations={conversations} />
             </div>
 
           </div>
 
-          <MemoryOwners selected={aiId.value} onPick$={pickAi} />
-
-          {/* Tabs */}
-          <div class="flex items-center gap-1 mb-6 border-b border-[var(--border-subtle)]">
-            <button
-              onClick$={() => (activeTab.value = "conversations")}
-              class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab.value === "conversations"
-                  ? "border-[var(--bg-button-primary)] text-[var(--text-primary)]"
-                  : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              <LuMessageSquare class="w-4 h-4" />
-              Conversations
-            </button>
-            <button
-              data-testid="memory-tab-projects"
-              onClick$={() => (activeTab.value = "workspaces")}
-              class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab.value === "workspaces"
-                  ? "border-[var(--bg-button-primary)] text-[var(--text-primary)]"
-                  : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              <LuFolderOpen class="w-4 h-4" />
-              Projects
-            </button>
-            <button
-              onClick$={() => (activeTab.value = "knows")}
-              class={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                activeTab.value === "knows"
-                  ? "border-[var(--bg-button-primary)] text-[var(--text-primary)]"
-                  : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-              }`}
-            >
-              <LuBrain class="w-4 h-4" />
-              Remembers
-            </button>
-          </div>
 
           {/* Export status */}
           {exportStatus.value && (
@@ -489,101 +399,12 @@ export default component$(() => {
             </div>
           )}
 
-          {/* Knows tab — the shared profile, read-only here; managed on Your Memory */}
-          {/* Workspaces tab - per-folder memory shared by every AI. */}
-          {activeTab.value === "workspaces" && (
-            <div>
-              <p class="text-sm text-[var(--text-secondary)] mb-4">
-                What your AIs remember about each project they have worked on -
-                commands, conventions, decisions. Kept in your records, shared
-                by all your AIs, yours to edit.
-              </p>
-              {workspacesLoading.value && (
-                <div class="flex items-start gap-3 py-2 text-sm text-[var(--text-muted)]">
-                  <span class="mt-0.5 inline-block h-4 w-4 flex-shrink-0 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
-                  <span>
-                    {workspacesWarming.value
-                      ? "Your records are warming up - just after launch, project memory takes a moment to be ready."
-                      : "Reading every AI's records - a long history takes a moment.."}
-                  </span>
-                </div>
-              )}
-              {!workspacesLoading.value && workspaceMemories.value.length === 0 && (
-                <div class="p-5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)]">
-                  <p class="text-sm font-semibold text-[var(--text-primary)] mb-1.5">
-                    No project memory yet - because no projects yet.
-                  </p>
-                  <p class="text-sm text-[var(--text-secondary)] leading-relaxed">
-                    A project lets an AI work directly in a folder of your
-                    files - reading, writing, and building alongside you. As it
-                    works, it keeps notes here that every AI shares: the
-                    conventions, the decisions, the context. Start one from any
-                    chat with <span class="font-semibold">"Open a project..."</span>{" "}
-                    in the actions menu, and this page fills itself in.
-                  </p>
-                </div>
-              )}
-              {workspaceMemories.value.map((w) => (
-                <button
-                  key={w.folderPath}
-                  data-testid="project-item"
-                  data-folder={w.folderPath}
-                  onClick$={() => (memoryFolder.value = w.folderPath)}
-                  class="flex w-full items-center gap-3 px-4 py-3 mb-2 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:bg-[var(--bg-dropdown-hover)] text-left"
-                >
-                  <LuFolderOpen class="h-4 w-4 shrink-0 opacity-60" />
-                  <span class="min-w-0 flex-1">
-                    <span class="block text-sm text-[var(--text-primary)] truncate">
-                      {w.folderPath.split("/").filter(Boolean).pop()}
-                    </span>
-                    <span class="block text-xs text-[var(--text-muted)] truncate">
-                      {w.folderPath}
-                    </span>
-                  </span>
-                  <span class="shrink-0 text-xs text-[var(--text-muted)]">
-                    {w.revisions} revision{w.revisions === 1 ? "" : "s"}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {activeTab.value === "knows" && (
-            <div class="space-y-8" key={`knows-${aiId.value}`}>
-              <Callout intent="premium" title={`${aiName.value || "This AI"}'s memory`} id="memory-tip-knowledge" class="mb-2">
-                One memory, two kinds of entries: things you've{" "}
-                <span class="font-semibold">given</span> it (backstory, world,
-                product details, policies - exportable as a shareable pack),
-                and moments it's <span class="font-semibold">learned</span>{" "}
-                with you as you chat - kept just for this AI.
-              </Callout>
-              <div>
-                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">
-                  Given by you
-                </h3>
-                <AiKnowledge aiId={aiId.value} aiName={aiName.value} />
-                {/* This AI's own standing rows and what dreaming tidied for it. */}
-                <MemoryRowsPanel aiId={aiId.value} agentKey={aiId.value} rulesHeading={`Rules ${aiName.value || "this AI"} follows`} />
-                <div class="mt-4">
-                  <AiKnowledgeDocuments aiId={aiId.value} aiName={aiName.value} />
-                </div>
-              </div>
-              <div class="border-t border-[var(--border-subtle)] pt-6">
-                <h3 class="text-sm font-semibold text-[var(--text-primary)] mb-3">
-                  Learned with you
-                </h3>
-                <AiEpisodicMemory aiId={aiId.value} aiName={aiName.value} />
-              </div>
-            </div>
-          )}
-
           {/* Conversations tab */}
           {activeTab.value === "conversations" && (
-            <Callout intent="info" title="Tamper-proof conversations" id="memory-tip-transcripts" class="mb-4">
-              Every conversation here is cryptographically signed (using
-              Holochain) as it's saved — so the record can't be quietly changed
-              or faked later, and you can trust it's exactly what was said. It
-              stays private and encrypted on your device.
+            <Callout intent="info" title="The signed record" id="memory-tip-transcripts" class="mb-4">
+              Every message of {aiName.value || "this AI"}'s conversations was signed as it was saved, so the
+              record cannot be quietly changed or faked later. Open a reply to see where it came from: the
+              model that made it and what it was given. It stays private and encrypted on your device.
             </Callout>
           )}
 
@@ -708,6 +529,9 @@ export default component$(() => {
               {shown.value.map((conv) => (
                 <div
                   key={conv.hash}
+                  data-testid="record-conversation"
+                  data-record-conversation={conv.hash}
+                  data-open={expandedHash.value === conv.hash ? "1" : "0"}
                   class={`rounded-xl border bg-[var(--bg-card)] overflow-hidden transition-colors ${
                     selected.value.includes(conv.hash)
                       ? "border-[var(--text-link)]/60"
@@ -984,7 +808,7 @@ export default component$(() => {
                                     <details class="mt-2 group">
                                       <summary class="text-xs text-[var(--text-muted)] cursor-pointer hover:text-[var(--text-secondary)] flex items-center gap-1 select-none">
                                         <LuInfo class="w-3 h-3" />
-                                        Provenance
+                                        Where this reply came from
                                       </summary>
                                       <div class="mt-2 p-3 rounded-lg bg-[var(--bg-main)] text-xs space-y-3">
                                         {entry.runtime && (
@@ -1176,5 +1000,5 @@ export default component$(() => {
 });
 
 export const head: DocumentHead = {
-  title: "Memory - Your Own AI",
+  title: "The record - Your Own AI",
 };

@@ -83,6 +83,16 @@ describe("an agent turn keeps going when you leave the chat", () => {
     })), { timeout: 240_000, interval: 1000, timeoutMsg: "the agent never started working" });
     console.log(`e2e: turns while working ${JSON.stringify(await turns())}`);
     await shot("agent-continues-working");
+    // What the page reports as going wrong from here on, for a miss to be read.
+    await browser.execute(() => {
+      const w = window as any;
+      w.__e2eErrors = [];
+      const note = (s: unknown) => w.__e2eErrors.push(String(s).slice(0, 300));
+      window.addEventListener("error", (e) => note(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+      window.addEventListener("unhandledrejection", (e) => note(`rejection: ${(e as PromiseRejectionEvent).reason?.stack ?? (e as PromiseRejectionEvent).reason}`));
+      const was = console.error.bind(console);
+      console.error = (...a: unknown[]) => { note(`console.error: ${a.map((x) => (x instanceof Error ? x.stack : String(x))).join(" ")}`); was(...a); };
+    });
 
     // Leave for Settings through the app's own menu.
     await (await $('button[title^="Menu"]')).click();
@@ -102,6 +112,10 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });
     await new Promise((r) => setTimeout(r, 4000));
     console.log(`e2e: turns on return ${JSON.stringify(await turns())}`);
+    console.log(`e2e: the page on return: ${JSON.stringify(await browser.execute(() => ({
+      messages: [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => `${m.getAttribute("data-role")}:${m.getAttribute("data-state") ?? ""}:${(m as HTMLElement).innerText.length}`),
+      errors: (window as any).__e2eErrors ?? [],
+    })))}`);
     // The turn is on screen: the agent bubble, still working or done.
     await browser.waitUntil(async () => browser.execute(() => {
       const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined;
