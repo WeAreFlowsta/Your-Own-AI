@@ -53,9 +53,9 @@ export default component$(() => {
     fromAddress();
     // An AI's card opens Memory on that AI.
     try {
-      const wanted = sessionStorage.getItem("memory-ai-id");
+      const wanted = sessionStorage.getItem("memory-view-ai");
       if (wanted) {
-        sessionStorage.removeItem("memory-ai-id");
+        sessionStorage.removeItem("memory-view-ai");
         viewAi.value = wanted;
       }
     } catch {

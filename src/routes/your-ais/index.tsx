@@ -630,8 +630,7 @@ export default component$(() => {
                       <LiquidMetalButton
                         variant="secondary"
                         onClick$={() => {
-                          sessionStorage.setItem("memory-ai-id", ai.id);
-                          sessionStorage.setItem("memory-agent-key", ai.agentPubKey || "");
+                          sessionStorage.setItem("memory-view-ai", ai.id);
                           nav("/your-memory/");
                         }}
                         title="Memory"

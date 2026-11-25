@@ -88,7 +88,7 @@ export default component$<Props>((props) => {
                 await props.onPick$(ai.id, ai.agentPubKey || "");
                 return;
               }
-              sessionStorage.setItem("memory-ai-id", ai.id);
+              sessionStorage.setItem("memory-view-ai", ai.id);
               nav("/your-memory/");
             }}
           >
