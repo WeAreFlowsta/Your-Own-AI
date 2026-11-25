@@ -228,7 +228,7 @@ describe("projects: the agent in a project", () => {
     await line.waitForExist({ reverse: true, timeout: 20_000 });
     // Back to the chat, the project still open.
     await browser.execute(() => history.back());
-    await waitForChat();
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     await (await $('[data-testid="project-pill"]')).waitForDisplayed({ timeout: 30_000, timeoutMsg: "back in the chat, the project was no longer open" });
   });
 
