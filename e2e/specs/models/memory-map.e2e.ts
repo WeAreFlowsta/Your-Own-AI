@@ -128,6 +128,23 @@ describe("the Map", () => {
     expect((await placed()).some((p) => p.name === "Flour supplier")).toBe(true);
   });
 
+  it("See where this came from opens the conversation's record at that message", async function () {
+    this.timeout(300_000);
+    const subject = (await map()).subjects.find((s) => s.kind === "conversation")!;
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), subject.id);
+    await press(await $('[data-testid="item-source"]'));
+    await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/memory/", { timeout: 30_000, timeoutMsg: "the record did not open" });
+    const at = await $('[data-testid="record-entry"][data-asked-for="1"]');
+    await at.waitForExist({ timeout: 120_000 });
+    const words = (await browser.execute((e) => (e as HTMLElement).innerText, at)) as string;
+    console.log(`e2e: the record opened at: ${JSON.stringify(words.replace(/\s+/g, " ").slice(0, 160))}`);
+    // It is the reply the item was kept from.
+    const kept = (await invoke<Item[]>("memory_items")).find((i) => i.item.state === "current" && (i.item.subject ?? "") === subject.id) as (Item & { text: string }) | undefined;
+    expect(words.replace(/\s+/g, " ")).toContain((kept?.text ?? "").replace(/\s+/g, " ").slice(0, 30));
+    await shot("memory-map-record-at-message");
+    await openMemory();
+  });
+
   it("the List holds the same subjects, and what the person writes about themselves lands in About you", async function () {
     this.timeout(300_000);
     await invoke("memory_keep_words", { text: "I bake on Saturdays." });

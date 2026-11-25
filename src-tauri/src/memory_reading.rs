@@ -325,6 +325,26 @@ pub(crate) fn exchange_at(app: &AppHandle, started_at: i64, seq: u32) -> Vec<cra
     Vec::new()
 }
 
+/// Where a conversation is on this device, by its start: for opening the
+/// record of the exchange a kept item came from.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationPlace {
+    pub hash: String,
+    pub agent_key: String,
+    pub ai_name: String,
+    pub title: Option<String>,
+}
+
+#[tauri::command]
+pub fn memory_conversation_at(app: AppHandle, started_at: i64) -> Option<ConversationPlace> {
+    crate::transcript_search::cached_conversations(&app)
+        .ok()?
+        .into_iter()
+        .find(|c| c.started_at == started_at)
+        .map(|c| ConversationPlace { hash: c.hash, agent_key: c.agent_key, ai_name: c.ai_name, title: c.title })
+}
+
 /// How many passages the index holds in memory.
 pub(crate) fn passages(app: &AppHandle) -> usize {
     with_index(app, |open, _| Ok(open.cache.passages())).unwrap_or(0)

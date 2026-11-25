@@ -716,6 +716,18 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 Skills carried on this turn: {props.message.skills.join(', ')}
               </p>
             )}
+            {typeof props.message.sequence === 'number' && (
+              <p class="text-xs mt-1.5">
+                <button
+                  type="button"
+                  class="underline"
+                  data-testid="show-record"
+                  onClick$={() => window.dispatchEvent(new CustomEvent('yoai-show-record', { detail: { aiId: props.message.model, seq: props.message.sequence } }))}
+                >
+                  Show the record
+                </button>
+              </p>
+            )}
             {props.message.agentTurn && (
               <p class="text-xs mt-1.5 text-[var(--text-muted)]">
                 A folder session stays on its model for the whole conversation.

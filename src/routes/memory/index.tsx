@@ -258,8 +258,22 @@ export default component$(() => {
     }
     if (!wanted || !list.some((c) => c.hash === wanted)) return;
     sessionStorage.removeItem("record-conversation");
-    if (expandedHash.value !== wanted) void toggleConversation(wanted);
-    setTimeout(() => document.querySelector(`[data-record-conversation="${wanted}"]`)?.scrollIntoView({ block: "start" }), 300);
+    // A message of it may be asked for too: the record opens at that message.
+    const seq = sessionStorage.getItem("record-seq");
+    sessionStorage.removeItem("record-seq");
+    const opened = expandedHash.value !== wanted ? toggleConversation(wanted) : Promise.resolve();
+    void opened.then(() =>
+      setTimeout(() => {
+        const row = document.querySelector(`[data-record-conversation="${wanted}"]`);
+        const at = seq ? row?.querySelector(`[data-record-seq="${seq}"]`) : null;
+        (at ?? row)?.scrollIntoView({ block: at ? "center" : "start" });
+        if (at) {
+          at.setAttribute("data-asked-for", "1");
+          (at as HTMLElement).style.outline = "2px solid var(--bg-button-primary)";
+          (at as HTMLElement).style.outlineOffset = "6px";
+        }
+      }, 300),
+    );
   });
 
   const formatDate = (timestamp: number) => {
@@ -698,7 +712,7 @@ export default component$(() => {
                         <p class="text-sm text-[var(--text-muted)] py-2">No messages recorded.</p>
                       ) : (
                         transcriptEntries.value.map((entry, i) => (
-                          <div key={`${conv.hash}-${i}`} class="text-sm">
+                          <div key={`${conv.hash}-${i}`} class="text-sm rounded-lg" data-testid="record-entry" data-record-seq={entry.sequence}>
                             {/* Row header: who · when · verified hash */}
                             <div class="flex items-center gap-2 mb-1.5">
                               {entry.role === "user" ? (

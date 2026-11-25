@@ -278,8 +278,21 @@ export default component$(() => {
       if (d && ai?.aiConfig?.id === d.aiId) selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, memoryOnline: d.on } };
     };
     window.addEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
+    // "Show the record", pressed on a reply: this conversation's signed record, at that message.
+    const onShowRecord = (e: Event) => {
+      const d = (e as CustomEvent<{ aiId?: string; seq?: number }>).detail;
+      const hash = chatState.conversationHash;
+      if (!hash) return;
+      sessionStorage.setItem("memory-ai-id", d?.aiId || selectedAi.value.aiConfig?.id || "");
+      sessionStorage.setItem("memory-agent-key", "");
+      sessionStorage.setItem("record-conversation", hash);
+      if (typeof d?.seq === "number") sessionStorage.setItem("record-seq", String(d.seq));
+      void nav("/memory/");
+    };
+    window.addEventListener("yoai-show-record", onShowRecord);
     cleanup(() => {
       window.removeEventListener("yoai-go-online", onGoOnline);
+      window.removeEventListener("yoai-show-record", onShowRecord);
       window.removeEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
     });
   });

@@ -894,6 +894,7 @@ pub fn run() {
             memory_quotes::memory_check_quotes,
             memory_quotes::memory_reply_checked,
             memory_reading::memory_given_texts,
+            memory_reading::memory_conversation_at,
             memory_items::memory_items,
             memory_items::memory_keep,
             memory_items::memory_item_change,

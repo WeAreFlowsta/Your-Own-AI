@@ -6,6 +6,7 @@
  * what it holds.
  */
 import { component$, useSignal, useVisibleTask$, $, noSerialize, type NoSerialize, type QRL } from '@builder.io/qwik';
+import { useNavigate } from '@builder.io/qwik-city';
 import LiquidMetalButton from '../LiquidMetalButton';
 import { ago, audienceWords, countWords, loadMap, renameSubject, type MapSubject, type MemoryMapData } from '../../utils/memoryMap';
 import type { MapHandle } from '../../utils/memoryMapDraw';
@@ -427,6 +428,30 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
   const problem = useSignal('');
   /** Items made a rule for their project on this visit. */
   const ruled = useSignal<string[]>([]);
+  const nav = useNavigate();
+
+  // The exchange an item was kept from, in that conversation's record.
+  const seeSource = $(async (id: string, startedAt: number, seq: number) => {
+    problem.value = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const place = await invoke<{ hash: string; agentKey: string } | null>('memory_conversation_at', { startedAt });
+      if (!place) {
+        problem.value = 'That conversation is not on this computer any more.';
+        return;
+      }
+      const { getLocalCustomAis } = await import('../../utils/localAiStorage');
+      const ai = (await getLocalCustomAis().catch(() => [])).find((a) => a.agentPubKey === place.agentKey);
+      sessionStorage.setItem('memory-ai-id', ai?.id ?? '');
+      sessionStorage.setItem('memory-agent-key', place.agentKey);
+      sessionStorage.setItem('record-conversation', place.hash);
+      sessionStorage.setItem('record-seq', String(seq));
+      await nav('/memory/');
+    } catch (e) {
+      problem.value = `The record could not be opened just now. ${String(e)}`;
+    }
+    void id;
+  });
 
   // The item's words become a rule of its project; the item stays as it is.
   const makeRule = $(async (id: string, text: string, project: string) => {
@@ -548,6 +573,15 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                   <button type="button" class={act} data-testid="item-audience" onClick$={() => (sharing.value = i.id)}>
                     Who can use this
                   </button>
+                  {(() => {
+                    const ptr = (i.item.source as { ptr?: { c: number; s: number } | null } | null | undefined)?.ptr;
+                    if (!ptr || !(ptr.c > 0)) return null;
+                    return (
+                      <button type="button" class={act} data-testid="item-source" onClick$={() => seeSource(i.id, ptr.c, ptr.s)}>
+                        See where this came from
+                      </button>
+                    );
+                  })()}
                   <button type="button" class={act} data-testid="item-forget" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
                     Forget
                   </button>
