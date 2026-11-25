@@ -734,7 +734,7 @@ async fn found_beside(
         conversations.dedup();
         if uses.is_empty() { 0 } else { conversations.len() as u32 }
     };
-    let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits).unwrap_or_default();
+    let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits, input.online).unwrap_or_default();
     // What memory holds to be true now on this matter: the note for after
     // the question, and the found exchanges it marks as replaced, which
     // are left out of what is given and recorded as left out.

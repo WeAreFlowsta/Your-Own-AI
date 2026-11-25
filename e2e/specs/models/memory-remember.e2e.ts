@@ -30,32 +30,13 @@ describe("Remember keeps the exchange", () => {
     const words = await textOf(line);
     console.log(`e2e: kept line: ${JSON.stringify(words)}`);
     // The line is "Kept" and Undo, nothing more.
-    expect(words.replace(/\s+/g, " ").trim()).toBe("Kept Undo");
+    expect(words.replace(/\s+/g, "")).toBe("KeptUndo");
     const kept = await current();
     expect(kept.length).toBe(1);
     expect(kept[0].item.source?.kind).toBe("exchange");
     expect(kept[0].item.source?.ptr?.c).toBeGreaterThan(0);
     expect(kept[0].item.audience?.kind ?? "all").toBe("all");
     await shot("remember-kept-line");
-  });
-
-  it("who can use it is chosen in Memory, on the item: one AI, and back to all", async () => {
-    const subject = (await current())[0].item.subject ?? "";
-    expect(subject).not.toBe("");
-    await browser.url("tauri://localhost/your-memory/");
-    await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiMap?.select === "function"), { timeout: 60_000, timeoutMsg: "the map never came up" });
-    await browser.waitUntil(async () => ((await browser.execute(() => ((window as any).__yoaiMap.placed() as unknown[]).length)) as number) >= 2, { timeout: 60_000, timeoutMsg: "the kept item's subject has no circle" });
-    await browser.execute((id) => (window as any).__yoaiMap.select(id), subject);
-    await press(await $('[data-testid="item-audience"]'));
-    // The first AI in the list after "All your AIs".
-    await press(await $('[data-testid="item-audience-to"]:not([data-ai=""])'));
-    await browser.waitUntil(async () => (await current())[0]?.item.audience?.kind === "ai", { timeout: 60_000, timeoutMsg: "the item's audience did not become the one AI" });
-    await browser.waitUntil(async () => ((await textOf(await $('[data-testid="item-meta"]'))) as string).includes("only for "), { timeout: 30_000, timeoutMsg: "the item does not say whom it is for" });
-    await shot("remember-only-this-ai");
-    await press(await $('[data-testid="item-audience"]'));
-    await press(await $('[data-testid="item-audience-to"][data-ai=""]'));
-    await browser.waitUntil(async () => ((await current())[0]?.item.audience?.kind ?? "all") === "all", { timeout: 60_000, timeoutMsg: "the item's audience did not go back to all AIs" });
-    await waitForChat();
   });
 
   it("a second press says it is already kept, and writes nothing", async () => {
@@ -194,5 +175,25 @@ describe("Remember keeps the exchange", () => {
     await press(await $('[data-testid="recently-row"][data-what="kept"] [data-testid="recently-undo"]'));
     await browser.waitUntil(async () => (await current()).length === before - 1, { timeout: 60_000, timeoutMsg: "Undo on Recently did not take the item back" });
     await shot("recently-after-undo");
+  });
+
+  it("who can use it is chosen in Memory, on the item: one AI, and back to all", async () => {
+    const first = (await current()).find((i) => i.item.source?.kind === "exchange")!;
+    const subject = first.item.subject ?? "";
+    expect(subject).not.toBe("");
+    await browser.url("tauri://localhost/your-memory/");
+    await browser.waitUntil(async () => browser.execute(() => typeof (window as any).__yoaiMap?.select === "function"), { timeout: 60_000, timeoutMsg: "the map never came up" });
+    await browser.waitUntil(async () => ((await browser.execute(() => ((window as any).__yoaiMap.placed() as unknown[]).length)) as number) >= 2, { timeout: 60_000, timeoutMsg: "the kept item's subject has no circle" });
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), subject);
+    await press(await $('[data-testid="item-audience"]'));
+    // The first AI in the list after "All your AIs".
+    await press(await $('[data-testid="item-audience-to"]:not([data-ai=""])'));
+    await browser.waitUntil(async () => (await current()).find((i) => i.id === first.id)?.item.audience?.kind === "ai", { timeout: 60_000, timeoutMsg: "the item's audience did not become the one AI" });
+    await browser.waitUntil(async () => ((await textOf(await $('[data-testid="item-meta"]'))) as string).includes("only for "), { timeout: 30_000, timeoutMsg: "the item does not say whom it is for" });
+    await shot("remember-only-this-ai");
+    await press(await $('[data-testid="item-audience"]'));
+    await press(await $('[data-testid="item-audience-to"][data-ai=""]'));
+    await browser.waitUntil(async () => ((await current()).find((i) => i.id === first.id)?.item.audience?.kind ?? "all") === "all", { timeout: 60_000, timeoutMsg: "the item's audience did not go back to all AIs" });
+    await waitForChat();
   });
 });

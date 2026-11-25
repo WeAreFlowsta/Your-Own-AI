@@ -95,19 +95,39 @@ pub(crate) fn typed() -> Option<String> {
     TYPED.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-/// The turn in hand. One session runs at a time; a new turn replaces it.
-static TURN: Mutex<Option<Turn>> = Mutex::new(None);
+/// The turns in hand: the one the session program named by its own
+/// session and count, and the one named only by its words (a call that
+/// carries no name). One session runs at a time; a new turn replaces the
+/// one of its kind, so a call with no name never takes the place of the
+/// turn the person's reply is waiting to be shown with.
+static TURN: Mutex<(Option<Turn>, Option<Turn>)> = Mutex::new((None, None));
+
+fn by_words(key: &str) -> bool {
+    key.starts_with("words#")
+}
+
+/// Which turn the page is shown: the session's own when there is one.
+pub(crate) fn shown(named: Option<&Turn>, words: Option<&Turn>) -> Option<Turn> {
+    named.or(words).cloned()
+}
 
 /// The kept turn, when it is this one; its count of steps goes up.
 pub(crate) fn kept(key: &str) -> Option<Turn> {
     let mut held = TURN.lock().unwrap_or_else(|e| e.into_inner());
-    let turn = held.as_mut().filter(|t| t.key == key)?;
+    let slot = if by_words(key) { &mut held.1 } else { &mut held.0 };
+    let turn = slot.as_mut().filter(|t| t.key == key)?;
     turn.steps += 1;
     Some(turn.clone())
 }
 
 pub(crate) fn keep(turn: Turn) {
-    *TURN.lock().unwrap_or_else(|e| e.into_inner()) = Some(turn);
+    let mut held = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    if by_words(&turn.key) {
+        held.1 = Some(turn);
+    } else {
+        // A new named turn: an older turn kept by its words is of a session before it.
+        *held = (Some(turn), None);
+    }
 }
 
 /// Put what memory found around the person's prompt at `at`. The caller's
@@ -134,13 +154,24 @@ pub(crate) fn wrap(msgs: &mut [Value], at: usize, before: Option<&str>, after: O
 /// reply, shows the line under it and opens the panel from it.
 #[tauri::command]
 pub fn memory_session_given() -> Option<Turn> {
-    TURN.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    let held = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    shown(held.0.as_ref(), held.1.as_ref())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_call_with_no_name_does_not_take_the_place_of_the_sessions_own_turn() {
+        let turn = |key: &str, question: &str| Turn { key: key.into(), question: question.into(), before: None, after: None, given: None, given_texts: Vec::new(), remember: None, steps: 1 };
+        let (named, words) = (turn("session-1#2", "What is the delivery threshold?"), turn("words#abc", "another call"));
+        assert_eq!(shown(Some(&named), Some(&words)).map(|t| t.question), Some("What is the delivery threshold?".to_string()));
+        assert_eq!(shown(None, Some(&words)).map(|t| t.question), Some("another call".to_string()), "a program that names no turns is still served");
+        assert!(shown(None, None).is_none());
+        assert!(by_words("words#abc") && !by_words("session-1#2"));
+    }
 
     fn person(text: &str) -> Value {
         json!({ "role": "user", "content": format!("<user_query>\n{text}\n</user_query>") })

@@ -185,7 +185,9 @@ pub(crate) fn places(app: &AppHandle, hits: &[Hit]) -> Result<Vec<FoundMessage>,
 /// The hits of a search as whole exchanges: each found message with the
 /// message before it and the one after, every text with its secrets
 /// hidden. Also answers how many secrets were hidden.
-pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit]) -> Result<(Vec<crate::memory_block::Exchange>, u32), String> {
+/// `online`: the reply is made off this computer, so a neighbor that is
+/// about the person's health does not ride along with the message found.
+pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit], online: bool) -> Result<(Vec<crate::memory_block::Exchange>, u32), String> {
     use crate::memory_block::{Exchange, Said};
     let cached = crate::transcript_search::cached_conversations(app)?;
     let mut read: std::collections::HashMap<String, Vec<crate::transcript_search::CachedEntry>> = std::collections::HashMap::new();
@@ -206,9 +208,10 @@ pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit]) -> Result<(Vec<crate::mem
         };
         // A neighbor that was itself a report of a search is left out:
         // what it quoted can be found where it was said.
-        let before = (x > 0).then(|| &entries[x - 1]).filter(|e| !e.given).map(&mut said);
+        let rides = |e: &&crate::transcript_search::CachedEntry| !e.given && crate::memory_health::may_ride_along(e.health, online);
+        let before = (x > 0).then(|| &entries[x - 1]).filter(rides).map(&mut said);
         let hit = said(&entries[x]);
-        let after = entries.get(x + 1).filter(|e| !e.given).map(&mut said);
+        let after = entries.get(x + 1).filter(rides).map(&mut said);
         out.push(Exchange {
             conversation: c.started_at,
             title: c.title.clone().unwrap_or_default(),

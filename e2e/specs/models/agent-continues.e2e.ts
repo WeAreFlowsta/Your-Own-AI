@@ -143,6 +143,14 @@ describe("an agent turn keeps going when you leave the chat", () => {
         const status = await invoke<{ running: boolean; sessionId: string | null }>("build_agent_status").catch(() => null);
         console.log(`e2e: waiting - turns ${JSON.stringify(ts)} bubble ${len} chars agent ${JSON.stringify(status)}`);
       }
+      // A small local model may reach for a tool though it was asked not to
+      // (11-25: it asked to write a file, and the turn waited on the card
+      // for ten minutes). Decline, as a person who asked for words would.
+      const deny = await $('[data-testid="permission-deny"]');
+      if (await deny.isExisting().catch(() => false)) {
+        await deny.click().catch(() => {});
+        console.log("e2e: declined a tool request");
+      }
       return ts.every((t) => t.kind === "chat" || (t.state !== "running" && t.state !== "waiting"));
     }, { timeout: 600_000, interval: 1000, timeoutMsg: "the agent turn never finished" });
     await browser.waitUntil(async () => browser.execute(() => {

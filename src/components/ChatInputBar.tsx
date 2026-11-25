@@ -101,6 +101,23 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   // the Ask row because the model chip there is the answer. Cleared when
   // dismissed (Got it) or when the pending window lapses.
   const onlineUnlocked = useSignal(false);
+  // Sharing turned off for the chosen AI, read where it is saved: the AI
+  // the page holds may be from before the switch was pressed.
+  const sharingOff = useSignal(false);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const id = track(() => selectedAi.aiConfig?.id ?? '');
+    const read = async () => {
+      if (!id) return void (sharingOff.value = false);
+      const { getLocalCustomAis } = await import('../utils/localAiStorage');
+      const saved = (await getLocalCustomAis().catch(() => [])).find((a) => a.id === id);
+      sharingOff.value = (saved ?? selectedAi.aiConfig)?.memoryOnline === false;
+    };
+    void read();
+    const again = () => void read();
+    window.addEventListener('yoai-memory-shared', again);
+    cleanup(() => window.removeEventListener('yoai-memory-shared', again));
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
@@ -259,7 +276,7 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           <span class="ml-auto pl-2 inline-flex min-w-0 items-center gap-3">
             {/* Sharing turned off for an AI that may answer off this computer:
                 said where the AI is chosen, with the way back one press away. */}
-            {selectedAi.aiConfig && canAnswerOnline(selectedAi.aiConfig.model) && selectedAi.aiConfig.memoryOnline === false && (
+            {selectedAi.aiConfig && canAnswerOnline(selectedAi.aiConfig.model) && sharingOff.value && (
               <span class="hidden sm:inline-flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap" data-testid="memory-not-shared">
                 Memory not shared
                 <button

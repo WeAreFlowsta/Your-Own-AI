@@ -56,6 +56,12 @@ pub(crate) async fn at_record(app: &tauri::AppHandle, conversation: &str, role: 
     carried(last, conversation, role, checked)
 }
 
+/// May the message beside a found one be given with it? Not a health
+/// message, to an AI that answers off this computer.
+pub(crate) fn may_ride_along(health: bool, online: bool) -> bool {
+    !(online && health)
+}
+
 /// What was found for a turn, with the health messages taken out when the
 /// reply is made off this computer: what is left, and how many were held.
 pub(crate) fn hold_back(hits: Vec<crate::memory_index::Hit>, online: bool) -> (Vec<crate::memory_index::Hit>, usize) {
@@ -105,5 +111,8 @@ mod tests {
         assert_eq!((kept.iter().map(|h| h.seq).collect::<Vec<_>>(), held), (vec![1, 3], 2));
         let (kept, held) = hold_back(found(), false);
         assert_eq!((kept.len(), held), (4, 0), "an AI on this computer is given them");
+        // The message before or after a found one is given with it, unless it is a health message going off this computer.
+        assert!(may_ride_along(false, true) && may_ride_along(true, false) && may_ride_along(false, false));
+        assert!(!may_ride_along(true, true));
     }
 }
