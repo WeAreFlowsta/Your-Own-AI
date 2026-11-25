@@ -127,6 +127,20 @@ describe("memory rules", () => {
     rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
     expect(rows.some((r) => r.kind === "rule" && /tables/.test(r.text))).toBe(false);
     await shot("memory-rule-declined");
+    // The declined offer is listed on the Rules board, and "Offer it again"
+    // takes it off the list, so the instruction can be offered once more.
+    await browser.url("tauri://localhost/your-memory/#rules");
+    const declinedRow = await $('[data-testid="declined-offer"]');
+    await declinedRow.waitForDisplayed({ timeout: 60_000 });
+    expect(await declinedRow.getText()).toContain(OTHER_RULE_AGAIN);
+    await shot("memory-rule-declined-listed");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="declined-offer-again"]'));
+    await (await $('[data-testid="declined-offers"]')).waitForExist({ reverse: true, timeout: 30_000 });
+    expect(await invoke<string[]>("memory_rule_offers_declined")).not.toContain(OTHER_RULE_AGAIN);
+    const heardAgain = await invoke<{ offer: boolean; why: string }>("memory_rule_heard", { input: { text: OTHER_RULE_AGAIN, conversation: `again-${Date.now()}`, at: Date.now(), rules: [] } });
+    console.log(`e2e: said again after "Offer it again": ${JSON.stringify(heardAgain)}`);
+    expect(heardAgain.offer).toBe(true);
+    await waitForChat();
     // The remember tool: said twice with new words, one row with the newer text.
     const first = await mcpCall("remember", { text: "Run npm test before every commit (e2e)", kind: "command" });
     console.log(`e2e: remember 1 -> ${JSON.stringify(first.text)}`);

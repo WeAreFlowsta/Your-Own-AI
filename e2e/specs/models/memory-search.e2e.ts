@@ -200,6 +200,22 @@ describe("memory's search, on the made-up history", () => {
     expect(text).toContain("$60");
     expect(text).toContain("Also given");
     for (const s of secrets) expect(text).not.toContain(s);
+    // "Do not use this" on a passage: that message is kept out of memory
+    // from now on, the panel says so, and "Use again" puts it back.
+    type Use = { started_at: number; private?: boolean; excluded?: number[] };
+    const notUsed = () => invoke<Use[]>("memory_conversations_not_used");
+    expect((await notUsed()).length).toBe(0);
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="given-do-not-use"]'));
+    await (await $('[data-testid="given-not-used"]')).waitForExist({ timeout: 30_000 });
+    const held = await notUsed();
+    console.log(`e2e: not used after the press: ${JSON.stringify(held)}`);
+    expect(held.length).toBe(1);
+    expect(held[0].excluded?.length).toBe(1);
+    expect(held[0].private ?? false).toBe(false);
+    await shot("memory-given-do-not-use");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="given-use-again"]'));
+    await (await $('[data-testid="given-not-used"]')).waitForExist({ reverse: true, timeout: 30_000 });
+    expect((await notUsed()).length).toBe(0);
   });
 
   it("a short follow-up is searched together with the question before it", async () => {

@@ -43,7 +43,11 @@ describe("the Memory page", () => {
     });
     expect(found?.agent).toBeTruthy();
     ai = found!;
-    await browser.waitUntil(async () => !!(await invoke("memory_update_report").catch(() => null)), { timeout: 120_000, timeoutMsg: "the update's pass never finished" });
+    // The app runs the update's pass by itself a little after it starts; here it is asked for at once.
+    await browser.waitUntil(
+      async () => !!(await invoke("memory_update_report").catch(() => null)) || (await invoke("memory_update_run", { learningWasPaused: false }).then(() => true, () => false)),
+      { timeout: 180_000, interval: 5_000, timeoutMsg: "the update's pass never finished" },
+    );
 
     await browser.url("tauri://localhost/your-memory/");
     await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
@@ -88,7 +92,17 @@ describe("the Memory page", () => {
       started = list.find((c) => c.hash === hash)?.started_at ?? list[0]?.started_at ?? 0;
       return started > 0;
     }, { timeout: 60_000, timeoutMsg: "the conversation is not in the list" });
-    const set = await invoke<{ private: boolean }>("memory_conversation_use_set", { change: { startedAt: started, private: true } });
+    // Kept out with the button on the conversation, in the list of conversations.
+    await browser.url("tauri://localhost/chat/");
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), await $('button[title^="Conversations"]'));
+    const keepOut = await $('[data-testid="conversation-item"] [data-testid="conversation-private"]');
+    await keepOut.waitForExist({ timeout: 60_000 });
+    expect(await keepOut.getAttribute("data-on")).toBe("0");
+    await browser.execute((e) => (e as HTMLElement).click(), keepOut);
+    await browser.waitUntil(async () => (await (await $('[data-testid="conversation-item"] [data-testid="conversation-private"]')).getAttribute("data-on")) === "1", { timeout: 30_000, timeoutMsg: "the button did not show the conversation as kept out" });
+    await shot("memory-page-keep-out-button");
+    const set = await invoke<{ private: boolean }>("memory_conversation_use", { startedAt: started });
     expect(set.private).toBe(true);
     await browser.url("tauri://localhost/chat/");
     await browser.url("tauri://localhost/your-memory/#recently");
