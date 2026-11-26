@@ -5,9 +5,9 @@ import ts from "typescript";
 
 const src = readFileSync(new URL("../src/utils/memory.ts", import.meta.url), "utf8");
 const start = src.indexOf("export const RECALL_BEST_AT_LEAST");
-const end = src.indexOf("/**", src.indexOf("export function withNewerNotes"));
+const end = src.indexOf("/**\n * The text to ALSO search", src.indexOf("export function byMeaningAndWords"));
 const js = ts.transpileModule(src.slice(start, end), { compilerOptions: { module: "ESNext", target: "ES2020" } }).outputText;
-const { keepNearBest, withNewerNotes, RECALL_MARGIN, RECALL_BEST_AT_LEAST } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+const { keepNearBest, withNewerNotes, byMeaningAndWords, RECALL_MARGIN, RECALL_BEST_AT_LEAST } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 
 const s = (...scores) => scores.map((score, i) => ({ score, i }));
 // Scores on EmbeddingGemma's scale (2026-10-12 matrix: right passages 0.21-0.75, mean 0.57;
@@ -54,4 +54,23 @@ const h = (score, day, doc_id) => ({ score, as_of: day * DAY + 100, doc_id });
 {
   const found = [h(0.7, 10, "old"), { score: 0.5, as_of: 10 * DAY + 80_000, doc_id: "same-day" }];
   assert.deepEqual(withNewerNotes([found[0]], found, 8).length, 1);
+}
+
+// The question's words count beside its meaning: the row that holds what
+// was asked for rises above longer talk about the same subject.
+{
+  const p = (score, text) => ({ score, text });
+  const found = [
+    p(0.5, "The snapshot schedule was discussed at length in the September audit of costs."),
+    p(0.49, "Recovery: list the newest snapshot of that disk before restoring."),
+    p(0.47, "Backups run daily for both regions."),
+    p(0.43, "| Snapshots | 14 snapshots, schedules only | cloud project |"),
+  ];
+  const ranked = byMeaningAndWords(found, "How many disk snapshots do we keep in the cloud project?");
+  assert.equal(ranked[0].hit, found[3]);
+  // Scores stay within the weight: meaning is never swamped.
+  assert.ok(ranked.every((r) => r.score <= r.hit.score + 0.2 + 1e-9));
+  // No telling words in the question: the order of meaning stands.
+  assert.deepEqual(byMeaningAndWords(found, "What is it?").map((r) => r.hit), found);
+  assert.deepEqual(byMeaningAndWords([], "anything"), []);
 }

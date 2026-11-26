@@ -1783,6 +1783,7 @@ export function useChat(props: UseChatProps) {
             // it said so.
             selectedAi.id, qvec, room, isOnlineModel || isExternalModel ? 12 : 8, followUpVec,
             addressesInQuestion > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
+            userInput,
           );
           docContext = recalled.text;
           libraryGiven = recalled.used;

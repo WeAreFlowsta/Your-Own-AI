@@ -1702,6 +1702,7 @@ export default component$(() => {
           6,
           followUp ? await embedQueryBounded(followUp) : null,
           findWebAddresses(question).length > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
+          question,
         );
         remembered = recalled.text;
         library = recalled.used;

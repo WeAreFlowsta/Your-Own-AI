@@ -645,6 +645,43 @@ export function withNewerNotes<T extends { score: number; as_of: number; doc_id:
   return added.length === 0 ? chosen : [...chosen, ...added];
 }
 
+/** The question's own words count beside its meaning. A search by
+ *  meaning alone ranks a long discussion of a subject above the one row
+ *  that holds the figure asked for; a passage that also carries the
+ *  question's rarer words is the likelier answer. The first WORDS_AMONG
+ *  found are put in a new order: the meaning score plus up to WORDS_WEIGHT
+ *  for the question's words a passage holds, a word counting for more the
+ *  fewer of these passages hold it. A question with no telling words (or in
+ *  a script these rules do not split) leaves the order as it was. */
+export const WORDS_AMONG = 60;
+export const WORDS_WEIGHT = 0.2;
+
+const QUESTION_STOP = new Set(
+  "a an the is are was were be do does did how what when where which who why many much of on in at to for from by with and or our we us it its that this have has had can one there their they them as so than then into over under about per not".split(" "),
+);
+
+function tellingWords(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_.-]*/gu) ?? []).map((w) => w.replace(/[.\-_]+$/, "")).filter((w) => w.length > 1 && !QUESTION_STOP.has(w)));
+}
+
+/** `found` (best meaning first) in the order of meaning and words
+ *  together; each with the score it was ordered by. */
+export function byMeaningAndWords<T extends { score: number; text: string }>(found: T[], question: string): { hit: T; score: number }[] {
+  const pool = found.slice(0, WORDS_AMONG);
+  const asked = tellingWords(question);
+  const held = pool.map((h) => tellingWords(h.text));
+  const weight = new Map<string, number>();
+  for (const w of asked) {
+    const n = held.filter((h) => h.has(w)).length;
+    weight.set(w, Math.log(1 + (pool.length - n + 0.5) / (n + 0.5)));
+  }
+  const match = held.map((h) => [...asked].reduce((sum, w) => sum + (h.has(w) ? weight.get(w) ?? 0 : 0), 0));
+  const most = Math.max(0, ...match);
+  return pool
+    .map((hit, i) => ({ hit, score: hit.score + (most > 0 ? (WORDS_WEIGHT * match[i]) / most : 0) }))
+    .sort((a, b) => b.score - a.score);
+}
+
 /**
  * The text to ALSO search by when a message leans on the conversation: a
  * follow-up ("and the updated quote?", "what about the second one?") names
@@ -689,6 +726,8 @@ export async function loadDocumentContextUsed(
   maxPassages = 8,
   followUpVec: number[] | null = null,
   bestAtLeast: number = RECALL_BEST_AT_LEAST,
+  /** The question as typed: its words count beside its meaning. */
+  question = "",
 ): Promise<{ text: string; used: import("../types").LibraryDocGiven[] }> {
   const none = { text: "", used: [] };
   if (!aiId || roomTokens <= 0) return none;
@@ -736,7 +775,7 @@ export async function loadDocumentContextUsed(
     if (queryVec && passages > 0) {
       // More is asked for than is given: the rest is where a newer note is
       // looked for (withNewerNotes).
-      const asked = Math.max(passages, NEWER_AMONG);
+      const asked = Math.max(passages, NEWER_AMONG, question ? WORDS_AMONG : 0);
       let hits = await corpusRecall(aiId, queryVec, asked);
       if (followUpVec) {
         // The message alone AND the message in its conversation: a question
@@ -755,6 +794,7 @@ export async function loadDocumentContextUsed(
           .slice(0, asked);
       }
       const everyFound = hits;
+      const bestMeaning = hits.length ? hits[0].score : 0;
       hits = hits.slice(0, passages);
       // Only what is CLOSE to the best match. The floor alone lets almost
       // anything through (unrelated text scores 0.45-0.6 with this embedding
@@ -763,7 +803,14 @@ export async function loadDocumentContextUsed(
       // unrelated one. A passage has to be within RECALL_MARGIN of the top.
       const found = hits.length;
       const top = found ? Math.max(...hits.map((h) => h.score)) : 0;
-      hits = withNewerNotes(keepNearBest(hits, RECALL_MARGIN, bestAtLeast), everyFound, passages);
+      if (question && bestMeaning >= bestAtLeast) {
+        // Meaning and the question's words together choose the passages;
+        // the bar on the best match stays on meaning alone.
+        const ranked = byMeaningAndWords(everyFound, question).slice(0, passages);
+        hits = withNewerNotes(keepNearBest(ranked, RECALL_MARGIN, 0).map((r) => r.hit), everyFound, passages);
+      } else {
+        hits = withNewerNotes(keepNearBest(hits, RECALL_MARGIN, bestAtLeast), everyFound, passages);
+      }
       // Scores only, never a name or a passage - for tuning the two numbers.
       console.log(
         `[Memory] documents: best match ${top.toFixed(2)} (bar ${bestAtLeast}) - ${hits.length} of ${found} passages given`,
