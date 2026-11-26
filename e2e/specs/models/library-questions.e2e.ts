@@ -67,6 +67,10 @@ describe("questions answered from the library", () => {
     const all = JSON.parse(readFileSync(FILE, "utf8")) as Q[];
     const questions = ONLY.length ? all.filter((q) => ONLY.includes(q.n)) : all;
     await waitForChat();
+    // The library is what is measured: no conversation is searched, so a
+    // run does not find its own questions or an earlier run's.
+    const until = await fetch("http://127.0.0.1:11435/internal/memory-search-until", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ at: 1000 }) });
+    console.log(`e2e: conversations are not searched in this run (HTTP ${until.status})`);
     const results: Record<string, unknown>[] = [];
     for (const q of questions) {
       // Each question in a conversation of its own.
