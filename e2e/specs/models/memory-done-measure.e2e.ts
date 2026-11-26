@@ -19,7 +19,8 @@ const OUT = process.env.YOAI_MEMORY_OUT ?? "";
 const BASE = "http://127.0.0.1:11435/internal";
 
 async function tidy(queue: string): Promise<{ ran: boolean; pairs: { earlier: string; later: string; verdict: string }[] }> {
-  const res = await fetch(`${BASE}/memory-tidy?force=1&queue=${encodeURIComponent(queue)}`, { method: "POST" });
+  const floor = process.env.YOAI_E2E_DONE_FLOOR ? `&open_floor=${process.env.YOAI_E2E_DONE_FLOOR}` : "";
+  const res = await fetch(`${BASE}/memory-tidy?force=1&queue=${encodeURIComponent(queue)}${floor}`, { method: "POST" });
   const answer = await res.json();
   if (!res.ok || answer?.error) throw new Error(`memory-tidy: ${JSON.stringify(answer?.error ?? res.status)}`);
   return answer.report;
@@ -42,6 +43,25 @@ describe("may already be done, on real cases", () => {
     await waitForChat();
     await ask("Name one primary colour and nothing else.");
     await waitForReplyDone();
+    // How alike the two sides of each case are, as the search measures it
+    // (search only): which pairs the pass will put together at all.
+    if (process.env.YOAI_E2E_DONE_LIKENESS) {
+      const texts = cases.flatMap((c) => [c.open_item, c.later_item]).map((t) => `title: none | text: ${t}`);
+      const vectors = await invoke<number[][]>("embed_texts", { texts, model: "embeddinggemma-300M-Q8_0.gguf" });
+      const cos = (a: number[], b: number[]) => {
+        let d = 0, x = 0, y = 0;
+        for (let i = 0; i < a.length; i++) { d += a[i] * b[i]; x += a[i] * a[i]; y += b[i] * b[i]; }
+        return d / Math.sqrt(x * y);
+      };
+      const likeness = cases.map((c, i) => {
+        const later = vectors[2 * i + 1];
+        const others = cases.map((o, j) => ({ n: o.n, s: cos(vectors[2 * j], later) })).filter((o) => o.n !== c.n).sort((a, b) => b.s - a.s);
+        return { n: c.n, kind: c.kind, own: Number(cos(vectors[2 * i], later).toFixed(3)), nextOther: Number(others[0].s.toFixed(3)), nextOtherCase: others[0].n };
+      });
+      console.log(`e2e: DONE likeness: ${JSON.stringify(likeness)}`);
+      if (OUT) writeFileSync(resolve(OUT, "done-cases-likeness.json"), JSON.stringify(likeness, null, 1));
+      if (process.env.YOAI_E2E_DONE_LIKENESS === "only") return;
+    }
     const open: Record<number, string> = {};
     for (const c of cases) open[c.n] = await keep(c.open_item, "open", c.open.date, c.n);
     const caseOf = (id: string) => Number(Object.entries(open).find(([, v]) => v === id)?.[0] ?? 0);

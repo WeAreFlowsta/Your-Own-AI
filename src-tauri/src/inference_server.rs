@@ -1161,6 +1161,10 @@ async fn memory_tidy_dev(
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
     let force = q.get("force").is_some_and(|f| f == "1");
+    // For a measurement: the floor for pairs with an open item in them.
+    if let Some(floor) = q.get("open_floor").and_then(|f| f.parse::<f32>().ok()).filter(|f| (0.0..=1.0).contains(f)) {
+        crate::memory_tidying::OPEN_PAIR_FLOOR.store(floor.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(id) = q.get("queue").filter(|id| !id.is_empty()) {
         crate::memory_tidying::kept(&app, id);
     }

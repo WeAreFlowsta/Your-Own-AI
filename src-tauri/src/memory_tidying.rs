@@ -176,8 +176,34 @@ fn cosine(a: &[f32], b: &[f32]) -> f32 {
 /// The items alike enough to a new one to be judged against it: each
 /// one's id and likeness.
 pub(crate) fn near(new: &str, items: &[Item], vectors: &HashMap<String, Vec<f32>>) -> Vec<(String, f32)> {
+    near_with(new, items, vectors, PAIR_FLOOR)
+}
+
+/// The floor for a pair one of whose items is still open (the "was it
+/// done?" question), as bits of an f32. A report that something was done
+/// is worded unlike the thing left open more often than a replacement is
+/// worded unlike what it replaces. The same as `PAIR_FLOOR` unless a
+/// development route sets it for a measurement.
+pub(crate) static OPEN_PAIR_FLOOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+fn open_pair_floor() -> f32 {
+    match OPEN_PAIR_FLOOR.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => PAIR_FLOOR,
+        bits => f32::from_bits(bits),
+    }
+}
+
+/// `near`, with a lower floor for a pair that has an open item in it.
+pub(crate) fn near_with(new: &str, items: &[Item], vectors: &HashMap<String, Vec<f32>>, open_floor: f32) -> Vec<(String, f32)> {
     let Some(mine) = vectors.get(new) else { return Vec::new() };
-    items.iter().filter(|i| i.row.id != new).filter_map(|i| vectors.get(&i.row.id).map(|v| (i.row.id.clone(), cosine(mine, v)))).filter(|(_, s)| *s >= PAIR_FLOOR).collect()
+    let new_open = items.iter().any(|i| i.row.id == new && i.meta.state == ItemState::Open);
+    items
+        .iter()
+        .filter(|i| i.row.id != new)
+        .filter_map(|i| vectors.get(&i.row.id).map(|v| (i, cosine(mine, v))))
+        .filter(|(i, s)| *s >= PAIR_FLOOR || (*s >= open_floor && (new_open || i.meta.state == ItemState::Open)))
+        .map(|(i, s)| (i.row.id.clone(), s))
+        .collect()
 }
 
 /// What still waits after a pass over `taken`: `waiting`, and whatever was
@@ -287,7 +313,7 @@ async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::
             waiting.push(id.clone());
             continue;
         }
-        let others: Vec<String> = tidy::pairs_to_judge(&new, &items, &near(id, &items, &vectors), &ledger).into_iter().map(|i| i.row.id.clone()).collect();
+        let others: Vec<String> = tidy::pairs_to_judge(&new, &items, &near_with(id, &items, &vectors, open_pair_floor()), &ledger).into_iter().map(|i| i.row.id.clone()).collect();
         // The day's last change was made with pairs of this item still to judge.
         let mut unfinished = false;
         for other_id in others {
