@@ -4361,6 +4361,10 @@ async fn ensure_embedding_server(
         "--ctx-size".to_string(),
         EMBED_CTX.to_string(),
         "--no-webui".to_string(),
+        // No text is embedded twice: the engine's store of past prompts
+        // would hold nothing of use.
+        "--cache-ram".to_string(),
+        "0".to_string(),
     ];
     // Pooling comes from the file's own metadata unless the model needs it
     // spelled out (embedding_model::POOLING; bge needed `cls`).
@@ -4729,6 +4733,12 @@ async fn ensure_utility_server(
         "--reasoning".to_string(),
         reasoning_flag_for(Some(model_filename)).to_string(),
         "--no-webui".to_string(),
+        // The engine keeps the states of past prompts in memory, up to
+        // 8 GB unless told otherwise. Every task here is asked once and
+        // never comes back, so the store only grows (measured: about
+        // 70 MB a minute while document cards were written). Off.
+        "--cache-ram".to_string(),
+        "0".to_string(),
     ];
     let mut place = helper_verdict().1;
     let mut device_args = helper_processor_args();

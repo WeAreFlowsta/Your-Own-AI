@@ -30,15 +30,18 @@ function filesUnder(dir: string): { files: number; bytes: number } {
   return { files, bytes };
 }
 
-/** Resident memory (MB) of the app and its helpers, by process name. */
+/** Resident memory (MB) of the app and its helpers. Each model server is
+ *  named by the model it runs, so the three can be told apart. */
 function memoryNow(): Record<string, number> {
   const out: Record<string, number> = {};
   try {
-    for (const line of execSync("ps -eo rss=,comm=", { encoding: "utf8" }).split("\n")) {
-      const m = line.trim().match(/^(\d+)\s+(.+)$/);
+    for (const line of execSync("ps -eo rss=,comm=,args=", { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }).split("\n")) {
+      const m = line.trim().match(/^(\d+)\s+(\S+)\s+(.*)$/);
       if (!m) continue;
-      const name = m[2];
+      let name = m[2];
       if (!/^(your-own-ai|yourowai-|WebKitWebProcess|WebKitNetworkPr)/.test(name)) continue;
+      const model = m[3].match(/--model\s+(\S+?)(?:-Q\d\S*)?\.gguf/);
+      if (model) name = m[3].includes("--embedding") ? `embedder:${model[1]}` : `model:${model[1]}`;
       out[name] = (out[name] ?? 0) + Math.round(Number(m[1]) / 1024);
     }
   } catch {
@@ -102,7 +105,7 @@ describe("a large notes folder", () => {
         listed = docs.length;
         passages = nowPassages;
         for (const [name, mb] of Object.entries(memoryNow())) peak[name] = Math.max(peak[name] ?? 0, mb);
-        if (Date.now() - lastSaid > 120_000) {
+        if (Date.now() - lastSaid > (Number(process.env.YOAI_E2E_NOTES_SECS) ? 60_000 : 120_000)) {
           lastSaid = Date.now();
           console.log(`e2e: ${Math.round((Date.now() - started) / 1000)} s: ${ready} of ${listed} documents ready, ${passages} passages; memory ${JSON.stringify(memoryNow())}`);
         }
@@ -114,6 +117,9 @@ describe("a large notes folder", () => {
           console.log(`e2e: the read answered: ${JSON.stringify(read.error ?? read.value).slice(0, 500)}`);
           return true;
         }
+        // YOAI_E2E_NOTES_SECS: a short look (the read is left as it stands).
+        const short = Number(process.env.YOAI_E2E_NOTES_SECS) || 0;
+        if (short > 0 && Date.now() - started > short * 1000) return true;
         return listed > 0 && Date.now() - lastChange > 600_000;
       },
       { timeout: 4 * 3_600_000 - 600_000, interval: 15_000, timeoutMsg: "the folder was still being read after four hours" },
@@ -125,7 +131,7 @@ describe("a large notes folder", () => {
   });
 
   it("a second pass over the unchanged folder is quick", async function () {
-    if (!NOTES || !folderId) this.skip();
+    if (!NOTES || !folderId || process.env.YOAI_E2E_NOTES_SECS) this.skip();
     this.timeout(3_600_000);
     const started = Date.now();
     let report: unknown = null;
@@ -141,7 +147,7 @@ describe("a large notes folder", () => {
   });
 
   it("a question is answered with the library in place, and the time is printed", async function () {
-    if (!NOTES || !folderId) this.skip();
+    if (!NOTES || !folderId || process.env.YOAI_E2E_NOTES_SECS) this.skip();
     this.timeout(1_200_000);
     await waitForChat();
     const started = Date.now();
