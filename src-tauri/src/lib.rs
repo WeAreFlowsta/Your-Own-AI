@@ -9,7 +9,6 @@ mod spawn_guard;          // no program start without the no-window flag (Window
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
 mod memory_delete;        // what goes with a conversation, an AI, and all of memory
 mod memory_health;        // health turns are never given to an AI that answers off this computer
-mod dreaming;             // memory consolidation when idle (the memory design §6)
 mod machine;              // the whole-machine check every background job asks
 mod memory_slot;          // which local model does the memory work (the memory design §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
@@ -724,7 +723,6 @@ pub fn run() {
             memory_rows::list_memory_rows_cached,
             memory_rows::list_memory_revisions,
             memory_rows::memory_would_replace,
-            dreaming::dream_now,
             machine::machine_status,
             machine::machine_may_run,
             machine::machine_done,

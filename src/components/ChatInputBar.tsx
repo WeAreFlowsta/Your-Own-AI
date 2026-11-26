@@ -95,7 +95,6 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   const showCarryChip = useSignal(true);
   // Background memory extraction after a turn: otherwise felt only as a
   // pause. A quiet hint in the Ask row while it runs.
-  const remembering = useSignal(false);
   // The moment a plan activates: entitlement.ts arms a pending unlock when
   // the account goes from not-entitled to entitled; the tip sits right above
   // the Ask row because the model chip there is the answer. Cleared when
@@ -145,15 +144,10 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         showCarryChip.value = !!detail.showChatCarryChip;
       }
     };
-    const onMemory = (e: Event) => {
-      remembering.value = !!(e as CustomEvent).detail?.busy;
-    };
     window.addEventListener('settingsChanged', onSettings);
-    window.addEventListener('memoryExtractionChanged', onMemory);
     cleanup(() => {
       if (shownHere) clearOnlineUnlockPending();
       window.removeEventListener('settingsChanged', onSettings);
-      window.removeEventListener('memoryExtractionChanged', onMemory);
       window.removeEventListener('entitlementChanged', checkUnlock);
       window.removeEventListener('helpTipsChanged', checkUnlock);
     });
@@ -259,15 +253,6 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           <span class="ml-2 text-[var(--text-primary)] text-xs sm:text-base">
             {askBlurbText}
           </span>
-          {remembering.value && (
-            <span
-              class="ml-3 hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]"
-              title="Learning durable facts from what you just said - on your device"
-            >
-              <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
-              Remembering..
-            </span>
-          )}
           {/* Quiet model chip: makes the AI's standing model choice legible
               at the point of use, one tap to change. Hidden on the smallest
               screens - the Your AIs cards cover it there. The chat holds a

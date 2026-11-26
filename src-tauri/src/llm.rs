@@ -2814,7 +2814,7 @@ pub fn start_idle_unload(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            let idle = crate::dreaming::own_idle_secs();
+            let idle = crate::machine::own_idle_secs();
             if idle < IDLE_UNLOAD_SECS {
                 continue;
             }
@@ -4849,7 +4849,7 @@ pub(crate) enum BackgroundChoice {
     StepAside,
 }
 
-/// Background work (memory extraction, titles, dreaming) is model-agnostic
+/// Background work (memory keeping, titles, tidying) is model-agnostic
 /// enough to ride whatever is loaded; it must never move the engine.
 pub(crate) fn background_model_choice(wanted: &str, current: Option<&str>, healthy: bool) -> BackgroundChoice {
     match current {
@@ -6649,7 +6649,7 @@ pub async fn stream_chat_completion(
     // The person's own replies count as activity; work nobody is waiting
     // on (memory extraction riding the chat model) does not.
     if background != Some(true) {
-        crate::dreaming::note_activity();
+        crate::machine::note_activity();
     }
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to

@@ -857,14 +857,9 @@ pub(crate) fn removal_after_delete(app: &tauri::AppHandle, scope: &str) {
     });
 }
 
-/// Live rows of a scope through `agent` (refreshes the cache) - for dreaming.
+/// Live rows of a scope through `agent` (refreshes the cache).
 pub(crate) async fn rows_live(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     rows_at(app, manager, agent, scope).await
-}
-
-/// Write one row through `agent` - for dreaming's revisions.
-pub(crate) async fn write_row_pub(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
-    write_row(manager, agent, row).await
 }
 
 /// For the permission card, before a `remember` runs: the text of the live

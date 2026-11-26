@@ -9,7 +9,7 @@
 //! reads whether the connection is metered, for the update download.
 //!
 //! - **Light** work (syncs, small backups, checks) runs unless memory is short.
-//! - **Heavy** work (dreaming, folder indexing, re-embedding, the import
+//! - **Heavy** work (memory tidying, folder indexing, re-embedding, the import
 //!   learner, file hashing, document cards) runs only when the machine is
 //!   calm: other programs under 30 % of the processor over two minutes,
 //!   memory not short, mains power, and the person away for three minutes.
@@ -138,7 +138,7 @@ fn only_when_idle(app: &AppHandle) -> bool {
 pub fn may_run(work: Work, job: &str) -> bool {
     let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
     let verdict = match reading() {
-        Some(r) => decide(work, &r, only, crate::dreaming::own_idle_secs()),
+        Some(r) => decide(work, &r, only, own_idle_secs()),
         None if work == Work::Light => Verdict::Go,
         None => Verdict::Wait("checking the computer"),
     };
@@ -163,7 +163,7 @@ pub fn may_run(work: Work, job: &str) -> bool {
 pub fn would_run(work: Work) -> bool {
     let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
     match reading() {
-        Some(r) => decide(work, &r, only, crate::dreaming::own_idle_secs()) == Verdict::Go,
+        Some(r) => decide(work, &r, only, own_idle_secs()) == Verdict::Go,
         None => work == Work::Light,
     }
 }
@@ -209,7 +209,7 @@ pub fn start(app: &AppHandle) {
     // A session starts "in use": our own idle clock counts from launch, not
     // from the first chat (before, the app read as idle 30 min after launch
     // with the person reading or typing).
-    crate::dreaming::note_activity();
+    note_activity();
     let app = app.clone();
     std::thread::Builder::new()
         .name("machine-check".into())
@@ -226,7 +226,7 @@ pub fn start(app: &AppHandle) {
                 // Battery spawns a program on macOS and Windows: once a minute,
                 // with the connection's cost.
                 if battery_at.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-                    battery = crate::dreaming::on_battery();
+                    battery = on_battery();
                     metered = connection_metered();
                     battery_at = Some(std::time::Instant::now());
                     // One line at the start and at each change: what this
@@ -509,9 +509,98 @@ mod mac_path {
     }
 }
 
+// ── The app's own idle clock, and the battery ─────────────────────────
+
+static LAST_ACTIVITY_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+/// Called on every chat turn (in-app and over :11435): the app is busy.
+pub fn note_activity() {
+    LAST_ACTIVITY_MS.store(clock_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+fn clock_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+/// On battery, not plugged in: background work waits. Best effort per
+/// platform; unknown = plugged in.
+pub fn on_battery() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(rd) = std::fs::read_dir("/sys/class/power_supply") else { return false };
+        let mut saw_battery = false;
+        let mut discharging = false;
+        for e in rd.flatten() {
+            let p = e.path();
+            let kind = std::fs::read_to_string(p.join("type")).unwrap_or_default();
+            if kind.trim() == "Battery" {
+                saw_battery = true;
+                let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+                if linux_status_discharging(&status) {
+                    discharging = true;
+                }
+            }
+        }
+        saw_battery && discharging
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("pmset")
+            .args(["-g", "batt"])
+            .output()
+            .ok()
+            .map(|o| pmset_on_battery(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Once a minute for the life of the app: without the no-window flag
+        // this is a console window on the screen every minute.
+        crate::mcp::quiet(std::process::Command::new("powershell").args(["-NoProfile", "-Command", "(Get-CimInstance Win32_Battery).BatteryStatus"]))
+            .output()
+            .ok()
+            .map(|o| windows_battery_status_discharging(&String::from_utf8_lossy(&o.stdout)))
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        false
+    }
+}
+
+/// `/sys/class/power_supply/BAT*/status`: "Discharging" means on battery.
+pub fn linux_status_discharging(status: &str) -> bool {
+    status.trim().eq_ignore_ascii_case("discharging")
+}
+
+/// `pmset -g batt`: "Now drawing from 'Battery Power'" means on battery.
+pub fn pmset_on_battery(out: &str) -> bool {
+    out.contains("'Battery Power'")
+}
+
+/// `Win32_Battery.BatteryStatus`: 1 = discharging; anything else (2 = AC,
+/// 3-11 charging states, no battery) counts as plugged in.
+pub fn windows_battery_status_discharging(out: &str) -> bool {
+    out.lines().any(|l| l.trim() == "1")
+}
+
+/// Our own app's idle seconds, for the machine check's fallback where the
+/// system does not say how long the person has been away.
+pub(crate) fn own_idle_secs() -> i64 {
+    idle_for_secs()
+}
+
+fn idle_for_secs() -> i64 {
+    let last = LAST_ACTIVITY_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if last == 0 {
+        return i64::MAX; // never used since start: idle
+    }
+    (clock_ms() - last) / 1000
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decide, Reading, Verdict, Work};
+    use super::{decide, linux_status_discharging, pmset_on_battery, windows_battery_status_discharging, Reading, Verdict, Work};
 
     fn calm() -> Reading {
         Reading { others_cpu_pct: Some(5.0), memory_short: false, on_battery: false, metered: false, away_secs: Some(600) }
@@ -596,7 +685,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(2));
         let others = cpu.sample();
         let away = input.away_secs();
-        println!("others' processor {others:?} %, away {away:?} s, battery {}, metered {}", crate::dreaming::on_battery(), super::connection_metered());
+        println!("others' processor {others:?} %, away {away:?} s, battery {}, metered {}", super::on_battery(), super::connection_metered());
         assert!(others.is_some_and(|p| (0.0..=100.0).contains(&p)));
         if cfg!(target_os = "linux") && std::env::var("XDG_CURRENT_DESKTOP").is_ok_and(|d| d.contains("GNOME")) {
             assert!(away.is_some(), "GNOME's idle monitor answers");
@@ -647,5 +736,15 @@ mod tests {
     fn the_processor_figure_starts_unknown_and_does_not_hold() {
         let r = Reading { others_cpu_pct: None, ..calm() };
         assert_eq!(decide(Work::Heavy, &r, true, 0), Verdict::Go);
+    }
+
+    #[test]
+    fn the_battery_parsers_read_each_platform() {
+        assert!(linux_status_discharging("Discharging\n"));
+        assert!(!linux_status_discharging("Charging\n") && !linux_status_discharging("Full") && !linux_status_discharging(""));
+        assert!(pmset_on_battery("Now drawing from 'Battery Power'\n -InternalBattery-0 (id=123)\t87%; discharging; 3:10 remaining present: true"));
+        assert!(!pmset_on_battery("Now drawing from 'AC Power'\n -InternalBattery-0\t100%; charged; 0:00 remaining present: true"));
+        assert!(windows_battery_status_discharging("\n1\n"));
+        assert!(!windows_battery_status_discharging("2\n") && !windows_battery_status_discharging(""));
     }
 }

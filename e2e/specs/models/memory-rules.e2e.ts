@@ -2,7 +2,7 @@
 // the Your Memory page is a pinned person-scope row in the person's own
 // records - it is listed first, survives a reload (read back from the
 // network), and a removal is a record that hides it.
-import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./_helpers";
+import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
 // No run mark in these words: a random mark alone moves two sayings apart (0.675 measured).
@@ -175,56 +175,6 @@ describe("memory rules", () => {
     // Tidy: the command goes (a deletion is a record).
     const cmd = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.kind === "command" && r.text.includes("(e2e)"));
     await invoke("save_memory_row", { agentKey: null, row: { ...cmd, deleted: true, updated_at: Date.now(), action_hash: null } });
-  });
-
-  it("dreaming merges two commands that say the same, shows it in the history, and Undo brings both back", async () => {
-    const stamp = Date.now().toString(36);
-    const mk = (id: string, text: string, at: number) => ({
-      id, scope: "person", kind: "command", text, structured: null, as_of: at, valid_to: null, saved_by: "person",
-      provenance: "authored", pinned: false, topics: [], replaces: [], deleted: false, updated_at: at,
-    });
-    const A = `Run cargo test before every release (dream ${stamp})`;
-    const B = `Always run cargo test before each release (dream ${stamp})`;
-    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-a-${stamp}`, A, Date.now() - 2000) });
-    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-b-${stamp}`, B, Date.now() - 1000) });
-    // A note with a relative date and two statements: the model-assisted
-    // pass (through the memory slot) dates it, splits it or tags it - never
-    // rewords it. Which of the three a small model manages may vary; one
-    // assisted revision is the proof.
-    const noteText = `Met Alex at the market yesterday. The office opens at nine (dream ${stamp})`;
-    await invoke("save_memory_row", { agentKey: null, row: { ...mk(`dream-n-${stamp}`, noteText, Date.now() - 3000), kind: "note" } });
-    const n = await invokeLong<number>("dream_now", { scope: "person", agentKey: null });
-    console.log(`e2e: dream wrote ${n} revision(s)`);
-    expect(n).toBeGreaterThan(0);
-    const assisted = (await invoke<any[]>("list_memory_revisions", { agentKey: null, scope: "person" }))
-      .filter((r) => (r.id === `dream-n-${stamp}` || r.id.startsWith(`dream-n-${stamp}-`)) && r.provenance.startsWith("dream:"));
-    console.log(`e2e: assisted ${JSON.stringify(assisted.map((r) => [r.id, r.text.slice(0, 40), r.as_of, r.topics]))}`);
-    expect(assisted.length).toBeGreaterThan(0);
-    for (const r of assisted) expect(noteText.toLowerCase()).toContain(r.text.toLowerCase().replace(/ \(dream.*$/, "").slice(0, 12));
-    const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
-    expect(live.length).toBe(1);
-    expect(live[0].text).toBe(B);
-    expect(live[0].provenance.startsWith("dream:")).toBe(true);
-    expect(live[0].provenance).toContain("authored");
-    // The history shows it; Undo restores both.
-    await yourMemory();
-    const section = await $('[data-testid="memory-dreams"]');
-    await section.waitForDisplayed({ timeout: 60_000 });
-    await (await section.$("button*=Show")).click();
-    const entry = await $(`[data-testid="memory-dream"]*=${B.slice(0, 24)}`);
-    await entry.waitForDisplayed({ timeout: 15_000 });
-    console.log(`e2e: dream line ${JSON.stringify(await entry.getText())}`);
-    expect(await entry.getText()).toContain("Merged");
-    await shot("memory-dream-history");
-    await (await entry.$("button=Undo")).click();
-    await browser.waitUntil(async () => {
-      const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
-      return rows.length === 2;
-    }, { timeout: 30_000, timeoutMsg: "Undo did not bring both commands back" });
-    // Tidy (the note and anything the dream made of it too).
-    for (const r of (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((x) => x.text.includes(`(dream ${stamp})`) || x.id.startsWith(`dream-n-${stamp}`))) {
-      await invoke("save_memory_row", { agentKey: null, row: { ...r, deleted: true, updated_at: Date.now(), action_hash: null } });
-    }
   });
 
   it("keeps the rule across a reload and removes it as a record", async () => {

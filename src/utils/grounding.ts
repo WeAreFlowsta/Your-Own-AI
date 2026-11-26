@@ -3,7 +3,7 @@
  * verbatim quote (+ character span) in an attached document. The verifiable
  * evidence chain we record: claim → quote + offset → document SHA-256 → DHT entry.
  *
- * Reuses the grammar-constrained local-model pattern from memoryExtraction.ts:
+ * Uses a grammar-constrained call to the local model:
  * a GBNF grammar forces clean JSON, a local model does the work, it's
  * fire-and-forget after a reply, and nothing leaves the device. Runs only when a
  * text document was attached to the turn.
