@@ -2353,7 +2353,7 @@ export function useChat(props: UseChatProps) {
                 sources: sources || undefined,
                 // Names and counts only - the passages stay out of the record.
                 library: libraryGiven.length
-                  ? libraryGiven.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best }))
+                  ? libraryGiven.map(({ doc_id, name, passages, best, idx, asOf }) => ({ doc_id, name, passages, best, ...(idx?.length ? { idx } : {}), ...(asOf ? { asOf } : {}) }))
                   : undefined,
                 system_prompt: systemPrompt,
                 mode: turnMode,

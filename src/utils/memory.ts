@@ -455,7 +455,7 @@ export function setMemoryPaused(paused: boolean): void {
  * (many live at once by design; they are never superseded).
  */
 function restoreOrphanedPredecessors(facts: Fact[]): boolean {
-  const key = (f: Fact) => `${f.subject} ${f.predicate}`;
+  const key = (f: Fact) => `${f.subject}\u0000${f.predicate}`;
   const live = new Set(facts.filter((f) => f.valid_to == null).map(key));
   const newestOrphan = new Map<string, Fact>();
   for (const f of facts) {
@@ -637,6 +637,13 @@ export async function loadDocumentContext(
   return (await loadDocumentContextUsed(aiId, queryVec, roomTokens, maxPassages, followUpVec)).text;
 }
 
+/** The day a document's file last changed, as YYYY-MM-DD (from seconds); empty when unknown. */
+export function documentDay(seconds: number | undefined): string {
+  if (!seconds || seconds <= 0) return "";
+  const d = new Date(seconds * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /** The same block, WITH which documents' passages went into it - so the
  *  reply's Sources can say what the AI was given. Only documents with a
  *  matched passage are listed (every granted document is also named to the
@@ -653,9 +660,17 @@ export async function loadDocumentContextUsed(
   if (!aiId || roomTokens <= 0) return none;
   try {
     const { corpusRecall, corpusDocuments } = await import("./corpus");
-    const docs = (await corpusDocuments(aiId)).slice(0, 40);
-    if (docs.length === 0) return none;
+    const all = await corpusDocuments(aiId);
+    if (all.length === 0) return none;
+    // A small library is listed by name, so the AI knows what it holds. A
+    // large one is not: forty names out of hundreds say nothing true about
+    // the rest and take room from the passages. Its count is given, and the
+    // cards of the documents whose passages matched.
+    const LISTED = 40;
+    const large = all.length > LISTED;
+    const docs = large ? [] : all;
     const used: import("../types").LibraryDocGiven[] = [];
+    let differentDays = false;
     const tokens = (t: string) => Math.ceil(t.length / 4);
     const label = (d: (typeof docs)[number]) =>
       `"${d.meta.title || d.meta.filename}"${d.meta.mine ? " (written by you)" : ""}`;
@@ -677,7 +692,9 @@ export async function loadDocumentContextUsed(
         break;
       }
     }
-    let block = `[From your documents]\nThis AI has ${docs.length === 1 ? "one document" : `${docs.length} documents`} from your library:\n${cards}\n`;
+    let block = large
+      ? `[From your documents]\nThis AI has ${all.length} documents from your library.\n`
+      : `[From your documents]\nThis AI has ${docs.length === 1 ? "one document" : `${docs.length} documents`} from your library:\n${cards}\n`;
 
     const room = Number.isFinite(roomTokens) ? roomTokens - tokens(cards) : Number.POSITIVE_INFINITY;
     const passages = Number.isFinite(room) ? Math.max(0, Math.min(maxPassages, Math.floor(room / 300))) : maxPassages;
@@ -715,23 +732,30 @@ export async function loadDocumentContextUsed(
         uiLog(`documents: best match ${top.toFixed(2)}, bar ${bestAtLeast} - ${hits.length} of ${found} passages given`),
       ).catch(() => {});
       if (hits.length > 0) {
-        const byDoc = new Map<string, { name: string; texts: string[]; best: number }>();
+        const byDoc = new Map<string, { name: string; texts: string[]; idx: number[]; best: number; asOf: number; summary?: string }>();
         for (const h of hits) {
           // One name per document, the one its card uses (title, else file name).
-          const known = docs.find((x) => x.doc_id === h.doc_id);
+          const known = all.find((x) => x.doc_id === h.doc_id);
           const name = known?.meta.title || known?.meta.filename || h.filename;
-          const d = byDoc.get(h.doc_id) ?? { name, texts: [], best: 0 };
+          const d = byDoc.get(h.doc_id) ?? { name, texts: [], idx: [], best: 0, asOf: 0, summary: known?.meta.summary };
           d.texts.push(h.text);
+          d.idx.push(h.idx);
           d.best = Math.max(d.best, h.score);
+          d.asOf = Math.max(d.asOf, h.as_of ?? 0);
           byDoc.set(h.doc_id, d);
         }
         for (const [doc_id, d] of byDoc) {
-          used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts });
+          used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts, idx: d.idx, asOf: d.asOf || undefined });
         }
         block += "\nPassages that match this question:\n";
         for (const d of byDoc.values()) {
-          block += `Document "${d.name}":\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+          // A document is a source with a date, like a conversation: the day
+          // its file last changed.
+          const day = documentDay(d.asOf);
+          const what = large && d.summary ? ` (${d.summary.match(/^[^.!?]*[.!?]/)?.[0] ?? d.summary.slice(0, 160)})` : "";
+          block += `Document "${d.name}"${day ? `, last changed ${day}` : ""}${what}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
         }
+        if (new Set([...byDoc.values()].map((d) => documentDay(d.asOf)).filter(Boolean)).size > 1) differentDays = true;
       }
     }
     // The closing instruction depends on what the block holds. With matched
@@ -740,8 +764,10 @@ export async function loadDocumentContextUsed(
     // model told "use these" worked a document into an answer about the sky
     // (2026-10-12). The quality matrix leg checks both shapes.
     block += used.length > 0
-      ? "\nUse these passages when they answer the question, and say which document they came from."
-      : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
+      ? `\nUse these passages when they answer the question, and say which document they came from.${differentDays ? " Where two documents disagree, the one changed more recently is the current one." : ""}`
+      : large
+        ? "\nNo passage of them matched this question. Do not mention the documents unless the question is about them."
+        : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
     return { text: block, used };
   } catch (e) {
     console.warn("[Memory] document context skipped:", e);

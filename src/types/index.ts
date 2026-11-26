@@ -550,4 +550,8 @@ export interface LibraryDocGiven {
   best: number;
   /** In memory only (never recorded): the passages as the model saw them. */
   texts?: string[];
+  /** Which passages of the document were given, by their number in it. */
+  idx?: number[];
+  /** The day the document's file last changed (seconds). */
+  asOf?: number;
 }
