@@ -1042,6 +1042,14 @@ pub(crate) fn begin_job(what: &'static str) -> Result<JobGuard, String> {
     *slot = Some(what);
     Ok(JobGuard)
 }
+/// The job the library is doing now, when it is doing one. Work nobody
+/// waits on (a card for each new document) holds off while this answers:
+/// reading a folder and writing cards would share the same processor.
+#[tauri::command]
+pub fn corpus_busy() -> Option<&'static str> {
+    *LIBRARY_JOB.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// One relink pass at a time (the restore starts one, the notice may too).
 
 #[derive(Serialize, Clone)]

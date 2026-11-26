@@ -936,6 +936,7 @@ pub fn run() {
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
             corpus::corpus_cancel,
+            corpus::corpus_busy,
             corpus::corpus_reread,
             corpus::corpus_relink,
             corpus::corpus_import_prepared,

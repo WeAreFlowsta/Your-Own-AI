@@ -89,15 +89,39 @@ function notifyCardProgress(done: number, total: number, file: string, partDone?
 }
 
 /** The model that writes on this device, or null when there is none. */
+/**
+ * Which model writes a card. The chat model that is loaded, when it has
+ * passed the memory check on this computer: it is already in memory (often
+ * on the graphics card) and writes a better card than the helper. Else the
+ * helper model. Else whatever local model is loaded. Never an online one.
+ */
 async function localWriter(): Promise<{ model?: string; preferLoaded: boolean } | null> {
-  if (await isUtilityModelReady()) return { preferLoaded: false };
+  let loaded: string | null = null;
   try {
-    const loaded = await invoke<string | null>("get_current_model");
-    if (loaded && loaded.endsWith(".gguf")) return { model: loaded, preferLoaded: true };
+    loaded = await invoke<string | null>("get_current_model");
   } catch {
     /* unknown loaded state */
   }
-  return null;
+  const local = loaded && loaded.endsWith(".gguf") ? loaded : null;
+  if (local) {
+    const passed = await invoke<{ model: string | null; result: { may_keep: boolean } | null }>("memory_check_status").then(
+      (s) => s.model === local && !!s.result?.may_keep,
+      () => false,
+    );
+    if (passed) return { model: local, preferLoaded: true };
+  }
+  if (await isUtilityModelReady()) return { preferLoaded: false };
+  return local ? { model: local, preferLoaded: true } : null;
+}
+
+/** Cards wait while the library is doing a job of its own (a folder being
+ *  read, documents being added): both would want the same processor. */
+async function waitForLibrary(): Promise<void> {
+  for (;;) {
+    const busy = await invoke<string | null>("corpus_busy").catch(() => null);
+    if (!busy) return;
+    await new Promise((r) => setTimeout(r, 20_000));
+  }
 }
 
 function usable(text: string): string {
@@ -181,6 +205,7 @@ export function summarizePendingDocuments(): Promise<void> {
         const at = index++;
         // A card is model work nobody waits on: only while the computer is
         // idle (machine.ts); the Activity tray says it waits.
+        await waitForLibrary();
         await waitForCalm(CARDS_JOB);
         notifyCardProgress(at, pending.length, doc.meta.filename);
         try {
