@@ -287,6 +287,218 @@ pub(crate) fn item_not_used(uses: &[DocUse], meta: &ItemMeta, text: &str, path: 
     note_of(meta).is_some_and(|n| not_used(uses, &n.doc_id, n.content_id.as_deref(), path, text))
 }
 
+// ── what the page asks ──────────────────────────────────────────────────
+
+/// A document a reply was given passages of.
+#[derive(Deserialize, Clone, Debug)]
+pub struct GivenDoc {
+    pub doc_id: String,
+    #[serde(default)]
+    pub idx: Vec<u32>,
+}
+
+/// How many lines of notes one reply can leave on the Subject pages.
+const LINES_A_REPLY: usize = 2;
+
+fn rows_now(app: &tauri::AppHandle, key: &[u8; 32]) -> Vec<MemoryRow> {
+    crate::memory_rows::read_cache(app, key, SCOPE)
+}
+
+fn uses_now(rows: &[MemoryRow]) -> Vec<DocUse> {
+    doc_uses(rows).into_iter().map(|(_, u)| u).collect()
+}
+
+/// A reply was given passages of the person's notes: each line a passage
+/// holds that the reply's answer shares its words with is kept as an item
+/// that points at the note, with the question it answered. No model is
+/// asked. Nothing is kept from a conversation the person keeps out of
+/// memory, or from what they chose not to have used.
+#[tauri::command]
+pub async fn memory_note_answered(app: tauri::AppHandle, input: crate::memory_items::KeepMessageInput, reply: String, given: Vec<GivenDoc>) -> Result<Vec<crate::memory_items::ItemView>, String> {
+    if given.is_empty() || reply.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    let ptr = crate::memory_items::place_of(&app, &input).await?;
+    let key = crate::memory_items::data_key(&app)?;
+    let rows = rows_now(&app, &key);
+    if crate::memory_use::conv_uses(&rows).iter().any(|u| u.started_at == ptr.c && u.private) {
+        return Ok(Vec::new());
+    }
+    let uses = uses_now(&rows);
+    let have = crate::memory_items::items(&rows);
+    let now = crate::memory_items::now_ms();
+    let asked: String = input.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+    let mut kept = Vec::new();
+    for g in &given {
+        let Some(doc) = crate::corpus::note_doc(&app, &key, &g.doc_id)? else { continue };
+        for idx in &g.idx {
+            if kept.len() >= LINES_A_REPLY {
+                break;
+            }
+            let Some(passage) = crate::corpus::note_passage(&app, &key, &g.doc_id, *idx)? else { continue };
+            // What is handed on never carries a secret; neither does what is kept.
+            let passage = crate::secret_mask::hand_on(&passage).text;
+            let Some(line) = answering_line(&passage, &reply) else { continue };
+            if already(&have, &g.doc_id, &line).is_some() || not_used(&uses, &g.doc_id, doc.content_id.as_deref(), doc.path.as_deref(), &line) {
+                continue;
+            }
+            let note = NoteRef { doc_id: g.doc_id.clone(), idx: *idx, name: doc.name.clone(), changed: doc.changed, content_id: doc.content_id.clone(), asked: Some(asked.clone()), state: None };
+            let id = format!("it-n-{}", &blake3::hash(format!("{}\n{line}", g.doc_id).as_bytes()).to_hex()[..20]);
+            let row = note_item(id.clone(), &line, note, Some(ptr), now);
+            let row = crate::memory_subjects::settle(&app, &key, row).await;
+            let saved = crate::memory_rows::save_and_cache(&app, row).await?;
+            crate::memory_items::log_change(
+                &app,
+                &key,
+                crate::memory_items::Change { id: format!("chg-{now}-{id}"), at: now, what: crate::memory_items::What::Kept, items: vec![id], by: "search".into(), undo: crate::memory_items::Undo::Forget, device: None },
+            )?;
+            if let Some(v) = crate::memory_items::view(&saved) {
+                kept.push(v);
+            }
+        }
+    }
+    Ok(kept)
+}
+
+/// A note item as the page shows it now.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteView {
+    pub id: String,
+    pub name: String,
+    /// When the file last changed (seconds).
+    pub changed: i64,
+    /// `here` | `line-gone` | `deleted` | `unreachable` | `not-used`.
+    pub state: String,
+    pub asked: Option<String>,
+    /// Where the file is, for "Show the note".
+    pub path: Option<String>,
+}
+
+/// Look at every note an item points to again, as the library holds it
+/// now: a changed file moves the item's date or marks its line gone, a
+/// note the library no longer holds is marked deleted, and a file that
+/// cannot be reached changes nothing. Answers how each stands.
+#[tauri::command]
+pub async fn memory_notes_follow(app: tauri::AppHandle) -> Result<Vec<NoteView>, String> {
+    let key = crate::memory_items::data_key(&app)?;
+    let have = crate::memory_items::items(&rows_now(&app, &key));
+    let now = crate::memory_items::now_ms();
+    let mut out = Vec::new();
+    for item in have.iter().filter(|i| i.meta.state != ItemState::Forgotten && !i.row.deleted) {
+        let Some(note) = note_of(&item.meta) else { continue };
+        let doc = crate::corpus::note_doc(&app, &key, &note.doc_id)?;
+        let path = doc.as_ref().and_then(|d| d.path.clone());
+        if note.state.as_deref() == Some("not-used") {
+            out.push(NoteView { id: item.row.id.clone(), name: note.name, changed: note.changed, state: "not-used".into(), asked: note.asked, path });
+            continue;
+        }
+        let reachable = doc.as_ref().is_some_and(|d| !d.offline && d.path.as_deref().map_or(true, |p| std::path::Path::new(p).exists()));
+        let now_is = match &doc {
+            None => NoteNow::Deleted,
+            Some(_) if !reachable => NoteNow::Unreachable,
+            Some(d) => NoteNow::Here { text: crate::secret_mask::hand_on(&crate::corpus::note_text(&app, &key, &note.doc_id)?).text, changed: d.changed },
+        };
+        let mut shown = note.clone();
+        if let Some(row) = followed(item, &now_is, now) {
+            let saved = crate::memory_rows::save_and_cache(&app, row).await?;
+            if let Some(n) = crate::memory_items::meta_of(&saved).and_then(|m| note_of(&m)) {
+                // The file changed under an item: Recently says so. Nothing to undo; the note is the person's.
+                if matches!(now_is, NoteNow::Here { .. }) && n.changed != note.changed {
+                    let id = item.row.id.clone();
+                    crate::memory_items::log_change(
+                        &app,
+                        &key,
+                        crate::memory_items::Change { id: format!("chg-{now}-note-{id}"), at: now, what: crate::memory_items::What::NoteChanged, items: vec![id], by: "search".into(), undo: crate::memory_items::Undo::Nothing, device: None },
+                    )?;
+                }
+                shown = n;
+            }
+        }
+        let state = if matches!(now_is, NoteNow::Unreachable) { "unreachable".to_string() } else { shown.state.clone().unwrap_or_else(|| "here".into()) };
+        out.push(NoteView { id: item.row.id.clone(), name: shown.name, changed: shown.changed, state, asked: shown.asked, path });
+    }
+    Ok(out)
+}
+
+/// Mark, or clear the mark on, every note item by whether a choice covers it.
+async fn mark_not_used(app: &tauri::AppHandle, key: &[u8; 32]) -> Result<(), String> {
+    let rows = rows_now(app, key);
+    let uses = uses_now(&rows);
+    let now = crate::memory_items::now_ms();
+    for item in crate::memory_items::items(&rows) {
+        let Some(mut note) = note_of(&item.meta) else { continue };
+        let path = crate::corpus::note_doc(app, key, &note.doc_id)?.and_then(|d| d.path);
+        let covered = item_not_used(&uses, &item.meta, &item.row.text, path.as_deref());
+        let marked = note.state.as_deref() == Some("not-used");
+        if covered == marked {
+            continue;
+        }
+        note.state = covered.then(|| "not-used".to_string());
+        let mut meta = item.meta.clone();
+        meta.source.doc = serde_json::to_value(&note).ok();
+        let mut row = crate::memory_items::with_meta(item.row.clone(), &meta);
+        row.updated_at = now;
+        row.action_hash = None;
+        crate::memory_rows::save_and_cache(app, row).await?;
+    }
+    Ok(())
+}
+
+/// "Do not use this", on a line of a note, with its reach: `line` (these
+/// words of this note), `note` (the whole file) or `folder` (everything in
+/// the folder the note is in). From the next question on it is passed
+/// over by the search and given to no AI. Listed under Not used.
+#[tauri::command]
+pub async fn memory_note_do_not_use(app: tauri::AppHandle, id: String, reach: String) -> Result<DocUse, String> {
+    let key = crate::memory_items::data_key(&app)?;
+    let have = crate::memory_items::items(&rows_now(&app, &key));
+    let item = have.iter().find(|i| i.row.id == id).ok_or("That line is no longer in memory.")?;
+    let note = note_of(&item.meta).ok_or("That is not a line from a note.")?;
+    let doc = crate::corpus::note_doc(&app, &key, &note.doc_id)?;
+    let now = crate::memory_items::now_ms();
+    let choice = match reach.as_str() {
+        "line" => DocUse { reach, doc_id: Some(note.doc_id.clone()), content_id: note.content_id.clone(), line: Some(item.row.text.clone()), folder: None, name: note.name.clone(), at: now },
+        "note" => DocUse { reach, doc_id: Some(note.doc_id.clone()), content_id: note.content_id.clone(), line: None, folder: None, name: note.name.clone(), at: now },
+        "folder" => {
+            let path = doc.and_then(|d| d.path).ok_or("This note's folder is not known on this device.")?;
+            let folder = std::path::Path::new(&path).parent().ok_or("This note is not in a folder.")?;
+            let name = folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| folder.to_string_lossy().to_string());
+            DocUse { reach, doc_id: None, content_id: None, line: None, folder: Some(folder.to_string_lossy().to_string()), name, at: now }
+        }
+        _ => return Err("Choose this line, this note or this folder.".into()),
+    };
+    crate::memory_rows::save_and_cache(&app, doc_row(&choice, now, false)).await?;
+    mark_not_used(&app, &key).await?;
+    Ok(choice)
+}
+
+/// A choice as the Not used list shows it.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NotUsedNote {
+    pub id: String,
+    #[serde(flatten)]
+    pub choice: DocUse,
+}
+
+/// Every note line, note and folder the person chose not to have used.
+#[tauri::command]
+pub fn memory_notes_not_used(app: tauri::AppHandle) -> Result<Vec<NotUsedNote>, String> {
+    let key = crate::memory_items::data_key(&app)?;
+    Ok(doc_uses(&rows_now(&app, &key)).into_iter().map(|(id, choice)| NotUsedNote { id, choice }).collect())
+}
+
+/// "Use again": the choice is taken back, and what it covered is used
+/// from the next question on.
+#[tauri::command]
+pub async fn memory_note_use_again(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    let key = crate::memory_items::data_key(&app)?;
+    let Some((_, choice)) = doc_uses(&rows_now(&app, &key)).into_iter().find(|(row, _)| *row == id) else { return Ok(()) };
+    crate::memory_rows::save_and_cache(&app, doc_row(&choice, crate::memory_items::now_ms(), true)).await?;
+    mark_not_used(&app, &key).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

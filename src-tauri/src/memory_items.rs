@@ -252,6 +252,10 @@ pub(crate) fn may_use(meta: &ItemMeta, ai: &str, project: Option<&str>, online: 
     if !matches!(meta.state, ItemState::Current | ItemState::Open | ItemState::Done) {
         return false;
     }
+    // A line of a note that is gone, or that the person chose not to have used.
+    if !crate::memory_notes::usable(meta) {
+        return false;
+    }
     match &meta.audience {
         Audience::All => true,
         Audience::Ai { ai: only } => only == ai,
@@ -276,6 +280,8 @@ pub enum What {
     /// Moved to another subject.
     Moved,
     Undone,
+    /// A note an item points at was edited and read again.
+    NoteChanged,
 }
 
 /// What an undo of a change puts back.
@@ -535,7 +541,7 @@ const CHANGES_FILE: &str = "memory-changes.enc";
 /// are still in the rows' own history.
 const CHANGES_KEPT: usize = 2000;
 
-fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
+pub(crate) fn data_key(app: &tauri::AppHandle) -> Result<[u8; 32], String> {
     use tauri::Manager;
     app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()
 }
@@ -839,7 +845,7 @@ pub struct KeepMessageInput {
 /// Where a bubble's message is recorded: read from this device's text of
 /// the conversation, else (a conversation not read here yet) from its
 /// records.
-async fn place_of(app: &tauri::AppHandle, input: &KeepMessageInput) -> Result<Ptr, String> {
+pub(crate) async fn place_of(app: &tauri::AppHandle, input: &KeepMessageInput) -> Result<Ptr, String> {
     use tauri::Manager;
     let by_person = input.role == "user";
     let k = crate::transcript_search::row_key(app, &input.conversation)?;
