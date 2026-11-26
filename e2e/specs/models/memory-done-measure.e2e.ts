@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { waitForChat, ask, waitForReplyDone, invoke } from "./_helpers";
 
-type Side = { date: string };
+type Side = { date: string; cid?: string; seq?: number };
 type Case = { n: number; kind: "closed" | "still-open"; open: Side; later: Side; open_item: string; later_item: string };
 type Item = { id: string };
 const FILE = process.env.YOAI_E2E_DONE_CASES ?? "";
@@ -19,18 +19,27 @@ const OUT = process.env.YOAI_MEMORY_OUT ?? "";
 const BASE = "http://127.0.0.1:11435/internal";
 
 async function tidy(queue: string): Promise<{ ran: boolean; pairs: { earlier: string; later: string; verdict: string }[] }> {
-  const floor = process.env.YOAI_E2E_DONE_FLOOR ? `&open_floor=${process.env.YOAI_E2E_DONE_FLOOR}` : "";
-  const res = await fetch(`${BASE}/memory-tidy?force=1&queue=${encodeURIComponent(queue)}${floor}`, { method: "POST" });
+  const floor = (process.env.YOAI_E2E_DONE_FLOOR ? `&open_floor=${process.env.YOAI_E2E_DONE_FLOOR}` : "") + (process.env.YOAI_E2E_DONE_SAME_CONVERSATION ? "&open_same_conversation=1" : "");
+  const res = await fetch(`${BASE}/memory-tidy?force=1&queue=${encodeURIComponent(queue)}${floor}`, { method: "POST", signal: AbortSignal.timeout(1_800_000) });
   const answer = await res.json();
   if (!res.ok || answer?.error) throw new Error(`memory-tidy: ${JSON.stringify(answer?.error ?? res.status)}`);
   return answer.report;
 }
 
-async function keep(text: string, itemType: "open" | "decision", day: string, n: number): Promise<string> {
-  // Each item in a conversation of its own, as of its day.
-  const at = Date.parse(`${day.slice(0, 10)}T12:00:00Z`) + n * 1000;
+/** A number that stands for a conversation: the same for the same id. */
+function conversationOf(cid: string): number {
+  let h = 7;
+  for (const ch of cid) h = (h * 31 + ch.charCodeAt(0)) % 1_000_000_007;
+  return 1_600_000_000_000_000 + h * 1000;
+}
+
+async function keep(text: string, itemType: "open" | "decision", side: Side, n: number): Promise<string> {
+  // Each item as of its day, in the conversation it was said in (when the
+  // case names one), so two sides said in one conversation share it.
+  const at = Date.parse(`${side.date.slice(0, 10)}T12:00:00Z`) + n * 1000;
+  const c = side.cid ? conversationOf(side.cid) : at * 1000;
   const kept = await invoke<{ item: Item }>("memory_keep", {
-    input: { text, itemType, ptr: { c: at * 1000, s: 0, t: at * 1000, a: 0, b: 0 }, asOf: at, kind: "exchange", why: "pressed" },
+    input: { text, itemType, ptr: { c, s: side.seq ?? n, t: at * 1000, a: 0, b: 0 }, asOf: at, kind: "exchange", why: "pressed" },
   });
   return kept.item.id;
 }
@@ -63,13 +72,13 @@ describe("may already be done, on real cases", () => {
       if (process.env.YOAI_E2E_DONE_LIKENESS === "only") return;
     }
     const open: Record<number, string> = {};
-    for (const c of cases) open[c.n] = await keep(c.open_item, "open", c.open.date, c.n);
+    for (const c of cases) open[c.n] = await keep(c.open_item, "open", c.open, c.n);
     const caseOf = (id: string) => Number(Object.entries(open).find(([, v]) => v === id)?.[0] ?? 0);
     const rows: Record<string, unknown>[] = [];
     let proposed = 0;
     const wrong: string[] = [];
     for (const c of cases) {
-      const later = await keep(c.later_item, "decision", c.later.date, 100 + c.n);
+      const later = await keep(c.later_item, "decision", c.later, 100 + c.n);
       const report = await tidy(later);
       const about = report.pairs.filter((p) => p.later === later && open[caseOf(p.earlier)] === p.earlier);
       const own = about.find((p) => caseOf(p.earlier) === c.n);

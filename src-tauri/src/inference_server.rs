@@ -1165,6 +1165,9 @@ async fn memory_tidy_dev(
     if let Some(floor) = q.get("open_floor").and_then(|f| f.parse::<f32>().ok()).filter(|f| (0.0..=1.0).contains(f)) {
         crate::memory_tidying::OPEN_PAIR_FLOOR.store(floor.to_bits(), std::sync::atomic::Ordering::Relaxed);
     }
+    if let Some(on) = q.get("open_same_conversation") {
+        crate::memory_tidying::OPEN_SAME_CONVERSATION.store(on == "1", std::sync::atomic::Ordering::Relaxed);
+    }
     if let Some(id) = q.get("queue").filter(|id| !id.is_empty()) {
         crate::memory_tidying::kept(&app, id);
     }

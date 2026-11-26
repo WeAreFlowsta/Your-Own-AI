@@ -193,15 +193,26 @@ fn open_pair_floor() -> f32 {
     }
 }
 
+/// For a measurement: something left open is also put beside what was
+/// kept later from the same conversation, however unlike the words.
+pub(crate) static OPEN_SAME_CONVERSATION: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// `near`, with a lower floor for a pair that has an open item in it.
 pub(crate) fn near_with(new: &str, items: &[Item], vectors: &HashMap<String, Vec<f32>>, open_floor: f32) -> Vec<(String, f32)> {
     let Some(mine) = vectors.get(new) else { return Vec::new() };
-    let new_open = items.iter().any(|i| i.row.id == new && i.meta.state == ItemState::Open);
+    let me = items.iter().find(|i| i.row.id == new);
+    let new_open = me.is_some_and(|i| i.meta.state == ItemState::Open);
+    let conversation = |i: &Item| i.meta.source.ptr.map(|p| p.c).filter(|c| *c > 0);
+    let mine_c = me.and_then(conversation);
+    let together = OPEN_SAME_CONVERSATION.load(std::sync::atomic::Ordering::Relaxed);
     items
         .iter()
         .filter(|i| i.row.id != new)
         .filter_map(|i| vectors.get(&i.row.id).map(|v| (i, cosine(mine, v))))
-        .filter(|(i, s)| *s >= PAIR_FLOOR || (*s >= open_floor && (new_open || i.meta.state == ItemState::Open)))
+        .filter(|(i, s)| {
+            let open_pair = new_open || i.meta.state == ItemState::Open;
+            *s >= PAIR_FLOOR || (open_pair && (*s >= open_floor || (together && mine_c.is_some() && conversation(i) == mine_c)))
+        })
         .map(|(i, s)| (i.row.id.clone(), s))
         .collect()
 }
