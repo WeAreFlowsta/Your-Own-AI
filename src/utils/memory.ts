@@ -705,6 +705,7 @@ export async function loadDocumentContextUsed(
     const docs = large ? [] : all;
     const used: import("../types").LibraryDocGiven[] = [];
     let differentDays = false;
+    let newest = "";
     const tokens = (t: string) => Math.ceil(t.length / 4);
     const label = (d: (typeof docs)[number]) =>
       `"${d.meta.title || d.meta.filename}"${d.meta.mine ? " (written by you)" : ""}`;
@@ -787,12 +788,19 @@ export async function loadDocumentContextUsed(
           used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts, idx: d.idx, asOf: d.asOf || undefined });
         }
         block += "\nPassages that match this question:\n";
+        // When the days differ, the newest is said in words: a model given
+        // only dates has called the older of two the more recent.
+        const days = [...byDoc.values()].map((d) => documentDay(d.asOf)).filter(Boolean);
+        const newestDay = new Set(days).size > 1 ? [...days].sort().slice(-1)[0] : "";
+        const newestDocs = newestDay ? [...byDoc.values()].filter((d) => documentDay(d.asOf) === newestDay) : [];
+        if (newestDocs.length === 1) newest = newestDocs[0].name;
         for (const d of byDoc.values()) {
           // A document is a source with a date, like a conversation: the day
           // its file last changed.
           const day = documentDay(d.asOf);
           const what = large && d.summary ? ` (${d.summary.match(/^[^.!?]*[.!?]/)?.[0] ?? d.summary.slice(0, 160)})` : "";
-          block += `Document "${d.name}"${day ? `, last changed ${day}` : ""}${what}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+          const mark = newestDocs.length === 1 && d === newestDocs[0] ? ", the most recently changed of these" : "";
+          block += `Document "${d.name}"${day ? `, last changed ${day}${mark}` : ""}${what}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
         }
         if (new Set([...byDoc.values()].map((d) => documentDay(d.asOf)).filter(Boolean)).size > 1) differentDays = true;
       }
@@ -803,7 +811,7 @@ export async function loadDocumentContextUsed(
     // model told "use these" worked a document into an answer about the sky
     // (2026-10-12). The quality matrix leg checks both shapes.
     block += used.length > 0
-      ? `\nUse these passages when they answer the question, and say which document they came from.${differentDays ? " Where two documents disagree, the one changed more recently is the current one." : ""}`
+      ? `\nUse these passages when they answer the question, and say which document they came from.${differentDays ? ` Where two documents disagree, the one changed more recently is the current one${newest ? `: of these, that is "${newest}"` : ""}.` : ""}`
       : large
         ? "\nNo passage of them matched this question. Do not mention the documents unless the question is about them."
         : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
