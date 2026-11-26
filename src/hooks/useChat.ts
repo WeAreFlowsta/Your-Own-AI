@@ -1776,9 +1776,12 @@ export function useChat(props: UseChatProps) {
             ? await import("../utils/embeddings").then(({ embedQueryBounded }) => embedQueryBounded(followUp)).catch(() => null)
             : null;
           const recalled = await loadDocumentContextUsed(
-            // A large window (or a reply made online) has room for more
-            // passages, as it has for more of what memory finds.
-            selectedAi.id, qvec, room, isOnlineModel || isExternalModel || roomCtx >= 16_000 ? 12 : 8, followUpVec,
+            // A reply made off this computer is given more passages. A
+            // model on it keeps eight whatever its window: with twelve, a
+            // small model answered a question no note answers by making
+            // something up (measured, four runs of four), and with eight
+            // it said so.
+            selectedAi.id, qvec, room, isOnlineModel || isExternalModel ? 12 : 8, followUpVec,
             addressesInQuestion > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
           );
           docContext = recalled.text;
