@@ -1029,8 +1029,18 @@ pub(crate) async fn sync_from_siblings(app: &tauri::AppHandle, force: bool) -> R
             if let Some(hc) = app.try_state::<std::sync::Arc<crate::commands_holochain::HolochainState>>() {
                 if let Ok(key) = hc.get().and_then(|m| m.data_key()) {
                     let (f, r) = crate::memory_rows::fold_sibling_person_memory(app, &key, manifest);
-                    if f + r > 0 {
-                        log::info!("[config-sync] memory from {}: {} fact(s), {} row(s) folded in", device.name.as_deref().unwrap_or("another device"), f, r);
+                    // What that device changed in memory, for Recently here:
+                    // said to be made there, and undone from here like any other.
+                    let c = manifest["memory_changes"]["raw_b64"]
+                        .as_str()
+                        .and_then(|b| {
+                            use base64::Engine;
+                            base64::engine::general_purpose::STANDARD.decode(b).ok()
+                        })
+                        .map(|raw| crate::memory_items::fold_changes(app, &key, &raw, Some(device.name.as_deref().unwrap_or("another device"))))
+                        .unwrap_or(0);
+                    if f + r + c > 0 {
+                        log::info!("[config-sync] memory from {}: {} fact(s), {} row(s), {} change(s) folded in", device.name.as_deref().unwrap_or("another device"), f, r, c);
                     }
                 }
             }

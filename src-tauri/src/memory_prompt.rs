@@ -95,7 +95,7 @@ fn listed<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
 /// project's.
 pub(crate) const RULES_BUDGET: usize = 2048;
 
-fn is_rule_kind(kind: &str) -> bool {
+pub(crate) fn is_rule_kind(kind: &str) -> bool {
     matches!(kind, "rule" | "command" | "location")
 }
 

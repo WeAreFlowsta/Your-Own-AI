@@ -577,8 +577,13 @@ pub(crate) fn clear_changes(app: &tauri::AppHandle) {
     }
 }
 
+/// The log is read, added to and written back by one caller at a time: a
+/// change noted here while another device's log is folded in is not lost.
+static CHANGES_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Note a change in this device's log.
 pub(crate) fn log_change(app: &tauri::AppHandle, key: &[u8; 32], change: Change) -> Result<(), String> {
+    let _one_at_a_time = CHANGES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     write_changes(app, key, &log_with(read_changes(app, key), change, CHANGES_KEPT))
 }
 
@@ -587,20 +592,41 @@ pub(crate) fn changes_for_backup(app: &tauri::AppHandle) -> Option<Vec<u8>> {
     std::fs::read(crate::profile::root(app).ok()?.join(CHANGES_FILE)).ok().filter(|raw| raw.len() > 24)
 }
 
-/// A backup's change log, folded into this device's. Returns how many
-/// changes this device did not have.
-pub(crate) fn fold_changes(app: &tauri::AppHandle, key: &[u8; 32], raw: &[u8]) -> usize {
+/// A backup's change log, or another device's, folded into this device's.
+/// `made_on` names the other device when the log is another device's: the
+/// changes this device did not have are marked as made there, so Recently
+/// can say so. Returns how many changes this device did not have.
+pub(crate) fn fold_changes(app: &tauri::AppHandle, key: &[u8; 32], raw: &[u8], made_on: Option<&str>) -> usize {
     if raw.len() < 24 {
         return 0;
     }
     let Some(theirs) = crate::transcript_crypto::decrypt(key, &raw[..24], &raw[24..]).ok().and_then(|p| serde_json::from_slice::<Vec<Change>>(&p).ok()) else { return 0 };
+    let _one_at_a_time = CHANGES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mine = read_changes(app, key);
-    let had: std::collections::HashSet<String> = mine.iter().map(|c| c.id.clone()).collect();
-    let new = theirs.iter().filter(|c| !had.contains(&c.id)).count();
+    let (log, new) = folded_log(mine, theirs, made_on, CHANGES_KEPT);
     if new > 0 {
-        let _ = write_changes(app, key, &merged_log(mine, theirs, CHANGES_KEPT));
+        let _ = write_changes(app, key, &log);
     }
     new
+}
+
+/// This device's log with another log folded in: a change already here is
+/// left as it is; one that is new here is marked as made on `made_on`
+/// (unless it already says where it was made).
+pub(crate) fn folded_log(mine: Vec<Change>, theirs: Vec<Change>, made_on: Option<&str>, keep: usize) -> (Vec<Change>, usize) {
+    let had: std::collections::HashSet<String> = mine.iter().map(|c| c.id.clone()).collect();
+    let new: Vec<Change> = theirs
+        .into_iter()
+        .filter(|c| !had.contains(&c.id))
+        .map(|mut c| {
+            if c.device.is_none() {
+                c.device = made_on.map(str::to_string);
+            }
+            c
+        })
+        .collect();
+    let n = new.len();
+    (merged_log(mine, new, keep), n)
 }
 
 pub(crate) fn now_ms() -> i64 {
@@ -924,6 +950,13 @@ pub async fn memory_keep_quoted(app: tauri::AppHandle, reply: String, given: cra
     let mut out = Vec::new();
     for (ptr, quote) in crate::memory_quotes::quoted_exactly(&reply, &given, &texts) {
         if crate::memory_use::is_private(&uses, ptr.c) || have.iter().any(|i| i.meta.source.ptr.is_some_and(|p| p.c == ptr.c && p.s == ptr.s)) {
+            continue;
+        }
+        // The same words kept before, from another conversation where the
+        // thing was also said: once is enough, and what was undone is not
+        // kept again.
+        let words = |t: &str| t.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+        if have.iter().any(|i| words(&i.row.text) == words(&quote)) {
             continue;
         }
         // The item is for whoever the conversation it came from is for.
@@ -1425,6 +1458,26 @@ mod tests {
         assert_eq!(words_to_keep(&"é".repeat(3000), None).chars().count(), 1000);
         let k: KeepMessageInput = serde_json::from_value(serde_json::json!({ "conversation": "h", "role": "assistant", "text": "t", "seq": 3, "agentKey": "k" })).unwrap();
         assert_eq!((k.seq, k.agent_key.as_deref(), k.selection, k.why), (Some(3), Some("k"), None, None));
+    }
+
+    #[test]
+    fn a_change_made_on_another_device_says_so_and_ours_do_not() {
+        let c = |id: &str, at: i64| Change { id: id.into(), at, what: What::Confirmed, items: vec!["it-1".into()], by: "person".into(), undo: Undo::Nothing, device: None };
+        let mine = vec![c("here-1", 30), c("both", 20)];
+        let theirs = vec![c("both", 20), c("there-1", 40), Change { device: Some("the laptop".into()), ..c("third", 10) }];
+        let (log, new) = folded_log(mine.clone(), theirs.clone(), Some("the desktop"), 100);
+        assert_eq!(new, 2);
+        let of = |id: &str| log.iter().find(|x| x.id == id).unwrap().device.clone();
+        assert_eq!((of("here-1"), of("both")), (None, None), "what this device did is not said to be elsewhere, even when the other device lists it too");
+        assert_eq!(of("there-1").as_deref(), Some("the desktop"));
+        assert_eq!(of("third").as_deref(), Some("the laptop"), "a change the other device took from a third keeps where it was made");
+        assert_eq!(log.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), vec!["there-1", "here-1", "both", "third"], "newest first");
+        // Folded again, nothing is added and nothing changes.
+        let (again, new) = folded_log(log.clone(), theirs, Some("the desktop"), 100);
+        assert_eq!((new, again), (0, log));
+        // A restore of this device's own backup marks nothing.
+        let (own, _) = folded_log(Vec::new(), mine, None, 100);
+        assert!(own.iter().all(|x| x.device.is_none()));
     }
 
     #[test]

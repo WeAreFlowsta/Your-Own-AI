@@ -1,4 +1,5 @@
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { backWords, RESTORE_NOTE_EVENT } from "../utils/memoryRestore";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -91,6 +92,9 @@ interface RestoreStats {
   missing_objects: number;
   missing_records: number;
   memory_facts_restored: boolean;
+  memory_rows_restored?: number;
+  memory_items_in_backup?: number;
+  memory_rules_in_backup?: number;
   thumbnails_restored: number;
   knowledge_restored: number;
   documents_restored?: number;
@@ -258,7 +262,14 @@ export default component$<FlowstaAccountProps>((props) => {
       if (aisBack > 0) {
         parts.push(`${aisBack} AI${aisBack === 1 ? "" : "s"} brought back.`);
       }
-      if (stats.memory_facts_restored) {
+      // Memory's rows may have arrived a moment before the restore, read
+      // from the same backup: the line is about what the backup held.
+      const what = backWords(stats.memory_items_in_backup ?? 0, stats.memory_rules_in_backup ?? 0);
+      const broughtBack = !!stats.memory_rows_restored || stats.conversations_restored + stats.conversations_preserved > 0;
+      if (stats.memory_rows_restored || (what && broughtBack)) {
+        parts.push(what ? `Your memory is back: ${what}.` : "Your memory is back.");
+        window.dispatchEvent(new CustomEvent(RESTORE_NOTE_EVENT));
+      } else if (stats.memory_facts_restored) {
         parts.push("Your Memory profile facts restored.");
       }
       if (stats.knowledge_restored > 0) {

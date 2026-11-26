@@ -60,6 +60,52 @@ async function setWorkNamesOnFreshStarters(): Promise<string[] | string> {
   return "the starters never settled";
 }
 
+// One memory on both devices: A keeps a thing and says it is right; B has
+// it, Recently on B says the change was made on another device, and B's
+// undo of it reaches A.
+const KEPT = `The bakery's flour comes on Tuesdays (devices ${process.env.DEVICES_NAME ?? ""})`.trim();
+type ItemSeen = { id: string; text: string; item: { state: string; confirmed?: { how: string } | null } };
+const keptItem = async () => ((await invoke<ItemSeen[]>("memory_items").catch(() => [])) as ItemSeen[]).find((i) => i.text === KEPT);
+
+async function keepAndConfirm(): Promise<void> {
+  await browser.waitUntil(async () => invoke<unknown[]>("memory_items").then(() => true, () => false), { timeout: 600_000, interval: 5_000, timeoutMsg: "memory did not answer within ten minutes" });
+  const kept = await invoke<{ item: ItemSeen }>("memory_keep", {
+    input: { text: KEPT, itemType: "detail", ptr: { c: 1_700_000_100_000_000, s: 1, t: 1_700_000_100_000_000, a: 0, b: 0 }, asOf: 1_700_000_100_000, kind: "exchange", why: "pressed" },
+  });
+  await invoke("memory_item_change", { id: kept.item.id, edit: { do: "confirm" } });
+}
+
+/** On B: the item A kept is here and still confirmed; Recently says where
+ *  the changes were made; Undo, pressed here, takes the confirmation back. */
+async function memoryFromTheOtherDevice(): Promise<void> {
+  await browser.waitUntil(async () => !!(await keptItem()), { timeout: 300_000, interval: 5_000, timeoutMsg: "what A kept never showed on B" });
+  expect((await keptItem())!.item.confirmed?.how).toBe("pressed");
+  await browser.waitUntil(async () => (await invoke<{ device?: string | null }[]>("memory_changes")).some((c) => !!c.device), { timeout: 120_000, interval: 5_000, timeoutMsg: "B's list of changes never held one made on A" });
+  await browser.url("tauri://localhost/your-memory/#recently");
+  await browser.waitUntil(async () => (await $$('[data-testid="recently-row"][data-what="confirmed"]')).length > 0, { timeout: 60_000, timeoutMsg: "Recently on B did not list A's confirmation" });
+  const row = await $('[data-testid="recently-row"][data-what="confirmed"]');
+  const said = (await row.getText()).split(/\s+/).join(" ");
+  console.log(`e2e: Recently on B: ${said}`);
+  expect(said).toContain("on another of your devices");
+  // No board names which device tidies.
+  expect((await bodyText()).toLowerCase()).not.toMatch(/tidies memory|this computer does not/);
+  await shot("devices-b-recently");
+  await (await row.$('[data-testid="recently-undo"]')).click();
+  await browser.waitUntil(async () => (await keptItem())?.item.confirmed?.how !== "pressed", { timeout: 60_000, timeoutMsg: "Undo on B did not take A's confirmation back" });
+  console.log("e2e: B undid the confirmation made on A");
+}
+
+/** On A, with B online: B's undo arrives. */
+async function undoArrivesBack(): Promise<void> {
+  const started = Date.now();
+  await browser.waitUntil(async () => {
+    await invoke("list_memory_rows", { agentKey: null, scope: "memory" }).catch(() => undefined);
+    const item = await keptItem();
+    return !!item && item.item.confirmed?.how !== "pressed";
+  }, { timeout: 360_000, interval: 10_000, timeoutMsg: "B's undo never reached A (the item is still confirmed after 6 min)" });
+  console.log(`e2e: B's undo on A after ${Math.round((Date.now() - started) / 1000)} s`);
+}
+
 const escrow = () => invoke<{ state: string }>("vault_escrow_sync");
 const bodyText = () => browser.execute(() => document.body.innerText);
 
@@ -96,6 +142,8 @@ describe(`devices, phase ${PHASE}`, () => {
       // A standing rule, kept here: a person-scope memory row. The live read
       // puts it in this device's rows cache, which rides the manifest, so the
       // other device has it while this one is off (the memory design §10).
+      // The person's own records open a little after the page does.
+      await browser.waitUntil(async () => invoke("list_memory_rows", { agentKey: null, scope: "person" }).then(() => true, () => false), { timeout: 300_000, interval: 3_000, timeoutMsg: "the person's memory rows did not answer within five minutes" });
       await invoke("save_memory_row", { agentKey: null, row: {
         id: `devices-${Date.now().toString(36)}`, scope: "person", kind: "rule", text: RULE, structured: null,
         as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
@@ -118,6 +166,7 @@ describe(`devices, phase ${PHASE}`, () => {
       await ask(MESSAGE);
       await waitForReplyDone();
       await shot("devices-a-chat");
+      await keepAndConfirm();
       // The manifest (with ai_configs) and the conversation go to this
       // device's Vault now.
       const backup = await invoke<Record<string, unknown>>("vault_backup_now");
@@ -290,6 +339,7 @@ describe(`devices, phase ${PHASE}`, () => {
         console.log("e2e: no proxy session on a test identity - the Settings line needs the signed-in panel (checked by hand / the signed-in flow)");
       }
       await shot("devices-b-settings");
+      await memoryFromTheOtherDevice();
     } else if (PHASE === "c") {
       // Both devices are up on the rendezvous: A (unattended, default ports)
       // holds the conversation's records; this is B on shifted ports. The
@@ -442,6 +492,7 @@ describe(`devices, phase ${PHASE}`, () => {
       }, { timeout: 360_000, interval: 5_000, timeoutMsg: "B's reply never arrived in A's conversation (still missing after 6 min)" });
       console.log(`e2e: B's reply on A after ${Math.round((Date.now() - started) / 1000)} s: ${JSON.stringify(await texts())}`);
       await shot("devices-d-arrived");
+      await undoArrivesBack();
     } else {
       throw new Error("set DEVICES_PHASE to a, b, c or d");
     }

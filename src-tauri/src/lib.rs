@@ -917,6 +917,8 @@ pub fn run() {
             memory_use::memory_conversations_not_used,
             memory_notes::memory_note_answered,
             memory_notes::memory_notes_follow,
+            vault_restore::memory_restore_note,
+            vault_restore::memory_restore_note_seen,
             memory_notes::memory_note_do_not_use,
             memory_notes::memory_notes_not_used,
             memory_notes::memory_note_use_again,

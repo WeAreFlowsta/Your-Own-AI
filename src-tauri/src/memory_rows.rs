@@ -324,12 +324,16 @@ pub(crate) fn decode_sealed_rows(raw: &[u8], key: &[u8; 32]) -> Vec<MemoryRow> {
     serde_json::from_slice(&plain).unwrap_or_default()
 }
 
+/// Rows as a sealed rows file's bytes (what a cache file and a backup hold).
+pub(crate) fn seal_rows(key: &[u8; 32], rows: &[MemoryRow]) -> Option<Vec<u8>> {
+    let plain = serde_json::to_vec(rows).ok()?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(key, &plain).ok()?;
+    serde_json::to_vec(&SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) }).ok()
+}
+
 fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[MemoryRow]) {
     let Some(path) = path else { return };
-    let Ok(plain) = serde_json::to_vec(rows) else { return };
-    let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
-    let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
-    if let Ok(json) = serde_json::to_vec(&file) {
+    if let Some(json) = seal_rows(key, rows) {
         let _ = std::fs::write(&path, json);
         #[cfg(unix)]
         {
@@ -339,11 +343,6 @@ fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[M
     }
 }
 
-/// Fold another device's memory (from its manifest copy) into this
-/// device's: its facts file by id (newer wins, no vector when the words
-/// changed), its person-scope rows into the siblings file and the cache.
-/// Returns (facts adopted, rows adopted). The facts write does not mirror
-/// (the other device already wrote those rows).
 /// The scopes a backup carries beside the person's and each AI's: memory's
 /// own, and the scope of every project this device knows (a project a
 /// kept item is for, and each folder that had a project memory).
@@ -374,6 +373,68 @@ pub(crate) fn scopes_for_backup(folder_projects: Vec<String>, items: &[crate::me
     scopes
 }
 
+/// Rows from a backup or another device's copy, folded into the rows this
+/// device already holds from such copies: the newest revision of each row
+/// stays. Returns the merged rows and how many of them were not held
+/// before, so folding the same copy a second time adds nothing.
+pub(crate) fn fold_rows(held: Vec<MemoryRow>, theirs: Vec<MemoryRow>) -> (Vec<MemoryRow>, usize) {
+    let before: std::collections::HashSet<(String, i64)> = held.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+    let mut all = held;
+    all.extend(theirs);
+    let merged = reduce(all);
+    let adopted = merged.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+    (merged, adopted)
+}
+
+/// The rows a backup or another device's copy carries, scope by scope
+/// (the person's, each AI's by founding key, memory's own, each
+/// project's); an older copy carried the person's alone.
+pub(crate) fn rows_in_backup(key: &[u8; 32], manifest: &serde_json::Value) -> Vec<(String, Vec<MemoryRow>)> {
+    use base64::Engine;
+    let mut scoped: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = manifest["memory_rows"]["scopes"].as_object() {
+        for (scope, v) in obj {
+            if let Some(b64) = v.as_str() {
+                scoped.push((scope.clone(), b64.to_string()));
+            }
+        }
+    } else if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
+        scoped.push(("person".to_string(), b64.to_string()));
+    }
+    scoped
+        .into_iter()
+        .filter_map(|(scope, b64)| {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).ok()?;
+            let rows = decode_sealed_rows(&bytes, key);
+            (!rows.is_empty()).then_some((scope, rows))
+        })
+        .collect()
+}
+
+/// What a backup's rows hold, counted for the person: kept items (all but
+/// the forgotten) and rules (the person's, each AI's, each project's).
+pub(crate) fn counts_in_backup(key: &[u8; 32], manifest: &serde_json::Value) -> (usize, usize) {
+    rows_in_backup(key, manifest).into_iter().fold((0, 0), |(items, rules), (scope, rows)| {
+        let (i, r) = counts_of(&scope, &reduce(rows));
+        (items + i, rules + r)
+    })
+}
+
+/// Kept items (all but the forgotten) and rules among one scope's rows.
+pub(crate) fn counts_of(scope: &str, rows: &[MemoryRow]) -> (usize, usize) {
+    if scope == crate::memory_items::SCOPE {
+        let items = crate::memory_items::items(rows).iter().filter(|i| !matches!(i.meta.state, crate::memory_items::ItemState::Forgotten)).count();
+        (items, 0)
+    } else {
+        (0, rows.iter().filter(|r| !r.deleted && crate::memory_prompt::is_rule_kind(&r.kind) && !r.text.trim().is_empty()).count())
+    }
+}
+
+/// Fold another device's memory (from its manifest copy) into this
+/// device's: its facts file by id (newer wins, no vector when the words
+/// changed), its person-scope rows into the siblings file and the cache.
+/// Returns (facts adopted, rows adopted). The facts write does not mirror
+/// (the other device already wrote those rows).
 pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32], manifest: &serde_json::Value) -> (usize, usize) {
     use base64::Engine;
     let mut facts_adopted = 0usize;
@@ -395,29 +456,9 @@ pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32],
         }
     }
     let mut rows_adopted = 0usize;
-    // Every scope the sibling carried (person + its AIs by founding key);
-    // older manifests carried the person's alone.
-    let mut scoped: Vec<(String, String)> = Vec::new();
-    if let Some(obj) = manifest["memory_rows"]["scopes"].as_object() {
-        for (scope, v) in obj {
-            if let Some(b64) = v.as_str() {
-                scoped.push((scope.clone(), b64.to_string()));
-            }
-        }
-    } else if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
-        scoped.push(("person".to_string(), b64.to_string()));
-    }
-    for (scope, b64) in scoped {
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&b64) else { continue };
-        let theirs = decode_sealed_rows(&bytes, key);
-        if theirs.is_empty() {
-            continue;
-        }
-        let mut siblings = read_sealed_rows(siblings_path(app, &scope), key);
-        let before: std::collections::HashSet<(String, i64)> = siblings.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
-        siblings.extend(theirs);
-        let siblings = reduce(siblings);
-        rows_adopted += siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+    for (scope, theirs) in rows_in_backup(key, manifest) {
+        let (siblings, adopted) = fold_rows(read_sealed_rows(siblings_path(app, &scope), key), theirs);
+        rows_adopted += adopted;
         write_sealed_rows(siblings_path(app, &scope), key, &siblings);
         update_cache(app, key, &scope, |mut all| {
             all.extend(siblings);
@@ -1389,6 +1430,90 @@ mod tests {
         assert_eq!(scopes_for_backup(Vec::new(), &[]), vec!["memory".to_string()], "what was kept is in the backup before any project exists");
     }
 
+
+    /// A backup of a made-up memory: every kind of thing that must come
+    /// back, sealed scope by scope the way a backup holds it.
+    fn made_up_backup(key: &[u8; 32]) -> (serde_json::Value, Vec<MemoryRow>) {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{confirm, forget, keep, meta_of, replace, Audience, Item, ItemType, Keep};
+        use base64::Engine;
+        let item = |id: &str, text: &str, seq: u32, audience: Audience| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text, item_type: ItemType::Detail, ptr: Ptr { c: 100, s: seq, t: 100, a: 0, b: 0 }, as_of: 10, by: "person", audience: Some(audience), kind: "exchange", why: "pressed", quote: None, subject: Some("sub-1".into()), now: 10 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let older = item("it-old", "Free delivery starts at $40.", 1, Audience::All);
+        let newer = item("it-new", "Free delivery starts at $60.", 2, Audience::All);
+        let confirmed = item("it-sure", "The oven is serviced on Mondays.", 3, Audience::Ai { ai: "uhCAkAtlas".into() });
+        let gone = item("it-gone", "The old supplier's phone number.", 4, Audience::All);
+        let memory = vec![
+            replace(&older, "it-new", Some("Free delivery starts at $60."), "tidy", 20).0,
+            newer.row.clone(),
+            confirm(&confirmed, 30).0,
+            forget(&gone, 40).0,
+            crate::memory_subjects::subject_row(&crate::memory_subjects::Subject { id: "sub-1".into(), name: "Suppliers".into(), name_accepted: true, from: crate::memory_subjects::MadeFrom::ByHand, merged_into: None }, 50),
+            crate::memory_use::conv_row(&crate::memory_use::ConvUse { started_at: 700, audience: None, private: true, excluded: Vec::new() }, 60),
+            crate::memory_use::conv_row(&crate::memory_use::ConvUse { started_at: 800, audience: Some(Audience::Ai { ai: "uhCAkAtlas".into() }), private: false, excluded: vec![3] }, 61),
+            crate::memory_notes::doc_row(&crate::memory_notes::DocUse { reach: "note".into(), doc_id: Some("doc-1".into()), content_id: None, line: None, folder: None, name: "prices.md".into(), at: 70 }, 70, false),
+            crate::memory_tidy::tidy_off_row(true, 80),
+        ];
+        let rule = |id: &str, scope: &str, text: &str| MemoryRow { scope: scope.into(), kind: "rule".into(), ..row(id, text, 90) };
+        let person = vec![rule("r-1", "person", "Answer in short sentences."), row("n-1", "A note, not a rule.", 91)];
+        let project = vec![rule("r-2", "project:p-shop", "Deploy with make ship."), rule("r-3", "project:p-shop", "Never push on Fridays.")];
+        let sealed = |rows: &[MemoryRow]| base64::engine::general_purpose::STANDARD.encode(seal_rows(key, rows).unwrap());
+        let backup = serde_json::json!({ "memory_rows": { "scopes": { "memory": sealed(&memory), "person": sealed(&person), "project:p-shop": sealed(&project) } } });
+        (backup, memory)
+    }
+
+    #[test]
+    fn everything_in_memory_comes_back_from_a_backup() {
+        use crate::memory_items::{items, ItemState};
+        let key = [9u8; 32];
+        let (backup, memory) = made_up_backup(&key);
+        let back = rows_in_backup(&key, &backup);
+        assert_eq!(back.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(), vec!["memory", "person", "project:p-shop"]);
+        // Onto a device that holds nothing: every row, exactly as it was.
+        let (rows, adopted) = fold_rows(Vec::new(), back[0].1.clone());
+        assert_eq!(adopted, memory.len());
+        for was in &memory {
+            assert_eq!(rows.iter().find(|r| r.id == was.id), Some(was), "{} comes back as it was", was.id);
+        }
+        let kept = items(&rows);
+        let of = |id: &str| kept.iter().find(|i| i.row.id == id).unwrap();
+        assert_eq!((of("it-old").meta.state, of("it-old").meta.replaced_by.as_deref(), of("it-old").meta.now.as_deref(), of("it-old").meta.state_by.as_str(), of("it-old").meta.state_at), (ItemState::Replaced, Some("it-new"), Some("Free delivery starts at $60."), "tidy", 20), "what replaced what, by what, and when");
+        assert_eq!(of("it-sure").meta.confirmed.as_ref().map(|c| (c.at, c.how.as_str())), Some((30, "pressed")), "what the person confirmed");
+        assert_eq!(of("it-sure").meta.audience, crate::memory_items::Audience::Ai { ai: "uhCAkAtlas".into() }, "who can use it");
+        assert_eq!(of("it-gone").meta.state, ItemState::Forgotten, "a forgotten item is still forgotten");
+        assert_eq!(of("it-new").meta.subject.as_deref(), Some("sub-1"));
+        let subjects = crate::memory_subjects::subjects(&rows);
+        assert_eq!(subjects.iter().map(|s| (s.name.as_str(), s.name_accepted)).collect::<Vec<_>>(), vec![("Suppliers", true)], "a subject and its accepted name");
+        let uses = crate::memory_use::conv_uses(&rows);
+        assert!(crate::memory_use::is_private(&uses, 700), "a private conversation is private again");
+        assert_eq!(uses.iter().find(|u| u.started_at == 800).map(|u| (u.audience.clone(), u.excluded.clone())), Some((Some(crate::memory_items::Audience::Ai { ai: "uhCAkAtlas".into() }), vec![3])), "a conversation for one AI, and a message not to be used");
+        assert_eq!(crate::memory_notes::doc_uses(&rows).iter().map(|(_, u)| u.name.as_str()).collect::<Vec<_>>(), vec!["prices.md"], "a note on the Not used list");
+        assert!(crate::memory_tidy::tidy_is_off(&rows), "tidying turned off stays off");
+        // What the person is told came back.
+        assert_eq!(counts_in_backup(&key, &backup), (3, 3), "three kept items (the forgotten one is not counted) and three rules, the project's among them");
+        assert_eq!(counts_of("person", &back[1].1), (0, 1), "a note in the person's scope is not a rule");
+    }
+
+    #[test]
+    fn a_second_restore_adds_nothing_and_a_row_that_already_arrived_is_not_doubled() {
+        let key = [9u8; 32];
+        let (backup, memory) = made_up_backup(&key);
+        let theirs = rows_in_backup(&key, &backup).remove(0).1;
+        let (once, first) = fold_rows(Vec::new(), theirs.clone());
+        let (twice, second) = fold_rows(once.clone(), theirs.clone());
+        assert_eq!((first, second), (memory.len(), 0));
+        assert_eq!(once.len(), twice.len(), "nothing is doubled");
+        // The same item confirmed on another device after the backup: its
+        // newer revision is the one that stays.
+        let later = MemoryRow { updated_at: 5_000, text: "Free delivery starts at $65.".into(), ..memory[1].clone() };
+        let (merged, adopted) = fold_rows(vec![later.clone()], theirs);
+        assert_eq!(merged.iter().filter(|r| r.id == "it-new").collect::<Vec<_>>(), vec![&later], "one row, the newer");
+        assert_eq!(adopted, memory.len() - 1, "the backup's older revision of it is not counted as restored");
+        // A backup read with another key gives nothing, and nothing is lost.
+        assert!(rows_in_backup(&[1u8; 32], &backup).is_empty());
+    }
 
     fn row(id: &str, text: &str, at: i64) -> MemoryRow {
         MemoryRow {

@@ -24,6 +24,7 @@ import { OpenBoard, openItems } from "../../components/memory/OpenBoard";
 import { DeleteAllMemory } from "../../components/memory/DeleteAllMemory";
 import { chosenProject, chooseProject, MEMORY_PROJECT_EVENT, type MemoryProject } from "../../utils/memoryProject";
 import { SetAsideList } from "../../components/memory/SetAsideList";
+import { RestoreNote } from "../../components/memory/RestoreNote";
 
 const TABS = [
   { id: "map", label: "Map" },
@@ -118,6 +119,8 @@ export default component$(() => {
               </p>
             </div>
           </div>
+
+          <RestoreNote class="mb-6" />
 
           <MemoryOwners
             selected={viewAi.value}
