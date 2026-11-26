@@ -611,6 +611,40 @@ export function keepNearBest<T extends { score: number }>(
   return hits.filter((h) => h.score >= best - margin);
 }
 
+/** A note changed more recently than everything chosen keeps a place. An
+ *  older note that discusses a subject at length scores far above the
+ *  current note that states today's value in one row, and by scores alone
+ *  the older one would be the only voice. Looked for among the first
+ *  NEWER_AMONG found, no further than NEWER_WITHIN below the best match,
+ *  and at most NEWER_AT_MOST of them, one passage a document. */
+export const NEWER_AMONG = 12;
+export const NEWER_WITHIN = 0.25;
+export const NEWER_AT_MOST = 2;
+
+/** `chosen` with the newer notes' passages added (`found` is everything the
+ *  search returned, best first). Never more than `room` passages: when
+ *  there is no room, the lowest of the chosen make way. */
+export function withNewerNotes<T extends { score: number; as_of: number; doc_id: string }>(
+  chosen: T[],
+  found: T[],
+  room: number,
+): T[] {
+  if (chosen.length === 0 || room <= 0) return chosen;
+  const day = (h: T) => Math.floor(h.as_of / 86_400);
+  const newest = Math.max(...chosen.map(day));
+  const best = Math.max(...chosen.map((h) => h.score));
+  const added: T[] = [];
+  for (const h of found.slice(0, NEWER_AMONG)) {
+    if (added.length >= Math.min(NEWER_AT_MOST, room - 1)) break;
+    if (chosen.includes(h) || h.score < best - NEWER_WITHIN || day(h) <= newest) continue;
+    if (added.some((a) => a.doc_id === h.doc_id)) continue;
+    added.push(h);
+  }
+  if (added.length === 0) return chosen;
+  const kept = [...chosen].sort((a, b) => b.score - a.score).slice(0, room - added.length);
+  return [...kept, ...added];
+}
+
 /**
  * The text to ALSO search by when a message leans on the conversation: a
  * follow-up ("and the updated quote?", "what about the second one?") names
@@ -699,12 +733,15 @@ export async function loadDocumentContextUsed(
     const room = Number.isFinite(roomTokens) ? roomTokens - tokens(cards) : Number.POSITIVE_INFINITY;
     const passages = Number.isFinite(room) ? Math.max(0, Math.min(maxPassages, Math.floor(room / 300))) : maxPassages;
     if (queryVec && passages > 0) {
-      let hits = await corpusRecall(aiId, queryVec, passages);
+      // More is asked for than is given: the rest is where a newer note is
+      // looked for (withNewerNotes).
+      const asked = Math.max(passages, NEWER_AMONG);
+      let hits = await corpusRecall(aiId, queryVec, asked);
       if (followUpVec) {
         // The message alone AND the message in its conversation: a question
         // that stands by itself still wins on its own words; a follow-up is
         // found through what it follows.
-        const more = await corpusRecall(aiId, followUpVec, passages);
+        const more = await corpusRecall(aiId, followUpVec, asked);
         const seen = new Set<string>();
         hits = [...hits, ...more]
           .sort((a, b) => b.score - a.score)
@@ -714,8 +751,10 @@ export async function loadDocumentContextUsed(
             seen.add(k);
             return true;
           })
-          .slice(0, passages);
+          .slice(0, asked);
       }
+      const everyFound = hits;
+      hits = hits.slice(0, passages);
       // Only what is CLOSE to the best match. The floor alone lets almost
       // anything through (unrelated text scores 0.45-0.6 with this embedding
       // model; one question had 176 passages above it), and recall fills every
@@ -723,7 +762,7 @@ export async function loadDocumentContextUsed(
       // unrelated one. A passage has to be within RECALL_MARGIN of the top.
       const found = hits.length;
       const top = found ? Math.max(...hits.map((h) => h.score)) : 0;
-      hits = keepNearBest(hits, RECALL_MARGIN, bestAtLeast);
+      hits = withNewerNotes(keepNearBest(hits, RECALL_MARGIN, bestAtLeast), everyFound, passages);
       // Scores only, never a name or a passage - for tuning the two numbers.
       console.log(
         `[Memory] documents: best match ${top.toFixed(2)} (bar ${bestAtLeast}) - ${hits.length} of ${found} passages given`,

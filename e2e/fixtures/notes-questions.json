@@ -1,0 +1,165 @@
+{
+ "changed": {
+  "handbook.md": "2026-10-20",
+  "pricing-review-2025.md": "2025-03-10",
+  "loan-bike-plan.md": "2025-06-02",
+  "warranty-policy-draft.md": "2024-11-15",
+  "meeting-notes-2025-09.md": "2025-09-22",
+  "suppliers.md": "2026-08-01",
+  "workshop-tools.md": "2026-05-12",
+  "staff-rota.md": "2026-09-03",
+  "events-2026.md": "2026-07-15",
+  "insurance.md": "2026-01-09",
+  "e-bike-servicing.md": "2026-06-25",
+  "counter-notes.md": "2026-04-02"
+ },
+ "questions": [
+  {
+   "n": 1,
+   "type": "D",
+   "question": "What is our account number with the tyre supplier?",
+   "keys": [
+    [
+     "CR-20417"
+    ]
+   ],
+   "source": "suppliers.md",
+   "stale": []
+  },
+  {
+   "n": 2,
+   "type": "D",
+   "question": "How often are the torque wrenches calibrated?",
+   "keys": [
+    [
+     "6 months",
+     "six months"
+    ]
+   ],
+   "source": "workshop-tools.md",
+   "stale": []
+  },
+  {
+   "n": 3,
+   "type": "D",
+   "question": "How much did the spring ride raise?",
+   "keys": [
+    [
+     "1,340",
+     "1340"
+    ]
+   ],
+   "source": "events-2026.md",
+   "stale": []
+  },
+  {
+   "n": 4,
+   "type": "D",
+   "question": "What is the excess on our insurance?",
+   "keys": [
+    [
+     "750"
+    ]
+   ],
+   "source": "insurance.md",
+   "stale": []
+  },
+  {
+   "n": 5,
+   "type": "D",
+   "question": "Which e-bike motors can we update the firmware on?",
+   "keys": [
+    [
+     "Brisa"
+    ],
+    [
+     "Ondo"
+    ]
+   ],
+   "source": "e-bike-servicing.md",
+   "stale": []
+  },
+  {
+   "n": 6,
+   "type": "D",
+   "question": "Who is in the workshop on Saturdays?",
+   "keys": [
+    [
+     "Imani"
+    ],
+    [
+     "Dov"
+    ]
+   ],
+   "source": "staff-rota.md",
+   "stale": []
+  },
+  {
+   "n": 7,
+   "type": "E",
+   "question": "What is the workshop labour rate?",
+   "keys": [
+    [
+     "$95",
+     "95 an hour",
+     "95 per hour"
+    ]
+   ],
+   "source": "handbook.md",
+   "stale": [
+    "$70",
+    "$85",
+    "$60"
+   ]
+  },
+  {
+   "n": 8,
+   "type": "E",
+   "question": "How many loan bikes do we have?",
+   "keys": [
+    [
+     "4 loan",
+     "four loan",
+     "4.",
+     "four.",
+     "**4**",
+     "is 4",
+     "have 4",
+     "have four"
+    ]
+   ],
+   "source": "handbook.md",
+   "stale": [
+    "2 loan",
+    "two loan",
+    "3 loan",
+    "three loan"
+   ]
+  },
+  {
+   "n": 9,
+   "type": "E",
+   "question": "How long is the warranty on our repairs?",
+   "keys": [
+    [
+     "90 day",
+     "90-day",
+     "ninety"
+    ]
+   ],
+   "source": "handbook.md",
+   "stale": [
+    "30 day",
+    "30-day"
+   ]
+  },
+  {
+   "n": 10,
+   "type": "F",
+   "question": "What is the shop's sales tax registration number?",
+   "keys": [],
+   "source": "",
+   "stale": []
+  }
+ ]
+}
