@@ -1063,6 +1063,8 @@ pub struct QuestionView {
     pub older: ItemView,
     pub newer: ItemView,
     pub now: String,
+    /// See `memory_tidy::Question::kept`.
+    pub kept: bool,
 }
 
 /// The questions that wait for the person. One about an item that is no
@@ -1075,7 +1077,7 @@ pub fn memory_questions(app: tauri::AppHandle) -> Result<Vec<QuestionView>, Stri
     let live = |id: &str| have.iter().find(|i| i.row.id == id && matches!(i.meta.state, ItemState::Current | ItemState::Open));
     Ok(crate::memory_tidy::questions(&rows)
         .into_iter()
-        .filter_map(|q| Some(QuestionView { older: view(&live(&q.older)?.row)?, newer: view(&live(&q.newer)?.row)?, id: q.id, now: q.now }))
+        .filter_map(|q| Some(QuestionView { older: view(&live(&q.older)?.row)?, newer: view(&live(&q.newer)?.row)?, id: q.id, now: q.now, kept: q.kept }))
         .collect())
 }
 

@@ -363,6 +363,37 @@ pub struct Question {
     /// What the judgment wrote as true now.
     pub now: String,
     pub at: i64,
+    /// The person's confirmation and a replacement by tidying were made on
+    /// two devices that had not heard of each other: the confirmed item
+    /// stood, and this asks about the replacement that did not happen.
+    #[serde(default)]
+    pub kept: bool,
+}
+
+/// Replacements by tidying that gave way to a confirmation it had not seen
+/// (the merge keeps what the person confirmed): each is asked about once.
+/// Read from the ledger and the items as they stand, so it shows the same
+/// on every device and closes with any later entry for the pair.
+fn kept_versions(rows: &[MemoryRow], all: &[Judged]) -> Vec<Question> {
+    let items: Vec<Item> = rows.iter().filter(|r| !r.deleted).filter_map(|r| Some(Item { row: r.clone(), meta: crate::memory_items::meta_of(r)? })).collect();
+    let find = |id: &str| items.iter().find(|i| i.row.id == id);
+    all.iter()
+        .filter(|j| j.outcome == "replaced")
+        .filter(|j| !all.iter().any(|l| l.pair == j.pair && l.at > j.at))
+        .filter_map(|j| {
+            let (older, newer) = in_order(find(&j.pair.0)?, find(&j.pair.1)?);
+            let confirmed = older.meta.confirmed.as_ref()?;
+            let stands = older.meta.state == ItemState::Current && confirmed.at < j.at && matches!(newer.meta.state, ItemState::Current | ItemState::Open);
+            stands.then(|| Question {
+                id: format!("kept-{}-{}-{}", j.pair.0, j.pair.1, j.at),
+                older: older.row.id.clone(),
+                newer: newer.row.id.clone(),
+                now: newer.meta.now.clone().unwrap_or_else(|| newer.row.text.clone()),
+                at: j.at,
+                kept: true,
+            })
+        })
+        .collect()
 }
 
 /// The questions not answered yet, oldest first.
@@ -383,9 +414,10 @@ pub(crate) fn questions(rows: &[MemoryRow]) -> Vec<Question> {
             let older = s.get("older")?.as_str()?.to_string();
             let newer = if j.pair.0 == older { j.pair.1.clone() } else { j.pair.0.clone() };
             let answered = all.iter().any(|a| a.outcome == "answered" && a.pair == j.pair && a.at >= j.at);
-            (!answered).then(|| Question { id: r.id.clone(), older, newer, now: s.get("now").and_then(|v| v.as_str()).unwrap_or_default().to_string(), at: j.at })
+            (!answered).then(|| Question { id: r.id.clone(), older, newer, now: s.get("now").and_then(|v| v.as_str()).unwrap_or_default().to_string(), at: j.at, kept: false })
         })
         .collect();
+    out.extend(kept_versions(rows, &all));
     out.sort_by(|a, b| a.at.cmp(&b.at).then(a.id.cmp(&b.id)));
     out
 }
@@ -706,6 +738,37 @@ mod tests {
         let row = asked_row(&j, "it-b", "They moved to the medium plan.");
         assert_eq!(row.structured.as_ref().unwrap()["now"], "They moved to the medium plan.");
         assert_eq!(ledger(&[row]), vec![j], "the entry reads the same with the sentence beside it");
+    }
+
+    #[test]
+    fn a_replacement_that_gave_way_to_a_confirmation_is_asked_about() {
+        // On one device the person confirms an item; on another, which has
+        // not heard, tidying replaces it a little later. Merged, the
+        // confirmed item stands and the other device's ledger entry remains.
+        let (kept_row, _) = keep(&[], Keep { id: "it-small".into(), text: "Use the small plan.", item_type: ItemType::Decision, ptr: Ptr { c: 1, s: 0, t: 1, a: 0, b: 5 }, as_of: NOW - 30 * DAY, by: "ai:juno", audience: None, kind: "exchange", why: "settled", quote: None, subject: None, now: NOW - 30 * DAY }).unwrap();
+        let unconfirmed = Item { meta: meta_of(&kept_row).unwrap(), row: kept_row };
+        assert!(unconfirmed.meta.confirmed.is_none());
+        let new = item("it-medium", "We moved to the medium plan.", NOW - DAY, "ai:juno");
+        let (confirmed, _) = crate::memory_items::confirm(&unconfirmed, NOW - 3000);
+        let Outcome::Replaced { older, newer, judged, .. } = apply(&unconfirmed, &new, &Verdict::Replaces { now: "They use the medium plan.".into() }, NOW - 1000) else { panic!("an unconfirmed item is replaced") };
+        let merged = crate::memory_rows::reduce(vec![unconfirmed.row.clone(), confirmed.clone(), older.clone(), newer.clone(), new.row.clone(), ledger_row(&judged)]);
+        let qs = questions(&merged);
+        assert_eq!(qs.len(), 1, "one question about the replacement that did not happen");
+        let q = &qs[0];
+        assert_eq!((q.older.as_str(), q.newer.as_str(), q.now.as_str(), q.kept), ("it-small", "it-medium", "They use the medium plan.", true));
+        // Any answer closes it, on every device.
+        let get = |id: &str| merged.iter().find(|r| r.id == id).map(|r| Item { row: r.clone(), meta: meta_of(r).unwrap() }).unwrap();
+        let got = answer(q, &get("it-small"), &get("it-medium"), Answer::Both, NOW);
+        let mut after = merged.clone();
+        after.push(ledger_row(&got.judged));
+        assert!(questions(&after).is_empty());
+        // Where tidying did replace it (nothing was confirmed), nothing is asked.
+        let plain = crate::memory_rows::reduce(vec![unconfirmed.row.clone(), older, newer, new.row.clone(), ledger_row(&judged)]);
+        assert!(questions(&plain).is_empty());
+        // And an undo of the replacement is not a question either.
+        let mut undone_rows = merged.clone();
+        undone_rows.push(ledger_row(&not_replaced_entry("it-small", "it-medium", NOW)));
+        assert!(questions(&undone_rows).is_empty());
     }
 
     #[test]

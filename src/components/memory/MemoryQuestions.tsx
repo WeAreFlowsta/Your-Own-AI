@@ -7,6 +7,8 @@ interface Question {
   older: KeptItem;
   newer: KeptItem;
   now: string;
+  /** Confirmed on one device while tidying on another replaced it: the confirmed item stood. */
+  kept?: boolean;
 }
 
 /** Sent when memory may have a new question (a tidying pass ended, a reply finished). */
@@ -62,9 +64,15 @@ export const MemoryQuestions = component$<{ limit?: number }>((props) => {
         const confirmedAt = (q.older.item.confirmed as { at?: number } | null | undefined)?.at ?? q.older.asOf;
         return (
           <div key={q.id} class="text-xs leading-relaxed text-[var(--text-muted)]" data-testid="memory-question">
-            <span>
-              You confirmed "{short(q.older.text)}" on {dayOf(confirmedAt)}. Since then, on {dayOf(q.newer.asOf)}: "{short(q.newer.text)}"
-            </span>
+            {q.kept ? (
+              <span data-kept="true">
+                Your version was kept. You confirmed "{short(q.older.text)}" on {dayOf(confirmedAt)}. Tidying on another of your devices then replaced it with "{short(q.now || q.newer.text)}", but what you confirmed wins, so it is current again and the other is kept beside it. Are both still true?
+              </span>
+            ) : (
+              <span>
+                You confirmed "{short(q.older.text)}" on {dayOf(confirmedAt)}. Since then, on {dayOf(q.newer.asOf)}: "{short(q.newer.text)}"
+              </span>
+            )}
             <span class="ml-2 inline-flex items-center gap-3">
               <button type="button" class={link} disabled={busy.value === q.id} onClick$={() => answer(q.id, 'replace')} data-testid="question-replace">
                 Replace it
