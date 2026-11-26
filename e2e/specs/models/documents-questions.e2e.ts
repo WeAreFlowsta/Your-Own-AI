@@ -103,6 +103,8 @@ describe("questions a notes folder answers", () => {
     let kept: NoteItem | undefined;
     await browser.waitUntil(async () => !!(kept = (await noteItems()).find((i) => i.text.includes("CR-20417"))), { timeout: 180_000, interval: 3_000, timeoutMsg: "no row was kept for the line that answered" });
     expect(kept!.item.source.doc?.name).toBe("suppliers.md");
+    // The sentence that answered, not the passage around it.
+    expect(kept!.text).toBe("Our account number is CR-20417.");
     expect(kept!.item.confirmed ?? null).toBe(null);
     expect(kept!.item.subject).toBeTruthy();
     await browser.url("tauri://localhost/your-memory/");

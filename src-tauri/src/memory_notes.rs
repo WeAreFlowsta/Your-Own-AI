@@ -78,6 +78,35 @@ fn tidy_line(line: &str) -> String {
     t.trim_start_matches(|c: char| c == '#' || c == '-' || c == '*' || c == '>' || c == ' ').replace("**", "").trim().to_string()
 }
 
+/// A passage as the lines and sentences it is made of. The library keeps
+/// a paragraph's lines joined, headings and all, and a table's rows apart:
+/// a table row stays whole, and running text is cut at its headings and
+/// at the end of each sentence.
+fn pieces(passage: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in passage.lines() {
+        if line.trim_start().starts_with('|') {
+            out.push(line.to_string());
+            continue;
+        }
+        for part in line.split(" ## ").flat_map(|p| p.split(" # ")).flat_map(|p| p.split(" - ")) {
+            let mut sentence = String::new();
+            let chars: Vec<char> = part.chars().collect();
+            for (i, c) in chars.iter().enumerate() {
+                sentence.push(*c);
+                let ends = matches!(c, '.' | '!' | '?') && chars.get(i + 1) == Some(&' ') && chars.get(i + 2).is_some_and(|n| n.is_uppercase() || n.is_ascii_digit() || *n == '"');
+                if ends {
+                    out.push(std::mem::take(&mut sentence));
+                }
+            }
+            if !sentence.trim().is_empty() {
+                out.push(sentence);
+            }
+        }
+    }
+    out
+}
+
 /// The line of a passage that a reply's answer came from: the one sharing
 /// the most telling words with the reply. A line with a figure in it must
 /// share a figure, and any line must share at least two telling words, so a
@@ -85,8 +114,8 @@ fn tidy_line(line: &str) -> String {
 pub(crate) fn answering_line(passage: &str, reply: &str) -> Option<String> {
     let said: std::collections::HashSet<String> = telling(reply).into_iter().collect();
     let mut best: Option<(usize, String)> = None;
-    for raw in passage.lines() {
-        let line = tidy_line(raw);
+    for raw in pieces(passage) {
+        let line = tidy_line(&raw);
         if line.chars().count() < 8 {
             continue;
         }
@@ -345,7 +374,11 @@ pub async fn memory_note_answered(app: tauri::AppHandle, input: crate::memory_it
             let note = NoteRef { doc_id: g.doc_id.clone(), idx: *idx, name: doc.name.clone(), changed: doc.changed, content_id: doc.content_id.clone(), asked: Some(asked.clone()), state: None };
             let id = format!("it-n-{}", &blake3::hash(format!("{}\n{line}", g.doc_id).as_bytes()).to_hex()[..20]);
             let row = note_item(id.clone(), &line, note, Some(ptr), now);
-            let row = crate::memory_subjects::settle(&app, &key, row).await;
+            // The subject is the conversation's, named with the day the
+            // question was asked; the item keeps the day its file changed.
+            let file_day = row.as_of;
+            let mut row = crate::memory_subjects::settle(&app, &key, MemoryRow { as_of: now, ..row }).await;
+            row.as_of = file_day;
             let saved = crate::memory_rows::save_and_cache(&app, row).await?;
             crate::memory_items::log_change(
                 &app,
@@ -524,6 +557,12 @@ mod tests {
         assert_eq!(answering_line(HANDBOOK, "The workshop labour rate is $70 an hour."), None);
         // The reply only names the subject.
         assert_eq!(answering_line(HANDBOOK, "I could not find the workshop details."), None);
+        // Running text as the library keeps it (a paragraph's lines joined): the sentence.
+        let joined = "# Suppliers ## Tyres and tubes Calloway Rubber. Our account number is CR-20417. Orders in by Tuesday noon are delivered on Thursday. Minimum order $250. The rep is Oksana. ## Chains, cassettes and cables Pindar Components.";
+        assert_eq!(answering_line(joined, "Our account number with the tyre supplier, Calloway Rubber, is CR-20417.").as_deref(), Some("Our account number is CR-20417."));
+        // A heading joined to a table's first row does not hide the rows after it.
+        let mixed = format!("# Handbook The handbook is the current word. ## The shop at a glance {}", HANDBOOK.trim_start_matches("## The shop at a glance\n\n"));
+        assert_eq!(answering_line(&mixed, "The workshop labour rate is $95 an hour.").as_deref(), Some("Workshop labour rate: $95 an hour"));
         // Prose: the sentence line with the figure.
         let prose = "# Insurance\n\nInsurer: Marlow Mutual. The policy renews on March 14 each year.\n\n- The excess on any claim is $750.\n- Customers' bikes in our care are covered up to $6,000 each.";
         assert_eq!(answering_line(prose, "Based on insurance.md, the excess on any claim is $750.").as_deref(), Some("The excess on any claim is $750."));
