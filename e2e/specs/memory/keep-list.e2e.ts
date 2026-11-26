@@ -16,6 +16,8 @@ describe("things a person kept", () => {
     this.timeout(1_800_000);
     const list = JSON.parse(readFileSync(FILE, "utf8")) as Entry[];
     await waitForChat();
+    // A kept profile's records take a while to open: wait until memory answers.
+    await browser.waitUntil(async () => invoke<unknown[]>("memory_items").then(() => true, () => false), { timeout: 600_000, interval: 5_000, timeoutMsg: "memory did not answer within ten minutes" });
     let kept = 0;
     let already = 0;
     for (const e of list) {
