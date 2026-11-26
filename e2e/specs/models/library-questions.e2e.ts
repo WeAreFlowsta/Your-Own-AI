@@ -16,9 +16,53 @@ const ONLY = (process.env.YOAI_E2E_DOC_ONLY ?? "").split(",").filter(Boolean).ma
 
 const lastAssistant = '(//*[@data-testid="chat-message"][@data-role="assistant"])[last()]';
 
+/** Where the search itself puts the document that holds the answer: its
+ *  best passage's place among the first 300, and the place of the first
+ *  passage holding the answer's words, with their scores. Search only; no
+ *  model reply. Runs when YOAI_E2E_DOC_RANKS is set. */
+describe("where the search ranks the answering document", () => {
+  it("prints the place of the source document for each question", async function () {
+    if (!FILE || !process.env.YOAI_E2E_DOC_RANKS) this.skip();
+    this.timeout(3_600_000);
+    const all = JSON.parse(readFileSync(FILE, "utf8")) as Q[];
+    await waitForChat();
+    const rows: Record<string, unknown>[] = [];
+    for (const q of process.env.YOAI_E2E_DOC_DUMP ? all : all.filter((x) => x.source)) {
+      const row = (await browser.executeAsync(
+        (question: string, source: string, keys: string[][], prefix: string, model: string, dump: boolean, done: (v: unknown) => void) => {
+          (async () => {
+            const t = (window as any).__TAURI__;
+            const store = await t.store.load(await t.core.invoke("profile_store_path", { name: "ai-data.json" }));
+            const aiId = (((await store.get("custom-ais")) || []) as { id?: string }[])[0]?.id ?? "";
+            const [vec] = await t.core.invoke("embed_texts", { texts: [prefix + question], model });
+            const hits = (await t.core.invoke("corpus_recall", { aiId, query: vec, maxPassages: 300 })) as { filename: string; text: string; score: number; as_of: number }[];
+            const holds = (text: string) => keys.length > 0 && keys.every((g) => g.some((k) => text.toLowerCase().includes(k.toLowerCase())));
+            const src = hits.findIndex((h) => h.filename === source);
+            const ans = hits.findIndex((h) => holds(h.text));
+            const ansSrc = hits.findIndex((h) => h.filename === source && holds(h.text));
+            return {
+              // Every candidate, for trying other orderings outside the app.
+              candidates: dump ? hits.map((h) => ({ f: h.filename, s: h.score, d: h.as_of, t: h.text })) : undefined,
+              top: hits[0]?.score ?? 0,
+              eighth: hits[7]?.score ?? 0,
+              source: src < 0 ? null : { place: src + 1, score: hits[src].score },
+              answer: ans < 0 ? null : { place: ans + 1, score: hits[ans].score, file: hits[ans].filename, day: new Date(hits[ans].as_of * 1000).toISOString().slice(0, 10) },
+              answerInSource: ansSrc < 0 ? null : { place: ansSrc + 1, score: hits[ansSrc].score },
+            };
+          })().then(done, (e) => done({ error: String(e) }));
+        },
+        q.question, q.source, q.keys, "task: search result | query: ", "embeddinggemma-300M-Q8_0.gguf", !!process.env.YOAI_E2E_DOC_DUMP,
+      )) as Record<string, unknown>;
+      rows.push({ n: q.n, type: q.type, ...row });
+      console.log(`e2e: RANK Q${q.n} ${q.type}: ${JSON.stringify({ ...row, candidates: undefined })}`);
+    }
+    if (OUT) writeFileSync(resolve(OUT, "document-question-ranks.json"), JSON.stringify(rows, null, 1));
+  });
+});
+
 describe("questions answered from the library", () => {
   it("asks each question and records what was given and what was said", async function () {
-    if (!FILE) this.skip();
+    if (!FILE || process.env.YOAI_E2E_DOC_RANKS === "only") this.skip();
     this.timeout(6 * 3_600_000);
     const all = JSON.parse(readFileSync(FILE, "utf8")) as Q[];
     const questions = ONLY.length ? all.filter((q) => ONLY.includes(q.n)) : all;
