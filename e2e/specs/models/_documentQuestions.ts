@@ -54,7 +54,7 @@ export const count = (results: DocResult[], f: (r: DocResult) => boolean) => res
 
 export function summary(results: DocResult[]): string {
   const c = (f: (r: DocResult) => boolean) => count(results, f);
-  return `details right ${c((r) => r.type === "D" && r.right)} of ${c((r) => r.type === "D")}; changed over time, current value given ${c((r) => r.type === "E" && r.right && !r.stale)} of ${c((r) => r.type === "E")} (an earlier value said ${c((r) => r.type === "E" && r.stale)}); source document given ${c((r) => r.type !== "F" && r.sourceGiven)} of ${c((r) => r.type !== "F")}; traps: read the replies`;
+  return `details right ${c((r) => r.type === "D" && r.right)} of ${c((r) => r.type === "D")}; changed over time, the current value is in the reply ${c((r) => r.type === "E" && r.right)} of ${c((r) => r.type === "E")} (an earlier value is named in ${c((r) => r.type === "E" && r.stale)}: read those); source document given ${c((r) => r.type !== "F" && r.sourceGiven)} of ${c((r) => r.type !== "F")}; traps: read the replies`;
 }
 
 /** Where the search itself puts the document that holds the answer: its

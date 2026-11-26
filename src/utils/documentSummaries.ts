@@ -180,6 +180,10 @@ async function writeCard(
   // The reduce pass counts as one more step, so the bar reaches the end
   // only when the card itself is written.
   for (const [i, part] of parts.entries()) {
+    // A long document's card is many steps: between them the computer is
+    // asked again, so a card under way steps aside when the person comes
+    // back (their question's search shares this processor).
+    if (i > 0) await waitForCalm(CARDS_JOB);
     onPart?.(i, parts.length + 1);
     const note = (await run(PART_SYSTEM, `${head} (part ${i + 1})\n\n${part}`, 120)).trim();
     if (note) notes.push(`Part ${i + 1}: ${note}`);
