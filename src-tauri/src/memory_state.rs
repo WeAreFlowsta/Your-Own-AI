@@ -149,7 +149,12 @@ pub(crate) fn left_out<'a>(stand: &'a Stand, conversation: i64, seq: u32, at_mic
 
 /// `stand`, from this device's stores.
 pub(crate) fn stand_for(app: &tauri::AppHandle, question: &[f32], memory_rows: &[crate::memory_rows::MemoryRow], who: &Asking) -> Stand {
-    let items = crate::memory_items::items(memory_rows);
+    // A measured run holds the search to conversations begun before a
+    // moment (development builds only); items kept from later ones are
+    // left out by the same bound, so the run is not handed its own
+    // questions as memory.
+    let until = crate::memory_reading::SEARCH_UNTIL.load(std::sync::atomic::Ordering::Relaxed);
+    let items: Vec<Item> = crate::memory_items::items(memory_rows).into_iter().filter(|i| i.meta.source.ptr.is_none_or(|p| p.c <= until)).collect();
     if items.is_empty() {
         return Stand::default();
     }

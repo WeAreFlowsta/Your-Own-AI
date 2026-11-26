@@ -652,6 +652,22 @@ pub(crate) fn note_items(held: &[Held], near: &[(usize, f32)]) -> Vec<Held> {
 pub(crate) fn note_order(held: &[Held], near: &[(usize, f32)]) -> Vec<usize> {
     let mut close: Vec<(usize, f32)> = near.iter().copied().filter(|(i, s)| *s >= NOTE_FLOOR && *i < held.len()).collect();
     close.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // The same sentence held twice takes one place: the confirmed one,
+    // else the newer.
+    let same = |a: usize, b: usize| collapse(&held[a].sentence).eq_ignore_ascii_case(&collapse(&held[b].sentence));
+    let mut once: Vec<(usize, f32)> = Vec::new();
+    for (i, s) in close {
+        match once.iter_mut().find(|(o, _)| same(*o, i)) {
+            Some(o) => {
+                let (old, new) = (&held[o.0], &held[i]);
+                if (new.confirmed, new.as_of) > (old.confirmed, old.as_of) {
+                    o.0 = i;
+                }
+            }
+            None => once.push((i, s)),
+        }
+    }
+    let mut close = once;
     close.truncate(NOTE_ITEMS);
     let mut picked: Vec<usize> = close.into_iter().map(|(i, _)| i).collect();
     picked.sort_by(|a, b| held[*b].as_of.cmp(&held[*a].as_of));
@@ -1058,6 +1074,13 @@ mod tests {
         let picked: Vec<String> = note_items(&held, &near).into_iter().map(|h| h.sentence).collect();
         assert_eq!(picked, vec!["Item 3.", "Item 2.", "Item 0."], "the three closest over the floor, newest first");
         assert!(note_items(&held, &[(0, 0.5), (1, 0.3)]).is_empty(), "nothing close enough: no note");
+        // The same sentence held three times takes one place, and the confirmed one speaks.
+        let h = |s: &str, as_of: i64, confirmed: bool| Held { sentence: s.into(), as_of, confirmed };
+        let twice = [h("Free delivery starts at $60.", 5, false), h("free delivery starts at  $60.", 3, true), h("Free delivery starts at $60.", 9, false), h("Orders under $60 keep the $6 fee.", 1, false), h("The van runs on Tuesdays.", 2, false)];
+        let picked = note_items(&twice, &[(0, 0.9), (1, 0.88), (2, 0.87), (3, 0.7), (4, 0.6)]);
+        assert_eq!(picked.len(), 3, "{picked:?}");
+        assert_eq!(picked.iter().filter(|p| p.sentence.to_lowercase().starts_with("free delivery")).count(), 1);
+        assert!(picked.iter().any(|p| p.confirmed && p.as_of == 3));
     }
 
     #[test]

@@ -153,6 +153,26 @@ pub(crate) fn check(reply: &str, given: &[String]) -> QuoteCheck {
 /// nothing: a few words are not a decision or a detail.
 const KEEP_AT_LEAST: usize = 20;
 
+/// Are these words, wherever they stand in the conversation, a question
+/// that was asked there? A question repeated back settles nothing and is
+/// not kept: what is kept is read later as something that is so.
+fn only_asked(needle: &[char], said: &[char]) -> bool {
+    if needle.last() == Some(&'?') {
+        return true;
+    }
+    let mut found = false;
+    for at in 0..=said.len().saturating_sub(needle.len()) {
+        if said[at..].starts_with(needle) {
+            found = true;
+            let after = said[at + needle.len()..].iter().find(|c| !matches!(c, '"' | '\'' | ' ' | ')' | '*' | '_'));
+            if after != Some(&'?') {
+                return false;
+            }
+        }
+    }
+    found
+}
+
 /// What a reply's quotations keep: for each exchange it was given and
 /// quoted word for word (no slip at all), the longest such quotation and
 /// the place of the found message. The words must be the conversation's
@@ -167,7 +187,7 @@ pub(crate) fn quoted_exactly(reply: &str, given: &GivenRecord, texts: &[String])
             .iter()
             .filter(|q| {
                 let needle = fold(q);
-                needle.len() >= KEEP_AT_LEAST && found_within(&needle, &said, 0)
+                needle.len() >= KEEP_AT_LEAST && found_within(&needle, &said, 0) && !only_asked(&needle, &said)
             })
             .max_by_key(|q| q.chars().count());
         if let Some(q) = best {
@@ -476,6 +496,15 @@ mod tests {
         // A few words keep nothing; neither does a reply with no quotation.
         assert!(quoted_exactly("You said \"from Monday\" I think.", &rec, &texts).is_empty());
         assert!(quoted_exactly("The threshold is $60.", &rec, &texts).is_empty());
+        // A question that was asked there, repeated back, keeps nothing;
+        // the same words also said as a statement do.
+        let asked = vec!["[2026-03-03, conversation \"Van\"]\nThey asked: \u{201C}did the free delivery threshold go up?\u{201D}\nAI: Not yet.".to_string()];
+        let mut q = record(ran(1, 1));
+        q.exchanges = vec![GivenExchange { before: None, hit: ptr(6), after: None, score: 0.7, quoted: false }];
+        assert!(quoted_exactly("You asked \"did the free delivery threshold go up\" on March 3.", &q, &asked).is_empty());
+        assert!(quoted_exactly("You asked \"did the free delivery threshold go up?\" on March 3.", &q, &asked).is_empty());
+        let both = vec![format!("{}\nThey said: the free delivery threshold go up, yes.", asked[0])];
+        assert_eq!(quoted_exactly("\"the free delivery threshold go up\"", &q, &both).len(), 1);
         // Words that are only in a passage's heading are not the conversation's.
         let headed = vec!["[2026-03-03, conversation \"Delivery threshold for the van\"]\nThey said: raise it".to_string()];
         let mut one = record(ran(1, 1));
