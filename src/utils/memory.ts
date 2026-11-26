@@ -616,14 +616,16 @@ export function keepNearBest<T extends { score: number }>(
  *  current note that states today's value in one row, and by scores alone
  *  the older one would be the only voice. Looked for among the first
  *  NEWER_AMONG found, no further than NEWER_WITHIN below the best match,
- *  and at most NEWER_AT_MOST of them, one passage a document. */
+ *  and at most NEWER_AT_MOST of them, one passage a document. Only into
+ *  room the chosen passages left: where a library is large the scores lie
+ *  close together and the places are full, and there the scores decide (a
+ *  note edited today would otherwise ride along with every question). */
 export const NEWER_AMONG = 12;
 export const NEWER_WITHIN = 0.25;
 export const NEWER_AT_MOST = 2;
 
 /** `chosen` with the newer notes' passages added (`found` is everything the
- *  search returned, best first). Never more than `room` passages: when
- *  there is no room, the lowest of the chosen make way. */
+ *  search returned, best first), up to `room` passages in all. */
 export function withNewerNotes<T extends { score: number; as_of: number; doc_id: string }>(
   chosen: T[],
   found: T[],
@@ -635,14 +637,12 @@ export function withNewerNotes<T extends { score: number; as_of: number; doc_id:
   const best = Math.max(...chosen.map((h) => h.score));
   const added: T[] = [];
   for (const h of found.slice(0, NEWER_AMONG)) {
-    if (added.length >= Math.min(NEWER_AT_MOST, room - 1)) break;
+    if (added.length >= Math.min(NEWER_AT_MOST, room - chosen.length)) break;
     if (chosen.includes(h) || h.score < best - NEWER_WITHIN || day(h) <= newest) continue;
     if (added.some((a) => a.doc_id === h.doc_id)) continue;
     added.push(h);
   }
-  if (added.length === 0) return chosen;
-  const kept = [...chosen].sort((a, b) => b.score - a.score).slice(0, room - added.length);
-  return [...kept, ...added];
+  return added.length === 0 ? chosen : [...chosen, ...added];
 }
 
 /**

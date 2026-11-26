@@ -1776,7 +1776,9 @@ export function useChat(props: UseChatProps) {
             ? await import("../utils/embeddings").then(({ embedQueryBounded }) => embedQueryBounded(followUp)).catch(() => null)
             : null;
           const recalled = await loadDocumentContextUsed(
-            selectedAi.id, qvec, room, 8, followUpVec,
+            // A large window (or a reply made online) has room for more
+            // passages, as it has for more of what memory finds.
+            selectedAi.id, qvec, room, isOnlineModel || isExternalModel || roomCtx >= 16_000 ? 12 : 8, followUpVec,
             addressesInQuestion > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
           );
           docContext = recalled.text;

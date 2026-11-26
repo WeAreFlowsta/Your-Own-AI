@@ -34,8 +34,8 @@ const h = (score, day, doc_id) => ({ score, as_of: day * DAY + 100, doc_id });
   assert.deepEqual(chosen.map((x) => x.score), [0.69, 0.62, 0.55]);
   // The current note's best passage joins, once; a newer note too far below the best does not.
   assert.deepEqual(withNewerNotes(chosen, found, 8).map((x) => x.score), [0.69, 0.62, 0.55, 0.47]);
-  // No room: the lowest of the chosen makes way.
-  assert.deepEqual(withNewerNotes(chosen, found, 3).map((x) => x.score), [0.69, 0.62, 0.47]);
+  // No room left by what was chosen: the scores decide, nothing makes way.
+  assert.deepEqual(withNewerNotes(chosen, found, 3).map((x) => x.score), [0.69, 0.62, 0.55]);
   // One passage only: it stays the best match.
   assert.deepEqual(withNewerNotes(chosen.slice(0, 1), found, 1).map((x) => x.score), [0.69]);
 }
