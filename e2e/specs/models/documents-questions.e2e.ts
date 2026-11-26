@@ -120,6 +120,8 @@ describe("questions a notes folder answers", () => {
     expect(await textOf(row)).not.toContain("Correct");
     expect(await textOf(row)).not.toContain("Forget");
     expect(await (await $(`${row} [data-testid="note-do-not-use"]`)).isExisting()).toBe(true);
+    // The Map's sentence counts the documents the AIs in view were given.
+    await browser.waitUntil(async () => (await textOf('[data-testid="map-sentence"]')).includes("12 documents"), { timeout: 30_000, timeoutMsg: "the Map's sentence does not count the documents" });
     await shot("notes-row-on-subject");
   });
 
@@ -169,6 +171,23 @@ describe("questions a notes folder answers", () => {
     await toChat();
     const [back] = await askDocumentQuestions([{ ...questions[0], keys: [["CR-55508"]], stale: [] }]);
     expect(back.sourceGiven).toBe(true);
+  });
+
+  it("a key written in a note is hidden in what the AI is given and in what is kept", async function () {
+    this.timeout(600_000);
+    const KEY = "sk_test_MADEUP51Hq9crumbkettle0000";
+    expect(readFileSync(resolve(DIR, "counter-notes.md"), "utf8")).toContain(KEY);
+    const q: DocQuestion = { n: 11, type: "D", question: "What is the card terminal's test key for practice mode?", keys: [[KEY]], source: "counter-notes.md", stale: [] };
+    await toChat();
+    const [found] = (await rankDocumentQuestions([q], true)) as { candidates: { f: string; t: string }[] }[];
+    const fromNote = found.candidates.filter((c) => c.f === "counter-notes.md");
+    expect(fromNote.length).toBeGreaterThan(0);
+    expect(found.candidates.some((c) => c.t.includes(KEY))).toBe(false);
+    const [said] = await askDocumentQuestions([q]);
+    expect(said.sourceGiven).toBe(true);
+    expect(said.reply).not.toContain(KEY);
+    await new Promise((r) => setTimeout(r, 8_000));
+    expect((await noteItems()).some((i) => i.text.includes(KEY))).toBe(false);
   });
 
   it("a folder that cannot be reached is not a deleted note", async function () {

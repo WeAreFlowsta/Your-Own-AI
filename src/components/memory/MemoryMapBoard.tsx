@@ -33,6 +33,17 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const ais = useSignal<Ai[]>([]);
   const viewAi = useSignal('');
   const viewProject = useSignal('');
+  /** Documents the AI in view was given (every document, for all the AIs). */
+  const documents = useSignal(0);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const founding = track(() => viewAi.value);
+    const known = track(() => ais.value);
+    const id = founding ? known.find((a) => a.founding === founding)?.id : undefined;
+    if (founding && !id) return;
+    const { corpusDocuments } = await import('../../utils/corpus');
+    documents.value = (await corpusDocuments(id).catch(() => [])).length;
+  });
   const mode = useSignal<'map' | 'list'>('map');
   const selected = useSignal<string | null>(null);
   const held = useSignal<KeptItem[]>([]);
@@ -178,7 +189,8 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const projects = props.project && !known.some((p) => p.id === props.project!.id) ? [...known, { id: props.project.id, name: props.project.name }] : known;
   const projectName = projects.find((p) => p.id === viewProject.value)?.name;
   const who = aiName ? `What ${aiName} can use` : 'What your AIs can use';
-  const sentence = `${who}${projectName ? ` in ${projectName}` : ''}: ${countWords(subjects.length, 'subject', 'subjects')}, ${countWords(items, 'item', 'items')}.`;
+  const docs = documents.value;
+  const sentence = `${who}${projectName ? ` in ${projectName}` : ''}: ${countWords(subjects.length, 'subject', 'subjects')}, ${countWords(items, 'item', 'items')}${docs > 0 ? `, ${countWords(docs, 'document', 'documents')}` : ''}.`;
   const together = subject && d ? d.links.filter((l) => l.a === subject.id || l.b === subject.id).map((l) => subjects.find((s) => s.id === (l.a === subject.id ? l.b : l.a))?.name).filter(Boolean) : [];
 
   const pill = (on: boolean) =>

@@ -654,6 +654,13 @@ export function useAgentSession(props: UseAgentSessionProps) {
         folderPath: state.folderPath ?? undefined,
       },
     );
+    // Lines of the person's notes that answered are kept as rows that
+    // point at the note, as a direct reply's are.
+    if (actionHash && bubble.library?.some((g) => g.idx?.length) && lastTyped.value.trim()) {
+      void import("../utils/memoryNotes")
+        .then(({ noteAnswered }) => noteAnswered({ conversation: hash, agentKey, question: lastTyped.value.trim(), reply: bubble.content, given: bubble.library ?? [] }))
+        .catch((e) => console.warn("[memory] keeping the note lines that answered failed:", e));
+    }
     // recordMessage returns the entry's action hash, or null after logging
     // the failure - one line either way, so the console always answers
     // "did this turn reach the chain?".

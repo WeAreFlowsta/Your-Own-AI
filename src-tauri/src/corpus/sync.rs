@@ -673,6 +673,16 @@ pub async fn sync_folders(
             Err(e) => log::warn!("[corpus] linked documents check failed: {e}"),
         }
     }
+    // Notes that memory points at are looked at again when files changed
+    // or left: a changed line stops being used, a deleted note says so.
+    if out.iter().any(|r| r.updated > 0 || r.removed > 0) {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = crate::memory_notes::memory_notes_follow(app).await {
+                log::warn!("[memory] notes were not looked at again after the folder check: {e}");
+            }
+        });
+    }
     Ok(out)
 }
 
