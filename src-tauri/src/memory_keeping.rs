@@ -119,7 +119,7 @@ fn read_queue(app: &AppHandle) -> Vec<Waiting> {
 fn write_queue(app: &AppHandle, queue: &[Waiting]) {
     let (Ok(path), Some(key)) = (queue_path(app), queue_key(app)) else { return };
     if let Ok(sealed) = seal_queue(&key, queue) {
-        if std::fs::write(&path, sealed).is_ok() {
+        if flowsta_hc_lines::files::write_atomic_private(&path, &sealed).is_ok() {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;

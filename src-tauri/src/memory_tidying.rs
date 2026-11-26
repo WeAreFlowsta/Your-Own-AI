@@ -48,7 +48,7 @@ fn read_queue(app: &AppHandle) -> Vec<String> {
 
 fn write_queue(app: &AppHandle, queue: &[String]) {
     if let (Ok(p), Ok(json)) = (queue_path(app), serde_json::to_vec(queue)) {
-        let _ = std::fs::write(p, json);
+        let _ = flowsta_hc_lines::files::write_atomic_private(&p, &json);
     }
 }
 

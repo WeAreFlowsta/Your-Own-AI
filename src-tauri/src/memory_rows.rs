@@ -199,9 +199,11 @@ pub async fn save_memory_row(
     // now is in the very next message, before any read of the records.
     let mut saved = row;
     saved.action_hash = Some(hash.clone());
-    let mut after: Vec<MemoryRow> = read_cache(&app, &key, &saved.scope).into_iter().filter(|r| r.id != saved.id).collect();
-    after.push(saved.clone());
-    write_cache(&app, &key, &saved.scope, &reduce(after));
+    update_cache(&app, &key, &saved.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != saved.id).collect();
+        after.push(saved.clone());
+        reduce(after)
+    });
     Ok(hash)
 }
 
@@ -223,9 +225,11 @@ pub(crate) async fn save_and_cache(app: &tauri::AppHandle, mut row: MemoryRow) -
     let anchor = scope_anchor(&row.scope, &key)?;
     let hash = save_sealed(&manager, &agent, cipher, nonce.to_vec(), anchor).await?;
     row.action_hash = Some(hash);
-    let mut after: Vec<MemoryRow> = read_cache(app, &key, &row.scope).into_iter().filter(|r| r.id != row.id).collect();
-    after.push(row.clone());
-    write_cache(app, &key, &row.scope, &reduce(after));
+    update_cache(app, &key, &row.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != row.id).collect();
+        after.push(row.clone());
+        reduce(after)
+    });
     Ok(row)
 }
 
@@ -415,9 +419,10 @@ pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32],
         let siblings = reduce(siblings);
         rows_adopted += siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
         write_sealed_rows(siblings_path(app, &scope), key, &siblings);
-        let mut all = read_cache(app, key, &scope);
-        all.extend(siblings);
-        write_cache(app, key, &scope, &reduce(all));
+        update_cache(app, key, &scope, |mut all| {
+            all.extend(siblings);
+            reduce(all)
+        });
     }
     (facts_adopted, rows_adopted)
 }
@@ -469,13 +474,24 @@ pub(crate) fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, r
     let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
     let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
     if let Ok(json) = serde_json::to_vec(&file) {
-        let _ = std::fs::write(&path, json);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        // Whole or not at all: a reader never sees a half-written copy
+        // (which reads as "no rows", and a save made then would write a
+        // copy holding its own row alone).
+        if let Err(e) = flowsta_hc_lines::files::write_atomic_private(&path, &json) {
+            log::warn!("[memory] this device's copy of a scope could not be written: {e}");
         }
     }
+}
+
+/// One change at a time to this device's copy of a scope: read it, change
+/// it, write it, with nothing else doing the same in between (two saves at
+/// once would otherwise each write a copy without the other's row).
+pub(crate) fn update_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, change: impl FnOnce(Vec<MemoryRow>) -> Vec<MemoryRow>) -> Vec<MemoryRow> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|p| p.into_inner());
+    let after = change(read_cache(app, key, scope));
+    write_cache(app, key, scope, &after);
+    after
 }
 
 pub(crate) fn read_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str) -> Vec<MemoryRow> {
@@ -705,9 +721,7 @@ async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainMa
             rows.extend(read_sealed_rows(siblings_path(app, &twin_scope), &key));
         }
     }
-    let reduced = reduce(with_written_since(rows, read_cache(app, &key, scope), started));
-    write_cache(app, &key, scope, &reduced);
-    Ok(reduced)
+    Ok(update_cache(app, &key, scope, |have| reduce(with_written_since(rows, have, started))))
 }
 
 async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
@@ -835,10 +849,12 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     let anchor = scope_anchor(&row.scope, &key)?;
     let hash = save_sealed(manager, agent, cipher, nonce.to_vec(), anchor).await?;
     // The cache sees the change at once.
-    let mut after: Vec<MemoryRow> = live.into_iter().filter(|r| r.id != row.id).collect();
     row.action_hash = Some(hash.clone());
-    after.push(row.clone());
-    write_cache(app, &key, &row.scope, &reduce(after));
+    update_cache(app, &key, &row.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != row.id).collect();
+        after.push(row.clone());
+        reduce(after)
+    });
     Ok((hash, replaced))
 }
 

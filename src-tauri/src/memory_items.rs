@@ -555,7 +555,7 @@ fn write_changes(app: &tauri::AppHandle, key: &[u8; 32], log: &[Change]) -> Resu
     let mut out = nonce.to_vec();
     out.extend_from_slice(&cipher);
     let path = root.join(CHANGES_FILE);
-    std::fs::write(&path, out).map_err(|e| e.to_string())?;
+    flowsta_hc_lines::files::write_atomic_private(&path, &out).map_err(|e| e.to_string())?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

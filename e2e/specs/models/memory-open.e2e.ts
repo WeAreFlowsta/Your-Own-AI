@@ -77,6 +77,7 @@ describe("the Open board", () => {
     expect(report.replaced).toBe(0);
     // Nothing was closed for the person.
     expect((await item(open)).item.state).toBe("open");
+    expect((await invoke<unknown[]>("memory_may_be_done")).length).toBe(1);
     await openBoard();
     const row = `[data-testid="open-maybe-row"][data-id="${open}"]`;
     await (await $(row)).waitForExist({ timeout: 30_000 });

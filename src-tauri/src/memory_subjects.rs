@@ -356,7 +356,7 @@ fn write_came_up(app: &tauri::AppHandle, key: &[u8; 32], held: &CameUp) {
     let mut out = nonce.to_vec();
     out.extend_from_slice(&cipher);
     let path = root.join(CAME_UP_FILE);
-    if std::fs::write(&path, out).is_ok() {
+    if flowsta_hc_lines::files::write_atomic_private(&path, &out).is_ok() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
