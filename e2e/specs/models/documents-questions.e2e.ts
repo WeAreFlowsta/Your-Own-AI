@@ -157,6 +157,7 @@ describe("questions a notes folder answers", () => {
     expect(without.right).toBe(false);
     // The Not used list has it, with the way back.
     await browser.url("tauri://localhost/your-memory/");
+    await press('[data-testid="memory-tab"][data-tab="recently"]');
     const entry = '[data-testid="not-used-note"][data-reach="note"]';
     await (await $(entry)).waitForExist({ timeout: 30_000 });
     expect(await textOf(entry)).toContain("Note: suppliers.md");
