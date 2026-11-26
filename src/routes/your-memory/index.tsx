@@ -28,7 +28,7 @@ import { RestoreNote } from "../../components/memory/RestoreNote";
 
 const TABS = [
   { id: "map", label: "Map" },
-  { id: "recently", label: "Recently" },
+  { id: "recently", label: "Recent" },
   { id: "open", label: "Open" },
   { id: "rules", label: "Rules" },
 ] as const;

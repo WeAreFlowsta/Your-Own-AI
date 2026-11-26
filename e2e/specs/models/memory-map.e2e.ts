@@ -207,7 +207,7 @@ describe("the Map", () => {
     // Forget says once more what it does, and that it can be undone.
     const ask = await $('[data-testid="item-forget-ask"]');
     await ask.waitForExist({ timeout: 20_000 });
-    expect((await browser.execute((e) => (e as HTMLElement).innerText, ask)) as string).toContain("You can undo this from Recently.");
+    expect((await browser.execute((e) => (e as HTMLElement).innerText, ask)) as string).toContain("You can undo this from Recent.");
     await press(await $('[data-testid="item-forget-yes"]'));
     await browser.waitUntil(async () => (await map()).subjects.find((s) => s.id === other.id)?.items === 1, { timeout: 60_000, timeoutMsg: "the item was not forgotten" });
     const whats = (await invoke<{ what: string }[]>("memory_changes")).map((c) => c.what);

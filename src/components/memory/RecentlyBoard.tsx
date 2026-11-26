@@ -153,7 +153,7 @@ export const RecentlyBoard = component$(() => {
 
   return (
     <section class="bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]" data-testid="recently-board">
-      <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">Recently</h2>
+      <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">Recent</h2>
       <p class="text-sm text-[var(--text-secondary)] mb-4">What memory changed lately. Changes memory made by itself can be undone.</p>
       <TidyingLine />
       <CatchingUpLine />

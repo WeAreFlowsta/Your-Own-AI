@@ -76,7 +76,7 @@ export const DeleteAllMemory = component$(() => {
 
   const p = preview.value;
   const choice = (on: boolean) =>
-    `w-full text-left rounded-xl border px-4 py-3 ${on ? 'border-[var(--bg-button-primary)] bg-[var(--bg-main)]' : 'border-[var(--border-subtle)] hover:border-[var(--border-input)]'}`;
+    `w-full text-left rounded-xl border px-4 py-3 ${on ? 'border-[var(--bg-button-primary)] bg-[var(--bg-dropdown)]' : 'border-[var(--border-subtle)] hover:border-[var(--border-input)]'}`;
   const small = 'mt-1 text-sm text-[var(--text-secondary)]';
 
   return (
@@ -89,9 +89,9 @@ export const DeleteAllMemory = component$(() => {
       </p>
       {open.value && (
         <div class="fixed inset-0 z-[70]" data-testid="delete-all-dialog">
-          <div class="absolute inset-0 bg-black/50" onClick$={() => !busy.value && (open.value = false)} />
-          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[86vh] overflow-y-auto rounded-2xl border border-[var(--border-subtle)] bg-[var(--bg-card)] p-6">
-            <h2 class="text-xl font-varela text-[var(--text-primary)]">Delete all memory?</h2>
+          <div class="absolute inset-0 bg-black/60" onClick$={() => !busy.value && (open.value = false)} />
+          <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[560px] max-w-[92vw] max-h-[86vh] overflow-y-auto rounded-xl bg-[var(--bg-header-footer)] p-6 md:p-7 shadow-2xl">
+            <h2 class="text-lg font-semibold text-[var(--text-primary)] font-varela">Delete all memory?</h2>
             <p class={small}>This cannot be undone here. Choose what goes.</p>
 
             <div class="mt-4 flex flex-col gap-2">
@@ -134,14 +134,14 @@ export const DeleteAllMemory = component$(() => {
             )}
 
             <div class="mt-5 flex flex-wrap items-center justify-between gap-2">
-              <LiquidMetalButton variant="secondary" class="px-3 py-2 text-sm" testId="delete-all-backup" disabled={!!busy.value} onClick$={backUp}>
+              <LiquidMetalButton variant="secondary" class="px-4 py-2 text-sm" testId="delete-all-backup" disabled={!!busy.value} onClick$={backUp}>
                 {busy.value === 'backup' ? 'Backing up...' : 'Back up to the Vault first'}
               </LiquidMetalButton>
               <div class="flex items-center gap-2">
-                <LiquidMetalButton variant="secondary" class="px-3 py-2 text-sm" testId="delete-all-cancel" disabled={!!busy.value} onClick$={() => (open.value = false)}>
+                <LiquidMetalButton variant="secondary" class="px-4 py-2 text-sm" testId="delete-all-cancel" disabled={!!busy.value} onClick$={() => (open.value = false)}>
                   Cancel
                 </LiquidMetalButton>
-                <LiquidMetalButton variant="danger" class="px-3 py-2 text-sm" testId="delete-all-go" disabled={typed.value.trim() !== 'DELETE' || !!busy.value} onClick$={go}>
+                <LiquidMetalButton variant="danger" class="px-4 py-2 text-sm" testId="delete-all-go" disabled={typed.value.trim() !== 'DELETE' || !!busy.value} onClick$={go}>
                   {busy.value === 'delete' ? 'Deleting...' : 'Delete all memory'}
                 </LiquidMetalButton>
               </div>

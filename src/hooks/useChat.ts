@@ -8,6 +8,7 @@
  * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
+import { onlyADateLine } from "../utils/memoryDateLine";
 import { hearInstruction } from "../utils/ruleOffers";
 import { whereWords } from "../utils/givenLine";
 import { invoke } from "@tauri-apps/api/core";
@@ -377,6 +378,9 @@ const THREAD_WAIT_MS = 90_000;
  *  character, a space or a digit; anything may follow. (The engine's grammar
  *  format; an online service is sent no grammar.) */
 export const SECOND_ASK_GRAMMAR = "root ::= [^\\x00-\\x200-9] [^\\x00]*";
+/** The same, for a second ask after a reply that was only the line above a
+ *  passage: it may not begin with that line's opening bracket either. */
+export const SECOND_ASK_AFTER_DATE_LINE_GRAMMAR = "root ::= [^\\x00-\\x200-9\\[] [^\\x00]*";
 
 export function useChat(props: UseChatProps) {
   const state = useStore<UseChatState>({
@@ -2045,9 +2049,16 @@ export function useChat(props: UseChatProps) {
         // stopped, the request was refused): that is not the model answering
         // with nothing, and the message below must not say it is.
         let retryDidNotRun = false;
-        if (!fullResponse.trim() && !controller.signal.aborted) {
-          console.warn("[Chat] empty reply - one retry with a plain-words steer");
-          uiLog(`[chat] empty reply after ${updateCount} update(s) - one retry with a plain-words steer`);
+        // A reply that is only the line above a passage memory gave (the
+        // model began to cite and ended there) answers nothing either: the
+        // same one more ask, and the first reply stands if that one fails.
+        const dateLineOnly =
+          !!fullResponse.trim() && onlyADateLine(extractThinkingFromContent(fullResponse).contentWithoutThinking, foundMemory?.beforeQuestion);
+        const firstReply = fullResponse;
+        if ((!fullResponse.trim() || dateLineOnly) && !controller.signal.aborted) {
+          console.warn(`[Chat] ${dateLineOnly ? "a date line alone" : "empty reply"} - one retry with a plain-words steer`);
+          uiLog(`[chat] ${dateLineOnly ? "a reply that was only the line above a passage" : `empty reply after ${updateCount} update(s)`} - one retry with a plain-words steer`);
+          if (dateLineOnly) fullResponse = "";
           state.messages = state.messages.map((m) =>
             m.id === assistantId
               ? { ...m, statusText: "Asking again...", isLoading: true }
@@ -2055,7 +2066,9 @@ export function useChat(props: UseChatProps) {
           );
           const steer =
             systemPrompt +
-            "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.";
+            (dateLineOnly
+              ? "\n\nAnswer the question in full sentences. A date or the name of a conversation alone is not an answer."
+              : "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.");
           // On this computer's engine the second ask may not end before it
           // has begun: its first visible character must be something other
           // than a space, a control character or a digit. Asked again the
@@ -2066,7 +2079,7 @@ export function useChat(props: UseChatProps) {
           // digit first, right answers 143 of 150). An answer that is a
           // number still comes, after the model's own empty thought tags or
           // in words. Online services take no such rule and get none.
-          const mustBegin = !isOnlineModel && !isExternalModel ? SECOND_ASK_GRAMMAR : undefined;
+          const mustBegin = !isOnlineModel && !isExternalModel ? (dateLineOnly ? SECOND_ASK_AFTER_DATE_LINE_GRAMMAR : SECOND_ASK_GRAMMAR) : undefined;
           try {
             for await (const chunk of llamaServerApi.chatCompletion(
               chatHistory,
@@ -2104,6 +2117,12 @@ export function useChat(props: UseChatProps) {
             console.warn("[Chat] plain-words retry failed:", e);
             uiLog(`[chat] the second ask did not go through: ${String(e).slice(0, 160)}`);
             retryDidNotRun = true;
+          }
+          // The first reply was words, if too few: it stands when the
+          // second ask brought nothing.
+          if (dateLineOnly && !fullResponse.trim()) {
+            fullResponse = firstReply;
+            retryDidNotRun = false;
           }
         }
 

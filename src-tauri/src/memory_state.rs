@@ -105,14 +105,18 @@ fn stands_now<'a>(items: &'a [Item], replaced: &'a Item) -> Option<&'a Item> {
 pub(crate) fn stand(items: &[Item], vectors: &HashMap<String, Vec<f32>>, question: &[f32], who: &Asking) -> Stand {
     let usable = |i: &Item| i.meta.state == ItemState::Current && crate::memory_items::may_use(&i.meta, who.ai, who.project, who.online);
     let current: Vec<&Item> = items.iter().filter(|i| usable(i)).collect();
-    let held: Vec<Held> = current.iter().map(|i| Held { sentence: sentence(i).to_string(), as_of: i.row.as_of, confirmed: i.meta.confirmed.is_some() }).collect();
-    let near: Vec<(usize, f32)> = current.iter().enumerate().filter_map(|(x, i)| vectors.get(&i.row.id).map(|v| (x, cosine(question, v)))).collect();
+    // An exchange kept only because a reply quoted it was judged by nobody:
+    // it is found by the search like any other, and joins the note once the
+    // person confirms it.
+    let noted: Vec<&Item> = current.iter().copied().filter(|i| i.meta.source.why != "asked" || i.meta.confirmed.is_some()).collect();
+    let held: Vec<Held> = noted.iter().map(|i| Held { sentence: sentence(i).to_string(), as_of: i.row.as_of, confirmed: i.meta.confirmed.is_some() }).collect();
+    let near: Vec<(usize, f32)> = noted.iter().enumerate().filter_map(|(x, i)| vectors.get(&i.row.id).map(|v| (x, cosine(question, v)))).collect();
     let order = mb::note_order(&held, &near);
     let picked: Vec<Held> = order.iter().map(|x| held[*x].clone()).collect();
     let source = |i: &Item| i.meta.source.ptr.map(|p| (p.c, p.s));
     // An exchange that a current item also came from is not history.
     let live: Vec<(i64, u32)> = current.iter().filter_map(|i| source(i)).collect();
-    let mut out = Stand { note: mb::state_note(&picked, true), note_items: order.iter().map(|x| current[*x].row.id.clone()).collect(), ..Default::default() };
+    let mut out = Stand { note: mb::state_note(&picked, true), note_items: order.iter().map(|x| noted[*x].row.id.clone()).collect(), ..Default::default() };
     for r in items.iter().filter(|i| i.meta.state == ItemState::Replaced) {
         let by = stands_now(items, r);
         // What replaced it is not this AI's to use (or is itself gone):
@@ -231,6 +235,20 @@ mod tests {
 
     fn vectors(of: &[(&str, Vec<f32>)]) -> HashMap<String, Vec<f32>> {
         of.iter().map(|(id, x)| (id.to_string(), x.clone())).collect()
+    }
+
+    #[test]
+    fn an_exchange_kept_because_a_reply_quoted_it_joins_the_note_once_confirmed() {
+        let fee = item("it-fee", "Orders under $60 keep the $6 fee", 30, 4, "ai:atlas", None);
+        let mut quoted = item("it-quoted", "what did we say about delivery again", 40, 2, "ai:atlas", None);
+        quoted.meta.source.why = "asked".into();
+        assert!(quoted.meta.confirmed.is_none());
+        let vs = vectors(&[("it-fee", v(0, 0.4)), ("it-quoted", v(0, 0.1))]);
+        let s = stand(&[fee.clone(), quoted.clone()], &vs, &v(0, 0.0), &who());
+        assert_eq!(s.note_items, vec!["it-fee"], "nobody judged the quoted exchange worth keeping");
+        let (row, _) = crate::memory_items::confirm(&quoted, T0 + 41 * DAY);
+        let s = stand(&[fee, as_item(row)], &vs, &v(0, 0.0), &who());
+        assert_eq!(s.note_items, vec!["it-quoted", "it-fee"], "confirmed by the person, it stands with the rest");
     }
 
     #[test]

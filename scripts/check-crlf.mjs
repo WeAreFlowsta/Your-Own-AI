@@ -16,6 +16,7 @@ const CHECKS = [
   "check-closure-order.mjs",
   "check-reply-boundary.mjs",
   "check-recall-margin.mjs",
+  "check-date-line.mjs",
   "check-unsaved-settings.mjs",
   "check-tools-gate.mjs",
   "check-action-labels.mjs",

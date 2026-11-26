@@ -572,7 +572,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
               ) : forgetting.value === i.id ? (
                 <div class="mt-1.5 flex flex-col items-start gap-1.5" data-testid="item-forget-ask">
                   <span class="text-xs text-[var(--text-secondary)]">
-                    Forget this? Your AIs will no longer use this item or the exchange it came from. The conversation stays in your conversations. You can undo this from Recently.
+                    Forget this? Your AIs will no longer use this item or the exchange it came from. The conversation stays in your conversations. You can undo this from Recent.
                   </span>
                   <div class="flex gap-3">
                     <button type="button" class={act} data-testid="item-forget-yes" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'forget' })}>
