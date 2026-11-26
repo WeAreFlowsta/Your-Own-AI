@@ -160,6 +160,17 @@ pub struct RecallHit {
     pub text: String,
     pub score: f32,
     pub mine: bool,
+    /// The date the passage speaks from, in seconds: when its file last
+    /// changed; for a document with no file on this device, when it was
+    /// last read again, else when it was added.
+    pub as_of: i64,
+}
+
+/// The date a document's passages speak from (seconds): the file's own
+/// modified time when it is known, else the last time it was read again,
+/// else the day it was added.
+pub(crate) fn hit_date(mtime: Option<i64>, reread_at: Option<i64>, added_at: i64) -> i64 {
+    mtime.filter(|t| *t > 0).or(reread_at.filter(|t| *t > 0)).unwrap_or(added_at)
 }
 
 // ---------------------------------------------------------------- epub + metadata
@@ -1787,11 +1798,12 @@ pub fn corpus_recall(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let meta_blob: Vec<u8> = conn
-            .query_row("SELECT meta_enc FROM documents WHERE doc_id = ?1", params![c.doc_id], |r| r.get(0))
+        let (meta_blob, mtime, reread_at, added_at): (Vec<u8>, Option<i64>, Option<i64>, i64) = conn
+            .query_row("SELECT meta_enc, mtime, reread_at, added_at FROM documents WHERE doc_id = ?1", params![c.doc_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .map_err(|e| e.to_string())?;
         let meta: DocMeta = serde_json::from_slice(&dec(&key, &meta_blob)?).map_err(|e| e.to_string())?;
         out.push(RecallHit {
+            as_of: hit_date(mtime, reread_at, added_at),
             doc_id: c.doc_id.clone(),
             filename: meta.filename,
             idx: c.idx,
@@ -2078,6 +2090,17 @@ mod strip_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hit_carries_the_files_date() {
+        // The file's own modified time when it is known...
+        assert_eq!(hit_date(Some(1_777_000_000), Some(1_778_000_000), 1_700_000_000), 1_777_000_000);
+        // ...else when the document was last read again...
+        assert_eq!(hit_date(None, Some(1_778_000_000), 1_700_000_000), 1_778_000_000);
+        assert_eq!(hit_date(Some(0), Some(1_778_000_000), 1_700_000_000), 1_778_000_000);
+        // ...else the day it was added.
+        assert_eq!(hit_date(None, None, 1_700_000_000), 1_700_000_000);
+    }
+
     #[test]
     fn xml_tag_text_reads_prefixed_tags() {
         let xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="x"><dc:title>A &amp; B</dc:title><dc:creator>Ada Lovelace</dc:creator><dc:description/></cp:coreProperties>"#;
