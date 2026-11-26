@@ -12,6 +12,7 @@ import { ago, audienceWords, countWords, loadMap, renameSubject, type MapSubject
 import type { MapHandle } from '../../utils/memoryMapDraw';
 import type { KeptItem } from '../../utils/memoryKeep';
 import { dayOf } from '../../utils/memoryKeep';
+import { NoteRow } from './NoteRow';
 
 interface Ai {
   id: string;
@@ -506,7 +507,9 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
   return (
     <div class="flex flex-col gap-2" data-testid="map-panel-items">
       {problem.value && <p class="text-xs text-[var(--text-secondary)]">{problem.value}</p>}
-      {shown.map((i) => (
+      {shown.map((i) => i.item.source?.kind === 'document' ? (
+        <NoteRow key={i.id} item={i as never} />
+      ) : (
         <div key={i.id} class="rounded-lg bg-[var(--bg-main)] px-3 py-2" data-testid="map-panel-item" data-id={i.id}>
           {editing.value === i.id ? (
             <div class="flex flex-col gap-2">

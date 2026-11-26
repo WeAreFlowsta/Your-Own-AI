@@ -2412,6 +2412,21 @@ export function useChat(props: UseChatProps) {
                 .then(({ doneSaid }) => doneSaid({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined }))
                 .catch((e) => console.warn("[memory] closing what was said to be done failed:", e));
             }
+            // Lines of the person's notes that answered are kept as rows
+            // that point at the note (a rule on the device; no model).
+            if (assistantMsgHash && libraryGiven.some((g) => g.idx?.length)) {
+              void import("../utils/memoryNotes")
+                .then(async ({ noteAnswered }) =>
+                  noteAnswered({
+                    conversation: turnConv ?? "",
+                    agentKey: selectedAi.aiConfig?.agentPubKey ?? null,
+                    question: userInput,
+                    reply: displayContent,
+                    given: libraryGiven,
+                  }),
+                )
+                .catch((e) => console.warn("[memory] keeping the note lines that answered failed:", e));
+            }
             console.log(
               `[Holochain] Assistant message recorded (${grounded.length} grounded source${grounded.length === 1 ? "" : "s"})`,
             );

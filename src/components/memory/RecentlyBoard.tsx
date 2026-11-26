@@ -8,7 +8,7 @@ import { MemoryQuestions } from './MemoryQuestions';
 interface Change {
   id: string;
   at: number;
-  what: 'kept' | 'replaced' | 'closed' | 'forgotten' | 'confirmed' | 'corrected' | 'audience_changed' | 'moved' | 'undone';
+  what: 'kept' | 'replaced' | 'closed' | 'forgotten' | 'confirmed' | 'corrected' | 'audience_changed' | 'moved' | 'undone' | 'note_changed';
   items: string[];
   /** `person` | `ai:<key>` | `tidy`. */
   by: string;
@@ -24,7 +24,9 @@ function happened(c: Change, who: string): string {
   const mine = c.by === 'person';
   switch (c.what) {
     case 'kept':
-      return mine ? 'Kept by you' : `Kept by ${who}, not confirmed`;
+      return mine ? 'Kept by you' : c.by === 'search' ? 'From your notes: this line answered a question' : `Kept by ${who}, not confirmed`;
+    case 'note_changed':
+      return 'Your note changed. What memory uses from it was read again';
     case 'replaced':
       return 'Replaced';
     case 'closed':
