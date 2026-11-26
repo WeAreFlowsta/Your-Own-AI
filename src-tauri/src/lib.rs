@@ -34,7 +34,8 @@ mod memory_tidying;       // the tidying job: judges queued pairs in idle time, 
 mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
 mod memory_migrate;       // the update path: what the older stores become
 mod memory_rule_offers;   // when a rule is offered: the second time an instruction is given, and never after an answer
-mod memory_use;           // who may draw on what: audiences, private conversations, forget and delete
+mod memory_use;
+mod memory_notes;         // notes in memory: the line that answered, following the file, "Do not use this" and its reach
 mod memory_rules;         // when an instruction becomes an offer to keep it as a rule
 mod memory_check;         // the built-in check's marks: may this model do memory's judging
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
