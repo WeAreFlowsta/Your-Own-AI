@@ -1987,6 +1987,14 @@ pub struct HistoryArrival {
 
 #[tauri::command]
 pub async fn history_arrival(app: tauri::AppHandle) -> Result<HistoryArrival, String> {
+    // A debug build's UI test (e2e/specs/models/memory-catching-up.e2e.ts):
+    // the count is given, so the lines that show while history arrives are
+    // seen without a second device.
+    if cfg!(debug_assertions) {
+        if let Some(n) = std::env::var("YOAI_TEST_HISTORY_ARRIVING").ok().and_then(|v| v.parse::<u32>().ok()) {
+            return Ok(HistoryArrival { not_here: n, device: Some("Test computer".into()) });
+        }
+    }
     let not_here = NOT_HERE.lock().map(|h| h.values().sum()).unwrap_or(0);
     Ok(HistoryArrival { not_here, device: the_other_device(&app) })
 }

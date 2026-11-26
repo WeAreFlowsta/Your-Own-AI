@@ -2,6 +2,7 @@ import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
 import type { KeptItem } from '../../utils/memoryKeep';
 import { dayOf } from '../../utils/memoryKeep';
 import { TidyingLine } from './TidyingLine';
+import { CatchingUpLine } from './CatchingUpLine';
 import { MemoryQuestions } from './MemoryQuestions';
 
 /** One entry of memory's list of changes, as the backend keeps it. */
@@ -155,6 +156,7 @@ export const RecentlyBoard = component$(() => {
       <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela mb-2">Recently</h2>
       <p class="text-sm text-[var(--text-secondary)] mb-4">What memory changed lately. Changes memory made by itself can be undone.</p>
       <TidyingLine />
+      <CatchingUpLine />
       <div class="mb-4">
         <MemoryQuestions />
       </div>

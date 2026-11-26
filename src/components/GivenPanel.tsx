@@ -133,7 +133,7 @@ export default component$<Props>((props) => {
                     <p class="mt-1 text-xs">
                       {x.state === "deleted"
                         ? "This passage came from a conversation you deleted. It cannot be shown."
-                        : "Not on this computer yet. This passage came from a conversation on another of your devices that has not arrived here."}
+                        : "Not on this computer yet. This passage came from a conversation on another of your devices that has not arrived here. It shows by itself once it does."}
                     </p>
                   )}
                 </li>
