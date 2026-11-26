@@ -181,6 +181,10 @@ pub(super) fn plan(seen: &[Seen], known: &[Known]) -> Plan {
             }
         }
     }
+    // New files, the most recently edited first: on a slow machine a large
+    // folder takes hours, and the notes a person is working in are the ones
+    // they ask about. Old ones fill in behind.
+    out.add.sort_by(|a, b| seen[*b].mtime.cmp(&seen[*a].mtime).then_with(|| seen[*a].path.cmp(&seen[*b].path)));
     out.remove = known.iter().filter(|k| !present.contains(k.doc_id.as_str())).map(|k| k.doc_id.clone()).collect();
     out
 }
@@ -1330,6 +1334,14 @@ mod tests {
     }
     fn known(id: &str, path: &str, size: i64, mtime: Option<i64>) -> Known {
         Known { doc_id: id.into(), path_hash: path_hash(path), size, mtime }
+    }
+
+    #[test]
+    fn new_files_are_read_newest_first() {
+        let walk = vec![seen("/n/archive/old.md", 10, 100), seen("/n/current/today.md", 10, 900), seen("/n/guides/last-month.md", 10, 500), seen("/n/guides/same-day.md", 10, 500)];
+        let p = plan(&walk, &[]);
+        let order: Vec<&str> = p.add.iter().map(|i| walk[*i].path.as_str()).collect();
+        assert_eq!(order, vec!["/n/current/today.md", "/n/guides/last-month.md", "/n/guides/same-day.md", "/n/archive/old.md"], "the most recently edited first; the same moment, by name");
     }
 
     #[test]
