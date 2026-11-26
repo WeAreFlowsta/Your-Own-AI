@@ -1129,6 +1129,12 @@ export default component$(() => {
         sessionStorage.removeItem("pending-open-folder");
         setTimeout(() => openFolderGuarded(pendingFolder), 300);
       }
+      // Words handed over to be sent by the person: they wait in the box.
+      const ready = sessionStorage.getItem("chat-words-ready");
+      if (ready) {
+        sessionStorage.removeItem("chat-words-ready");
+        input.value = ready;
+      }
       const raw = sessionStorage.getItem("resume-conversation");
       if (raw) {
         sessionStorage.removeItem("resume-conversation");

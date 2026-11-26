@@ -224,8 +224,18 @@ pub(crate) fn done_judged(open: &Item, later: &Item, verdict: &DoneVerdict, now:
 /// item that suggests it: what "May already be done" lists. An item the
 /// person has since closed or reopened by hand is not listed.
 pub(crate) fn may_be_done<'a>(held: &'a [Item], ledger: &[Judged]) -> Vec<(&'a Item, &'a Item)> {
-    ledger
-        .iter()
+    // The last word on a pair counts: "Still waiting", answered by the
+    // person, comes after the suggestion and takes it off the list.
+    let mut last: std::collections::BTreeMap<&(String, String), &Judged> = std::collections::BTreeMap::new();
+    for j in ledger {
+        if last.get(&j.pair).is_none_or(|have| have.at <= j.at) {
+            last.insert(&j.pair, j);
+        }
+    }
+    let mut latest: Vec<&Judged> = last.into_values().collect();
+    latest.sort_by(|a, b| a.at.cmp(&b.at).then(a.pair.cmp(&b.pair)));
+    latest
+        .into_iter()
         .filter(|j| j.outcome == "may_be_done")
         .filter_map(|j| {
             let (a, b) = (held.iter().find(|i| i.row.id == j.pair.0)?, held.iter().find(|i| i.row.id == j.pair.1)?);
@@ -615,6 +625,9 @@ mod tests {
         // It does not use up the day's changes, and does not count toward the pause.
         assert_eq!(left_today(&[judged.clone()], NOW - (NOW % DAY)), CHANGES_A_DAY);
         assert!(!paused(&[judged.clone()], None));
+        // "Still waiting", answered by the person, takes it off the list and the pair is not asked again.
+        let answered = vec![judged.clone(), done_judged(&open, &later, &DoneVerdict::StillOpen, NOW + 1)];
+        assert!(may_be_done(&held, &answered).is_empty() && !may_judge(&answered, "it-open", "it-later"));
         // Once the person closes it, it is no longer listed.
         let (closed, _) = crate::memory_items::close(&open, true, "person", NOW + 5);
         assert!(may_be_done(&[as_item(closed), later], &[judged]).is_empty());

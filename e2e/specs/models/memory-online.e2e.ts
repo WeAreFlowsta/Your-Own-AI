@@ -147,7 +147,10 @@ describe("memory and an AI that answers online", () => {
     // At rest: one short line and one link.
     const quiet = await textOf(under("given-line"));
     console.log(`e2e: the line under the reply, at rest: ${JSON.stringify(quiet)}`);
-    expect(quiet.replace(/\s+/g, " ").trim()).toBe("Sent to stand-in-model, online, with 1 thing from your memory. Show");
+    // How many things depends on whether the index already holds the
+    // conversation above; the health exchange is never among what is sent.
+    expect(quiet.replace(/\s+/g, " ").trim()).toMatch(/^Sent to stand-in-model, online, with \d+ things? from your memory\.( \d+ more (was|were) found and kept on this computer, because (it is|they are) about your health\.)? Show$/);
+    expect(sent.all).not.toContain(MEDICINE);
     // Show: exactly what went, and the one-time line for an AI's first online reply.
     await press(under("given-show"));
     const line = await textOf(under("given-sent"));

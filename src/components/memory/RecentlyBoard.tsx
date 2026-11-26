@@ -124,7 +124,7 @@ export const RecentlyBoard = component$(() => {
           </div>
           {canUndo && (
             <button type="button" class="flex-shrink-0 text-xs underline text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-50" disabled={busy.value === c.id} onClick$={() => undo(c.id)} data-testid="recently-undo">
-              {busy.value === c.id ? 'Undoing…' : 'Undo'}
+              {busy.value === c.id ? (c.what === 'closed' ? 'Reopening…' : 'Undoing…') : c.what === 'closed' ? 'Reopen' : 'Undo'}
             </button>
           )}
         </div>

@@ -2399,6 +2399,14 @@ export function useChat(props: UseChatProps) {
                   .catch((e) => console.warn("[memory] keeping what was asked for failed:", e));
               }
             }
+            // "That's done", said in fixed words: the one thing this
+            // conversation left open is marked done (a rule on the device
+            // reads the words; any other message changes nothing).
+            if (assistantMsgHash && userInput.trim().length <= 80) {
+              void import("../utils/memoryKeep")
+                .then(({ doneSaid }) => doneSaid({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined }))
+                .catch((e) => console.warn("[memory] closing what was said to be done failed:", e));
+            }
             console.log(
               `[Holochain] Assistant message recorded (${grounded.length} grounded source${grounded.length === 1 ? "" : "s"})`,
             );

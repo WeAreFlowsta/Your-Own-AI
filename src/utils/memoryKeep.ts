@@ -27,6 +27,8 @@ export interface Kept {
   item: KeptItem;
   change: string | null;
   already: boolean;
+  /** The item was open and is now marked done. */
+  closed?: boolean;
 }
 
 export interface KeepRequest {
@@ -138,6 +140,31 @@ export async function keepSaid(req: KeepRequest & { messageId: string }): Promis
       });
       announceKept({ messageId: req.messageId, kept });
       return kept;
+    } catch (e) {
+      if (!/still being saved|not saved yet|not in the list yet/.test(String((e as { message?: string })?.message ?? e))) throw e;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+  return null;
+}
+
+/**
+ * "That's done", said in the chat: when the conversation left one thing
+ * open, it is marked done and the line under the message says so, with
+ * Undo. The words are read on the device by a fixed rule; any other
+ * message changes nothing. Asked once the turn is recorded.
+ */
+export async function doneSaid(req: { messageId: string; aiId: string; text: string; conversation?: string }): Promise<Kept | null> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const closed = await invoke<Kept | null>("memory_done_said", {
+        input: { conversation: req.conversation ?? openConversation(), agentKey: (await keysOf(req.aiId)).agent || null, seq: null, role: "user", text: req.text },
+      });
+      if (closed) {
+        announceKept({ messageId: req.messageId, kept: closed });
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
+      }
+      return closed;
     } catch (e) {
       if (!/still being saved|not saved yet|not in the list yet/.test(String((e as { message?: string })?.message ?? e))) throw e;
       await new Promise((r) => setTimeout(r, 2500));

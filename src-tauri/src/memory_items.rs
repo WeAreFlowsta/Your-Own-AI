@@ -617,7 +617,7 @@ pub struct ItemView {
     pub item: ItemMeta,
 }
 
-fn view(row: &MemoryRow) -> Option<ItemView> {
+pub(crate) fn view(row: &MemoryRow) -> Option<ItemView> {
     Some(ItemView { id: row.id.clone(), text: row.text.clone(), as_of: row.as_of, updated_at: row.updated_at, saved_by: row.saved_by.clone(), item: meta_of(row)? })
 }
 
@@ -660,6 +660,8 @@ pub struct KeptAnswer {
     pub item: ItemView,
     pub change: Option<String>,
     pub already: bool,
+    /// The item was open and is now marked done ("that's done", said in the chat).
+    pub closed: bool,
 }
 
 /// Every item, forgotten and replaced ones too (the page decides what a
@@ -687,13 +689,13 @@ pub async fn memory_keep(app: tauri::AppHandle, input: KeepInput) -> Result<Kept
     let by = input.by.clone().unwrap_or_else(|| "person".to_string());
     let k = Keep { id, text: &text, item_type: input.item_type, ptr: input.ptr, as_of: input.as_of, by: &by, audience: input.audience, kind: &input.kind, why: &input.why, quote: None, subject: input.subject, now };
     match keep(&have, k) {
-        Err(had) => Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true }),
+        Err(had) => Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true, closed: false }),
         Ok((row, change)) => {
             let change_id = change.id.clone();
             let item = save(&app, &key, row, change).await?;
             // A new item is looked at by tidying when the computer is idle.
             crate::memory_tidying::kept(&app, &item.id);
-            Ok(KeptAnswer { item, change: Some(change_id), already: false })
+            Ok(KeptAnswer { item, change: Some(change_id), already: false, closed: false })
         }
     }
 }
@@ -748,6 +750,53 @@ pub(crate) fn said_remember(message: &str) -> Option<SaidRemember> {
     let more = rest.trim_matches(|c: char| !c.is_alphanumeric());
     // "please", "for me", "too" after the phrase add nothing to keep.
     Some(if more.is_empty() || matches!(more, "please" | "for me" | "too" | "as well" | "for later") { SaidRemember::Before } else { SaidRemember::This })
+}
+
+/// Did the person say, in fixed words, that the thing left open is done?
+/// No model reads it: the message begins with one of the phrases, is not a
+/// question, and says little else.
+pub(crate) fn said_done(message: &str) -> bool {
+    const PHRASES: [&str; 10] = ["that's done", "that is done", "thats done", "that's been done", "that has been done", "i've done that", "i have done that", "i did that", "done with that", "mark that as done"];
+    let said = message.trim().to_lowercase().replace('\u{2019}', "'");
+    if said.ends_with('?') {
+        return false;
+    }
+    let said = ["please ", "ok ", "ok, ", "okay ", "okay, "].iter().find_map(|p| said.strip_prefix(p)).unwrap_or(&said).trim_start();
+    let Some(rest) = PHRASES.iter().find_map(|p| said.strip_prefix(p)) else { return false };
+    // "that's done badly" or a longer report is not the phrase: a later
+    // item about it is what "May already be done" is for.
+    let more = rest.trim_matches(|c: char| !c.is_alphanumeric());
+    !rest.chars().next().is_some_and(|c| c.is_alphanumeric()) && (more.is_empty() || matches!(more, "now" | "thanks" | "thank you" | "already" | "today"))
+}
+
+/// The one thing a conversation left open (by the conversation's start).
+/// None when it left nothing open, or more than one: "that" must mean one
+/// thing for it to be closed without asking.
+pub(crate) fn open_here(items: &[Item], started_at: i64) -> Option<&Item> {
+    let mut open = items.iter().filter(|i| i.meta.state == ItemState::Open && i.meta.source.ptr.is_some_and(|p| p.c == started_at));
+    match (open.next(), open.next()) {
+        (Some(one), None) => Some(one),
+        _ => None,
+    }
+}
+
+/// "That's done", said in the chat: when the conversation left exactly one
+/// thing open, it is marked done, as the button on the Open board does,
+/// and can be taken back. Anything else changes nothing.
+#[tauri::command]
+pub async fn memory_done_said(app: tauri::AppHandle, input: KeepMessageInput) -> Result<Option<KeptAnswer>, String> {
+    if !said_done(&input.text) {
+        return Ok(None);
+    }
+    let ptr = place_of(&app, &input).await?;
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let Some(item) = open_here(&have, ptr.c) else { return Ok(None) };
+    let (row, change) = close(item, true, "person", now_ms());
+    let change_id = change.id.clone();
+    let item = save(&app, &key, row, change).await?;
+    crate::memory_tidying::words_changed(&app);
+    Ok(Some(KeptAnswer { item, change: Some(change_id), already: false, closed: true }))
 }
 
 /// An item's words are at most this long; the pointer leads to the rest.
@@ -826,7 +875,7 @@ pub async fn memory_keep_words(app: tauri::AppHandle, text: String) -> Result<Ke
     let key = data_key(&app)?;
     let plain = |t: &str| t.trim().trim_end_matches('.').to_lowercase();
     if let Some(had) = held(&app, &key).into_iter().find(|i| i.meta.state == ItemState::Current && i.meta.source.kind == "note" && plain(&i.row.text) == plain(&text)) {
-        return Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true });
+        return Ok(KeptAnswer { item: view(&had.row).ok_or("not an item")?, change: None, already: true, closed: false });
     }
     let id = {
         use rand::Rng as _;
@@ -836,7 +885,7 @@ pub async fn memory_keep_words(app: tauri::AppHandle, text: String) -> Result<Ke
     let change_id = change.id.clone();
     let item = save(&app, &key, row, change).await?;
     crate::memory_tidying::kept(&app, &item.id);
-    Ok(KeptAnswer { item, change: Some(change_id), already: false })
+    Ok(KeptAnswer { item, change: Some(change_id), already: false, closed: false })
 }
 
 #[tauri::command]
@@ -1147,6 +1196,24 @@ mod tests {
         // A forgotten item does not stand in the way of keeping it again.
         let (gone, _) = forget(&have[0], NOW + 9);
         assert!(keep(&[item_of(gone)], Keep { id: "it-5".into(), text: "We buy flour from Hartwell Mills.", item_type: ItemType::Decision, ptr: ptr(2), as_of: 1, by: "person", audience: None, kind: "exchange", why: "pressed", quote: None, subject: None, now: NOW }).is_ok());
+    }
+
+    #[test]
+    fn thats_done_is_read_from_fixed_words_and_closes_the_one_open_thing() {
+        for yes in ["That's done.", "that\u{2019}s done", "OK, that is done now", "I did that", "Please mark that as done", "I've done that, thanks"] {
+            assert!(said_done(yes), "{yes}");
+        }
+        for no in ["Is that done?", "That's done badly", "That's done, and the fitter also wants a deposit by Friday", "The quote is done", "Done"] {
+            assert!(!said_done(no), "{no}");
+        }
+        let at = |id: &str, t: ItemType, c: i64| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text: &format!("Item {id}."), item_type: t, ptr: Ptr { c, s: 0, t: c, a: 0, b: 0 }, as_of: 1, by: "person", audience: None, kind: "exchange", why: "pressed", quote: None, subject: None, now: 1 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let items = vec![at("open-1", ItemType::Open, 100), at("detail", ItemType::Detail, 100), at("open-2", ItemType::Open, 200), at("open-3", ItemType::Open, 200)];
+        assert_eq!(open_here(&items, 100).map(|i| i.row.id.as_str()), Some("open-1"), "the one thing this conversation left open");
+        assert!(open_here(&items, 200).is_none(), "two open things: which one is not guessed");
+        assert!(open_here(&items, 300).is_none());
     }
 
     #[test]

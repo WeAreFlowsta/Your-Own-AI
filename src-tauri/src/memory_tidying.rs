@@ -117,6 +117,10 @@ pub struct Report {
     /// The older item was confirmed by the person: they are asked.
     pub asked: u32,
     pub both_stand: u32,
+    /// Open things a later item may have finished: put to the person.
+    pub may_be_done: u32,
+    /// Open things a later item did not finish.
+    pub still_open: u32,
     /// Answers that could not be read (nothing changes).
     pub unreadable: u32,
     pub vectors_made: usize,
@@ -229,12 +233,13 @@ async fn run(app: &AppHandle, force: bool, queue: Vec<String>, mut report: Repor
     if !force && !crate::machine::may_run(crate::machine::Work::Heavy, JOB) {
         return Ok(refuse(report, crate::machine::held_reason(JOB).unwrap_or("the computer is busy")));
     }
-    let done = judge_queue(app, force, &key, &llm, queue, checked.map(|c| c.judge_right), report).await;
+    let may_close = checked.as_ref().is_some_and(|c| c.may_close);
+    let done = judge_queue(app, force, &key, &llm, queue, checked.map(|c| c.judge_right), may_close, report).await;
     crate::machine::done(JOB);
     done
 }
 
-async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::llm::LLMState, queue: Vec<String>, score: Option<u32>, mut report: Report) -> Result<Report, String> {
+async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::llm::LLMState, queue: Vec<String>, score: Option<u32>, may_close: bool, mut report: Report) -> Result<Report, String> {
     let scope = crate::memory_items::SCOPE;
     // What other devices judged, undid or turned off since: read first.
     let _ = crate::memory_rows::list_memory_rows(app.clone(), None, scope.to_string(), app.state()).await;
@@ -292,6 +297,41 @@ async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::
                 continue;
             }
             let (earlier, later) = if (other.row.as_of, &other.row.id) <= (new.row.as_of, &new.row.id) { (&other, &new) } else { (&new, &other) };
+            // Something left open, and something later: the question is
+            // whether it was done, never whether one replaces the other.
+            // The answer only ever proposes: the person closes it.
+            if earlier.meta.state == ItemState::Open && later.meta.state == ItemState::Current {
+                if !force && !may_close {
+                    // This model may not judge it; the pair stays for one that may.
+                    continue;
+                }
+                let user = crate::memory_check::done_user(&passage_of(app, earlier), &passage_of(app, later));
+                let reply = match crate::llm::fixed_form_once(llm, crate::memory_check::DONE_SYSTEM, &user, crate::memory_check::schema(Part::Done), 0.2, 300, None).await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        log::info!("[memory tidying] a judgment was not answered: {e}");
+                        waiting.extend(queue[at..].iter().cloned());
+                        report.left_in_queue = leave_waiting(app, &queue, waiting);
+                        return Ok(report);
+                    }
+                };
+                report.judged += 1;
+                let Some(done) = crate::memory_check::read_answer(Part::Done, &reply) else {
+                    report.unreadable += 1;
+                    continue;
+                };
+                let verdict = if done { tidy::DoneVerdict::Done } else { tidy::DoneVerdict::StillOpen };
+                let judged = tidy::done_judged(earlier, later, &verdict, now_ms());
+                report.pairs.push(serde_json::json!({ "earlier": earlier.row.id, "later": later.row.id, "verdict": if done { "DONE" } else { "STILL OPEN" } }));
+                crate::memory_rows::save_and_cache(app, tidy::ledger_row(&judged)).await?;
+                ledger.push(judged);
+                if done {
+                    report.may_be_done += 1;
+                } else {
+                    report.still_open += 1;
+                }
+                continue;
+            }
             let user = crate::memory_check::judge_user(&passage_of(app, earlier), &passage_of(app, later));
             let reply = match crate::llm::fixed_form_once(llm, crate::memory_check::JUDGE_SYSTEM, &user, crate::memory_check::schema(Part::Judge), 0.2, 300, None).await {
                 Ok(r) => r,
@@ -360,6 +400,43 @@ async fn judge_queue(app: &AppHandle, force: bool, key: &[u8; 32], llm: &crate::
     // The words of what now stands may have changed.
     report.vectors_made += crate::memory_state::fill_vectors(app).await.unwrap_or(0);
     Ok(report)
+}
+
+// ── open things later work may have finished ────────────────────────────
+
+/// An open item with the later item that suggests it was done.
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MayBeDone {
+    pub open: crate::memory_items::ItemView,
+    pub later: crate::memory_items::ItemView,
+}
+
+/// What "May already be done" lists, oldest open item first.
+#[tauri::command]
+pub fn memory_may_be_done(app: AppHandle) -> Result<Vec<MayBeDone>, String> {
+    let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()?;
+    let rows = crate::memory_rows::read_cache(&app, &key, crate::memory_items::SCOPE);
+    let items = crate::memory_items::items(&rows);
+    let mut out: Vec<MayBeDone> = tidy::may_be_done(&items, &tidy::ledger(&rows))
+        .into_iter()
+        .filter_map(|(open, later)| Some(MayBeDone { open: crate::memory_items::view(&open.row)?, later: crate::memory_items::view(&later.row)? }))
+        .collect();
+    out.sort_by_key(|m| m.open.as_of);
+    Ok(out)
+}
+
+/// "Still waiting", answered by the person: the suggestion goes, and the
+/// same two items are not put together again.
+#[tauri::command]
+pub async fn memory_still_waiting(app: AppHandle, open: String, later: String) -> Result<(), String> {
+    let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()?;
+    let rows = crate::memory_rows::read_cache(&app, &key, crate::memory_items::SCOPE);
+    let items = crate::memory_items::items(&rows);
+    let (Some(o), Some(l)) = (items.iter().find(|i| i.row.id == open), items.iter().find(|i| i.row.id == later)) else { return Err("no such item".into()) };
+    let judged = tidy::done_judged(o, l, &tidy::DoneVerdict::StillOpen, now_ms());
+    crate::memory_rows::save_and_cache(&app, tidy::ledger_row(&judged)).await?;
+    Ok(())
 }
 
 // ── what the tidying line shows, and the person's switches ──────────────
