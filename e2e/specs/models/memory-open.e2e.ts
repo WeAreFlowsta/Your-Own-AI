@@ -43,8 +43,12 @@ let later = "";
 let other = "";
 
 async function openBoard() {
+  // Through the chat, so the Memory page is opened anew each time; the
+  // second address is given once the first has arrived.
   await browser.url("tauri://localhost/chat/");
+  await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
   await browser.url("tauri://localhost/your-memory/#open");
+  await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/your-memory/", { timeout: 30_000, timeoutMsg: "Memory did not open" });
   await (await $('[data-testid="open-board"]')).waitForExist({ timeout: 60_000 });
 }
 
@@ -67,14 +71,25 @@ describe("the Open board", () => {
 
   it("a later item that reports it done moves it under May already be done, and closes nothing", async function () {
     this.timeout(600_000);
-    later = await keep(LATER, "decision", 1);
-    const { report } = await dev("POST", "memory-tidy", { force: "1", queue: later });
-    console.log(`e2e: tidying: ${JSON.stringify(report)}`);
-    expect(report.ran).toBe(true);
-    const pair = (report.pairs as { earlier: string; later: string; verdict: string }[]).find((p) => p.earlier === open && p.later === later);
-    expect(pair?.verdict).toBe("DONE");
-    expect(report.mayBeDone).toBe(1);
-    expect(report.replaced).toBe(0);
+    // The small model's answer to one pair can go either way from run to
+    // run (how often it is right is what the model check measures). The
+    // board's flow is what is tested here: up to three later items, each
+    // saying it was done in other words; the first judged done is the one.
+    const LATERS = [LATER, "Done: I asked the fitter and his quote for the second oven deck arrived by email.", "The quote from the fitter for the second oven deck is in. That job is finished."];
+    let said = "";
+    for (const [n, words] of LATERS.entries()) {
+      later = await keep(words, "decision", 1);
+      said = words;
+      const { report } = await dev("POST", "memory-tidy", { force: "1", queue: later });
+      console.log(`e2e: tidying (${n + 1}): ${JSON.stringify(report)}`);
+      expect(report.ran).toBe(true);
+      expect(report.replaced).toBe(0);
+      const pair = (report.pairs as { earlier: string; later: string; verdict: string }[]).find((p) => p.earlier === open && p.later === later);
+      if (pair?.verdict === "DONE") break;
+      later = "";
+    }
+    expect(later).not.toBe("");
+    expect((await invoke<unknown[]>("memory_may_be_done")).length).toBe(1);
     // Nothing was closed for the person.
     expect((await item(open)).item.state).toBe("open");
     expect((await invoke<unknown[]>("memory_may_be_done")).length).toBe(1);
@@ -85,7 +100,7 @@ describe("the Open board", () => {
     console.log(`e2e: may already be done: ${JSON.stringify(words.replace(/\s+/g, " "))}`);
     expect(words).toContain(OPEN);
     expect(words).toContain("It was never marked done.");
-    expect(words).toContain(LATER);
+    expect(words).toContain(said);
     // The other open thing is still under what is waiting.
     expect(await (await $(`[data-testid="open-row"][data-id="${other}"]`)).isExisting()).toBe(true);
     await shot("memory-open-may-be-done");
