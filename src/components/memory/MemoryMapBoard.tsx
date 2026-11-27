@@ -48,6 +48,11 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const mode = useSignal<'map' | 'list'>('map');
   const selected = useSignal<string | null>(null);
   const held = useSignal<KeptItem[]>([]);
+  // The search box (one of the further controls): the words typed, and
+  // every kept item, read when the first word is typed.
+  const moreControls = useMoreMemoryControls();
+  const query = useSignal('');
+  const everything = useSignal<KeptItem[] | null>(null);
   const allShown = useSignal(false);
   const naming = useSignal(false);
   const nameDraft = useSignal('');
@@ -230,6 +235,27 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
             {d ? sentence : ''}
           </span>
         </p>
+        {moreControls.value && (
+          <input
+            type="search"
+            class="min-w-0 flex-1 basis-48 max-w-xs px-3 py-1.5 rounded-lg bg-[var(--bg-input)] border border-[var(--border-input)] text-sm text-[var(--text-primary)]"
+            placeholder="Search what is kept"
+            aria-label="Search what is kept"
+            data-testid="map-search"
+            value={query.value}
+            onInput$={async (_, el) => {
+              query.value = el.value;
+              if (everything.value === null && el.value.trim().length >= 2) {
+                try {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  everything.value = await invoke<KeptItem[]>('memory_items');
+                } catch {
+                  everything.value = [];
+                }
+              }
+            }}
+          />
+        )}
         <div class={group}>
           <button type="button" class={pill(mode.value === 'map')} data-testid="map-mode-map" onClick$={() => setMode('map')}>
             Map
@@ -240,6 +266,39 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
         </div>
       </div>
 
+      {moreControls.value && query.value.trim().length >= 2 && (() => {
+        const found = foundItems(everything.value ?? [], query.value);
+        return (
+          <div class="mb-3 rounded-2xl border border-[var(--border-subtle)] overflow-hidden" data-testid="map-search-results">
+            {found.length === 0 ? (
+              <p class="px-4 py-3 text-sm text-[var(--text-secondary)]" data-testid="map-search-none">
+                {everything.value === null ? 'Searching...' : 'Nothing kept matches those words.'}
+              </p>
+            ) : (
+              found.map((i) => {
+                const id = (i.item as { subject?: string | null }).subject || 'sub-about-you';
+                const name = subjects.find((s) => s.id === id)?.name ?? 'About you';
+                return (
+                  <button
+                    key={i.id}
+                    type="button"
+                    data-testid="map-search-result"
+                    data-id={i.id}
+                    class="w-full flex flex-wrap justify-between gap-x-4 gap-y-1 px-4 py-3 text-left border-b border-[var(--border-subtle)] last:border-b-0 hover:bg-[var(--bg-card)]"
+                    onClick$={() => {
+                      selected.value = id;
+                      query.value = '';
+                    }}
+                  >
+                    <span class="min-w-0 text-sm text-[var(--text-primary)] break-words">{i.text}</span>
+                    <span class="text-sm text-[var(--text-secondary)]">{name}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+        );
+      })()}
       {failed.value && (
         <p class="text-sm text-[var(--text-secondary)] mb-3" data-testid="map-not-read" title={failed.value}>
           The map could not be read yet. Your records are still opening; it will show when they are ready.
@@ -435,6 +494,21 @@ const AboutYouAdd = component$(() => {
     </div>
   );
 });
+
+/** Kept items that hold every word typed, the newest first: what stands
+ *  now (current or open), never what was forgotten or replaced. */
+export function foundItems(items: KeptItem[], typed: string, limit = 30): KeptItem[] {
+  const words = typed.toLowerCase().split(/\s+/).filter((w) => w.length > 0);
+  if (words.length === 0) return [];
+  return items
+    .filter((i) => i.item.state === 'current' || i.item.state === 'open')
+    .filter((i) => {
+      const text = i.text.toLowerCase();
+      return words.every((w) => text.includes(w));
+    })
+    .sort((a, b) => b.asOf - a.asOf)
+    .slice(0, limit);
+}
 
 /** An AI wrote this item (it was settled in a conversation, a reply
  *  quoted it, an AI's tool kept it, or it came over from what AIs had
