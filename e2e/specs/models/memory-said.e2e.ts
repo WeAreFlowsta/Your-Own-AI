@@ -75,13 +75,23 @@ describe("controls said in the chat", () => {
     await newChat();
     await ask("Name one primary color and nothing else.");
     const first = await waitForReplyDone();
-    void first;
-    // Stand in for an AI's keeping: one item, written by an AI, from the
-    // exchange just recorded.
-    const turns = (await browser.execute(() => ((window as any).__yoaiTurnsFull?.() ?? []).slice(-1)[0])) as { conversationStartedAt?: number; assistant?: { sequence?: number } } | undefined;
-    const c = turns?.conversationStartedAt ?? 0;
-    const s = turns?.assistant?.sequence ?? 1;
-    if (!(c > 0)) this.skip();
+    // Where the exchange is in the records: keeping the reply by hand
+    // answers with its place, and that keep is then forgotten, so the one
+    // thing left from the exchange is the AI's item below.
+    const turn = (await browser.execute(() => ((window as any).__yoaiTurnsFull?.() ?? []).slice(-1)[0])) as { agentKey?: string; conversationHash?: string } | undefined;
+    if (!turn?.conversationHash) this.skip();
+    let mine: { item: Seen } | null = null;
+    await browser.waitUntil(
+      async () => {
+        mine = await invoke<{ item: Seen }>("memory_keep_message", { input: { conversation: turn!.conversationHash, agentKey: turn!.agentKey ?? null, seq: null, role: "assistant", text: first.text, why: "pressed" } }).catch(() => null);
+        return !!mine;
+      },
+      { timeout: 60_000, interval: 3_000, timeoutMsg: "the reply could not be found in the records" },
+    );
+    const at = mine!.item.item.source?.ptr;
+    const c = at?.c ?? 0;
+    const s = at?.s ?? 1;
+    await invoke("memory_item_change", { id: mine!.item.id, edit: { do: "forget" } });
     const kept = await invoke<{ item: Seen }>("memory_keep", {
       input: { text: "Said-controls test: the first color named was a primary one.", itemType: "detail", ptr: { c, s, t: c, a: 0, b: 0 }, asOf: Math.round(c / 1000), kind: "exchange", why: "settled", by: "ai:said-controls-test" },
     });
