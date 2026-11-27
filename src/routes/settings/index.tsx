@@ -1,3 +1,4 @@
+import { moreMemoryControls, setMoreMemoryControls } from "../../utils/memoryMore";
 import { loadedModelNow } from "../../utils/loadedModel";
 import { getAgentView, setAgentView } from "../../utils/agentView";
 import {
@@ -294,6 +295,8 @@ export default component$(() => {
   // the one the Memory page's tidying line turns: one row, for all the
   // person's devices.
   const memoryLearning = useSignal(true);
+  // Further memory controls on the screens: off unless turned on here.
+  const memoryMore = useSignal(false);
   // The one online dial ("How much goes online"); frontier-first by default.
   const routingShare = useSignal<"frontier" | "balanced" | "local">("frontier");
   const shareRecent = useSignal<{ online: number; total: number } | null>(null);
@@ -430,6 +433,7 @@ export default component$(() => {
       )
       .then((present) => (buildInstalled.value = present))
       .catch(() => (buildInstalled.value = false));
+    memoryMore.value = moreMemoryControls();
     import("@tauri-apps/api/core")
       .then(({ invoke }) => invoke<{ state: string }>("memory_tidy_status"))
       .then((t) => (memoryLearning.value = t.state !== "off"))
@@ -623,6 +627,11 @@ export default component$(() => {
       await store.set("allowAttachmentsOnline", allowAttachmentsOnline.value);
       await store.save();
     } catch { /* store mirror is best-effort */ }
+  });
+
+  const toggleMemoryMore = $(() => {
+    memoryMore.value = !memoryMore.value;
+    setMoreMemoryControls(memoryMore.value);
   });
 
   const toggleMemoryLearning = $(async () => {
@@ -1046,6 +1055,19 @@ export default component$(() => {
                       what is out of date, by itself, on all your devices. Turn
                       off and it keeps only what you save with Remember and
                       changes nothing by itself. What is already kept stays.
+                    </SettingToggle>
+                  </div>
+                  <div>
+                    <SettingToggle
+                      title="Show more memory controls"
+                      checked={memoryMore}
+                      onToggle$={toggleMemoryMore}
+                      testId="settings-memory-more"
+                    >
+                      Memory works the same either way. On, the Memory page
+                      and replies also let you move what is kept, choose which
+                      AIs can use it, see where it came from, leave a passage
+                      out, and see how tidying is going.
                     </SettingToggle>
                   </div>
 

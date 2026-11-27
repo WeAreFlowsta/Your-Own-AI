@@ -5,6 +5,7 @@
  * same content is one press away as a list, and pressing a subject shows
  * what it holds.
  */
+import { useMoreMemoryControls } from '../../utils/memoryMore';
 import { component$, useSignal, useVisibleTask$, $, noSerialize, type NoSerialize, type QRL } from '@builder.io/qwik';
 import { useNavigate } from '@builder.io/qwik-city';
 import LiquidMetalButton from '../LiquidMetalButton';
@@ -435,6 +436,15 @@ const AboutYouAdd = component$(() => {
   );
 });
 
+/** An AI wrote this item (it was settled in a conversation, a reply
+ *  quoted it, an AI's tool kept it, or it came over from what AIs had
+ *  learned before): the person can say it is right. What the person kept
+ *  themselves needs no such word. */
+function writtenByAnAi(i: KeptItem): boolean {
+  const why = String((i.item.source as { why?: string } | null | undefined)?.why ?? '');
+  return why === 'settled' || why === 'asked' || why === 'tool' || why.startsWith('migrated');
+}
+
 /** What a subject holds, newest first. Each item can be corrected, moved
  *  to another subject, or forgotten; every one of these is in Recently
  *  with Undo. */
@@ -451,6 +461,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
   /** Items made a rule for their project on this visit. */
   const ruled = useSignal<string[]>([]);
   const nav = useNavigate();
+  const more = useMoreMemoryControls();
 
   // The exchange an item was kept from, in that conversation's record.
   const seeSource = $(async (id: string, startedAt: number, seq: number) => {
@@ -547,6 +558,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
               <div class="text-xs text-[var(--text-muted)]" data-testid="item-meta">
                 {dayOf(i.asOf)}
                 {i.item.state === 'open' ? ' · open' : ''}
+                {writtenByAnAi(i) ? (i.item.confirmed ? ' · confirmed by you' : ' · written by an AI, not confirmed') : ''}
                 {i.item.audience?.kind === 'ai' ? ` · only for ${props.ais.find((a) => a.founding === (i.item.audience as { ai: string }).ai)?.name ?? 'one AI'}` : ''}
                 {i.item.audience?.kind === 'project' ? ' · for one project' : ''}
                 {i.item.audience?.kind === 'local_ais' ? ' · only for AIs on your devices' : ''}
@@ -597,6 +609,11 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                 </div>
               ) : (
                 <div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+                  {writtenByAnAi(i) && !i.item.confirmed && (
+                    <button type="button" class={act} data-testid="item-confirm" disabled={busy.value === i.id} onClick$={() => change(i.id, { do: 'confirm' })}>
+                      That's right
+                    </button>
+                  )}
                   <button
                     type="button"
                     class={act}
@@ -608,15 +625,17 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                   >
                     Correct
                   </button>
-                  {others.length > 0 && (
+                  {more.value && others.length > 0 && (
                     <button type="button" class={act} data-testid="item-move" onClick$={() => (moving.value = i.id)}>
                       Move
                     </button>
                   )}
-                  <button type="button" class={act} data-testid="item-audience" onClick$={() => (sharing.value = i.id)}>
-                    Who can use this
-                  </button>
-                  {(() => {
+                  {more.value && (
+                    <button type="button" class={act} data-testid="item-audience" onClick$={() => (sharing.value = i.id)}>
+                      Who can use this
+                    </button>
+                  )}
+                  {more.value && (() => {
                     const gone = (i.item as { source_gone?: { with?: string } | null }).source_gone;
                     if (gone)
                       return (
@@ -635,7 +654,7 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                   <button type="button" class={act} data-testid="item-forget" onClick$={() => (forgetting.value = i.id)}>
                     Forget
                   </button>
-                  {(() => {
+                  {more.value && (() => {
                     const project = i.item.audience?.kind === 'project' ? i.item.audience.project : props.subject.project;
                     if (!project) return null;
                     return ruled.value.includes(i.id) ? (

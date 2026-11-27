@@ -30,6 +30,13 @@ export async function waitForChat() {
   if ((await browser.execute(() => location.pathname)) !== "/chat/") await browser.url("tauri://localhost/chat/");
   await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 60_000 });
   await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
+  // The specs press the further memory controls (move, who can use this,
+  // where it came from, leave a passage out), which show only with
+  // "Show more memory controls" on. A spec about the default turns it off.
+  await browser.execute(() => {
+    if (localStorage.getItem("yoai-memory-more") === null) localStorage.setItem("yoai-memory-more", "1");
+    window.dispatchEvent(new CustomEvent("yoai-memory-more"));
+  });
   // The profile lives across the specs of one run: a reply a failed spec left
   // running would be reopened by the page (it runs on at the root) and its
   // Stop would stand where Send is. Stop it, and start from the start view.

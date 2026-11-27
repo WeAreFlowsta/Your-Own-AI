@@ -1,3 +1,4 @@
+import { useMoreMemoryControls } from '../../utils/memoryMore';
 import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
 
 interface Marks {
@@ -48,6 +49,7 @@ function marks(result: TidyStatus['result']): string {
  * on this computer, why or why not, and the one action that fits.
  */
 export const TidyingLine = component$(() => {
+  const more = useMoreMemoryControls();
   const status = useSignal<TidyStatus | null>(null);
   const busy = useSignal(false);
   const showMarks = useSignal(false);
@@ -79,6 +81,9 @@ export const TidyingLine = component$(() => {
 
   const s = status.value;
   if (!s || !s.state) return null;
+  // At rest the line shows only when tidying stopped and waits for the
+  // person. How it is going otherwise is one of the further controls.
+  if (!more.value && s.state !== 'paused') return null;
   const name = modelName(s.model);
   const link = 'underline hover:text-[var(--text-primary)] disabled:opacity-50';
   const words: Record<string, string> = {

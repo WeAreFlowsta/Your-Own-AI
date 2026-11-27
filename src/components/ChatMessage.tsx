@@ -22,6 +22,7 @@ import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { givenLineWords, type Sent, hasMemoryToShow } from '../utils/givenLine';
+import { useMoreMemoryControls } from '../utils/memoryMore';
 import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
 import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
@@ -322,6 +323,7 @@ interface ActionBarProps {
 const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
+  const moreMemory = useMoreMemoryControls();
   const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | 'given' | null>(null);
   /** Remember on this reply: '' | 'saving' | what went wrong. The Kept line
    *  below the bar shows what was kept, with its audience and Undo. */
@@ -667,7 +669,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                     {w.label ? `${w.label}. ` : ''}
                     {w.text}
                   </span>
-                  {w.readRest && (
+                  {w.readRest && moreMemory.value && (
                     <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
                       Read the rest now
                     </button>

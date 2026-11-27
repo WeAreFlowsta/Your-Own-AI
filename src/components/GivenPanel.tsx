@@ -5,6 +5,7 @@
  * checked against the fingerprint kept with it.
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
+import { useMoreMemoryControls } from "../utils/memoryMore";
 import { invoke } from "@tauri-apps/api/core";
 import LiquidMetalButton from "./LiquidMetalButton";
 import { dayWords } from "../utils/givenLine";
@@ -51,6 +52,7 @@ interface Props {
 const FIRST = 3;
 
 export default component$<Props>((props) => {
+  const more = useMoreMemoryControls();
   const panel = useSignal<Panel | null>(null);
   const failed = useSignal("");
   const all = useSignal(false);
@@ -122,11 +124,11 @@ export default component$<Props>((props) => {
                                 Use again
                               </button>
                             </>
-                          ) : (
+                          ) : more.value ? (
                             <button type="button" class="underline" data-testid="given-do-not-use" onClick$={() => useMessage(x.startedAt, x.seq, false)}>
                               Do not use this
                             </button>
-                          ))}
+                          ) : null)}
                       </p>
                     </>
                   ) : (
@@ -200,7 +202,7 @@ export default component$<Props>((props) => {
                 <li>Today's date.</li>
                 <li>
                   The instruction to quote what it uses and give its date.{" "}
-                  {p.instruction && (
+                  {more.value && p.instruction && (
                     <button type="button" class="underline" data-testid="given-exact-text" onClick$={() => { exact.value = !exact.value; }}>
                       {exact.value ? "Hide the exact text" : "Show the exact text"}
                     </button>
