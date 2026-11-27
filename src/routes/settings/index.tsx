@@ -24,7 +24,6 @@ import ExternalAccess from "../../components/ExternalAccess";
 import ConfirmModal from "../../components/ConfirmModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { helpTipsEnabled, setHelpTipsEnabled, resetHelpDismissals } from "../../utils/helpPrefs";
-import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import { downloadUpdateNow, setAutoUpdates, updateStatus, type WaitingUpdate } from "../../utils/updates";
 import {
   ensureMedicalModel,
@@ -291,8 +290,9 @@ export default component$(() => {
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
   const terminalRunImmediately = useSignal(false);
   const currentModel = useSignal<string | null>(null);
-  // "Automatic learning" = NOT paused (the toggle reads positively; the
-  // stored flag is the pause, shared with the Your Memory page).
+  // On = memory keeps what is settled and tidies by itself. The switch is
+  // the one the Memory page's tidying line turns: one row, for all the
+  // person's devices.
   const memoryLearning = useSignal(true);
   // The one online dial ("How much goes online"); frontier-first by default.
   const routingShare = useSignal<"frontier" | "balanced" | "local">("frontier");
@@ -430,7 +430,10 @@ export default component$(() => {
       )
       .then((present) => (buildInstalled.value = present))
       .catch(() => (buildInstalled.value = false));
-    memoryLearning.value = !isMemoryPaused();
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<{ state: string }>("memory_tidy_status"))
+      .then((t) => (memoryLearning.value = t.state !== "off"))
+      .catch(() => { /* not signed in or still starting: the switch shows on */ });
     loadedModelNow().then((m) => { currentModel.value = m; });
     const savedShare = localStorage.getItem("routingOnlineShare");
     if (savedShare === "balanced" || savedShare === "local") {
@@ -622,9 +625,16 @@ export default component$(() => {
     } catch { /* store mirror is best-effort */ }
   });
 
-  const toggleMemoryLearning = $(() => {
-    memoryLearning.value = !memoryLearning.value;
-    setMemoryPaused(!memoryLearning.value);
+  const toggleMemoryLearning = $(async () => {
+    const on = !memoryLearning.value;
+    memoryLearning.value = on;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("memory_tidy_set", { off: !on });
+      window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
+    } catch {
+      memoryLearning.value = !on;
+    }
   });
 
   const toggleSmartMode = $(() => {
@@ -1027,14 +1037,15 @@ export default component$(() => {
                 <div class="space-y-5">
                   <div>
                     <SettingToggle
-                      title="Automatic learning"
+                      title="Keep and tidy by itself"
                       checked={memoryLearning}
                       onToggle$={toggleMemoryLearning}
+                      testId="settings-memory-tidy"
                     >
-                      Your AIs pick up facts you share in conversation (your
-                      name, preferences, projects) so you don't repeat yourself.
-                      Turn off to remember only what you save yourself - what's
-                      already learned is kept and managed on Your Memory.
+                      Memory keeps what you settle in conversation and replaces
+                      what is out of date, by itself, on all your devices. Turn
+                      off and it keeps only what you save with Remember and
+                      changes nothing by itself. What is already kept stays.
                     </SettingToggle>
                   </div>
 

@@ -427,21 +427,13 @@ export async function memoryForTurn(
 
 const PAUSED_KEY = "yoai-memory-paused";
 
-/** Is remembering paused? (extraction skips while paused; injection still uses
- *  what's already there). */
+/** The switch of releases before memory was rebuilt, as this device left
+ *  it: read once by the update, which carries it over as "tidying off". */
 export function isMemoryPaused(): boolean {
   try {
     return localStorage.getItem(PAUSED_KEY) === "1";
   } catch {
     return false;
-  }
-}
-
-export function setMemoryPaused(paused: boolean): void {
-  try {
-    localStorage.setItem(PAUSED_KEY, paused ? "1" : "0");
-  } catch {
-    /* ignore */
   }
 }
 
