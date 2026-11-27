@@ -16,6 +16,7 @@ mod ports;                 // every fixed local port, shifted together by YOAI_P
 mod embedding_model;       // THE embedding model: file, prefixes, pooling, index marker
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
+mod read_speed;           // how fast each local model reads here, and what memory may give for it
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records

@@ -357,6 +357,9 @@ export interface TurnRoom {
   windowTokens?: number | null;
   /** Tokens left after the system prompt, the history and the reply. */
   roomTokens?: number | null;
+  /** The local model file the reply will come from: what is found is
+   *  sized to how fast it reads on this computer. */
+  model?: string | null;
   online: boolean;
   /** The person's question before this one in the open conversation. */
   previousQuestion?: string | null;
@@ -411,6 +414,7 @@ export async function memoryForTurn(
       skipSearch: !opts?.room,
       windowTokens: opts?.room?.windowTokens || null,
       roomTokens: opts?.room?.roomTokens ?? null,
+      model: opts?.room?.model ?? null,
       online: opts?.room?.online ?? opts?.sharing?.online ?? false,
       previousQuestion: opts?.room?.previousQuestion ?? null,
       memoryShared: opts?.room?.memoryShared ?? opts?.sharing?.memoryShared ?? null,

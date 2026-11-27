@@ -1768,6 +1768,7 @@ export function useChat(props: UseChatProps) {
             room: {
               windowTokens: roomCtx > 0 ? roomCtx : null,
               roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
+              model: isOnlineModel || isExternalModel ? null : preferredModel,
               online: isOnlineModel || isExternalModel,
               memoryShared: await sharedNow,
               previousQuestion: before ?? null,

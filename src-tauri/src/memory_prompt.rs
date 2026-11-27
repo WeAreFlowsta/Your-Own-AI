@@ -342,6 +342,10 @@ pub(crate) struct TurnInput {
     /// the reply's reserve, when the sender has counted it.
     #[serde(default)]
     pub room_tokens: Option<u32>,
+    /// The local model file the reply will come from, when the sender
+    /// knows it: what was found is sized to how fast that model reads here.
+    #[serde(default)]
+    pub model: Option<String>,
     /// The person's question before this one, in the open conversation.
     #[serde(default)]
     pub previous_question: Option<String>,
@@ -813,6 +817,13 @@ async fn found_beside(
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
     let room = input.room_tokens.map(|t| t as usize * 3);
+    // A model on this computer reads all of it before its first word:
+    // what is given is held to the wait that reading may add. Before a
+    // model's speed has been seen here, the smallest count is given.
+    let model = input.model.as_deref().filter(|m| crate::read_speed::is_local_file(m));
+    let speed = if input.online { None } else { model.and_then(|m| crate::read_speed::of(app, m)) };
+    let count = if !input.online && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
+    let (exchanges, room) = mb::within_wait(exchanges, room, speed.map(crate::read_speed::wait_chars), wording);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
     let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial });

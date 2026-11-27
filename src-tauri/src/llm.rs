@@ -7168,6 +7168,8 @@ pub async fn stream_chat_completion(
     let mut provider_fingerprint: Option<String> = None;
     let mut server_tps: Option<f64> = None;
     let mut prompt_tps: Option<f64> = None;
+    // Tokens the engine read for this turn (not counting what it already held).
+    let mut prompt_read: Option<u64> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
     // The empty-thought prefill puts a space before the reply's first
@@ -7289,6 +7291,7 @@ pub async fn stream_chat_completion(
                             // Emit usage data if captured
                             if let Some(ref mut usage) = usage_data {
                                 finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+                                crate::read_speed::note(&app, &model_name, prompt_tps, prompt_read);
                                 // Stamp the engine that served: the GGUF name
                                 // for llama.cpp (routing ranks by it), an
                                 // "mlx:" key for MLX, so the row can show both.
@@ -7366,6 +7369,9 @@ pub async fn stream_chat_completion(
                                 if pp.is_finite() && pp > 0.0 {
                                     prompt_tps = Some(pp);
                                 }
+                            }
+                            if let Some(n) = parsed.get("timings").and_then(|t| t.get("prompt_n")).and_then(|v| v.as_u64()) {
+                                prompt_read = Some(n);
                             }
                             // If the server streams reasoning_content (native thinking from
                             // reasoning models like Grok), always wrap it in <think> tags and
@@ -7528,6 +7534,7 @@ pub async fn stream_chat_completion(
     // Emit usage data if captured (fallback for streams that end without [DONE])
     if let Some(ref mut usage) = usage_data {
         finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+        crate::read_speed::note(&app, &model_name, prompt_tps, prompt_read);
         if model_name != "remote" {
             if let Some(tps) = usage.tokens_per_second {
                 let key = if mlx_serving { format!("mlx:{}", model_name) } else { model_name.clone() };

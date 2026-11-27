@@ -206,6 +206,27 @@ pub(crate) struct About {
     pub replaced_left_out: bool,
 }
 
+/// What was found, held to what the model can read within the wait before
+/// its first word (`wait_chars`; absent = no such limit) and to the room
+/// the turn has left. The best result is always given: when even that one
+/// exchange is more than the wait allows, the found message goes alone,
+/// without the messages around it, and nothing else with it.
+pub(crate) fn within_wait(mut found: Vec<Exchange>, room_chars: Option<usize>, wait_chars: Option<usize>, wording: Wording) -> (Vec<Exchange>, Option<usize>) {
+    let Some(wait) = wait_chars else { return (found, room_chars) };
+    let size = |e: &Exchange| exchange_text(e, wording).0.chars().count();
+    let least = |a: usize| Some(room_chars.map_or(a, |r| r.min(a)));
+    match found.first() {
+        Some(first) if size(first) > wait => {
+            found.truncate(1);
+            found[0].before = None;
+            found[0].after = None;
+            let alone = size(&found[0]);
+            (found, least(alone.max(wait)))
+        }
+        _ => (found, least(wait)),
+    }
+}
+
 /// The block and what it holds.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Block {
@@ -850,6 +871,35 @@ mod tests {
             after: Some(ai(3, "Noted: Hartwell Mills from now on.")),
             score: 0.71,
         }
+    }
+
+    #[test]
+    fn what_is_given_is_held_to_the_wait_and_the_best_result_always_goes() {
+        let w = Wording::shipped();
+        let size = |e: &Exchange| exchange_text(e, w).0.chars().count();
+        let whole = size(&mill());
+        // No wait known: nothing changes.
+        let (found, room) = within_wait(vec![mill(), mill()], Some(900), None, w);
+        assert_eq!((found.len(), room), (2, Some(900)));
+        // A wait that holds two: the room is the wait, or the turn's own room when that is less.
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], None, Some(whole * 2 + 10), w);
+        assert_eq!(found.len(), 3);
+        let b = block(&found, &About::default(), 12, 42_000, room, w);
+        assert_eq!(b.shown, 2);
+        assert_eq!(within_wait(vec![mill()], Some(50), Some(whole + 1), w).1, Some(50));
+        // A wait shorter than the best exchange: the found message goes
+        // alone, without the ones around it, and it is shown.
+        let (found, room) = within_wait(vec![mill(), mill()], None, Some(whole - 1), w);
+        assert_eq!(found.len(), 1);
+        assert!(found[0].before.is_none() && found[0].after.is_none());
+        let b = block(&found, &About::default(), 12, 42_000, room, w);
+        assert_eq!(b.shown, 1);
+        assert!(b.text.contains("Hartwell Mills") && !b.text.contains("Dunmore"));
+        // Shorter than the found message itself: it still goes.
+        let (found, room) = within_wait(vec![mill()], None, Some(10), w);
+        assert_eq!(block(&found, &About::default(), 12, 42_000, room, w).shown, 1);
+        // Nothing found: nothing to give.
+        assert!(within_wait(Vec::new(), None, Some(10), w).0.is_empty());
     }
 
     #[test]
