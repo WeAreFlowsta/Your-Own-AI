@@ -213,4 +213,46 @@ describe("memory rules", () => {
     expect(text).toContain("## How to work here");
     expect(text).toContain(`- ${RULE}`);
   });
+
+  it("one AI's rule is made a rule for every AI: it moves to the person's own list", async function () {
+    this.timeout(300_000);
+    const ai = await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const p = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(p);
+      const a = (((await store.get("custom-ais")) || []) as { id?: string; agentPubKey?: string; foundingKey?: string }[])[0];
+      return a ? { id: a.id ?? "", key: a.foundingKey || a.agentPubKey || a.id || "" } : null;
+    });
+    if (!ai?.id) this.skip();
+    const ONE = `Sign off with a short goodbye (test ${Date.now().toString(36)})`;
+    const scope = `ai:${ai!.key}`;
+    await invoke("save_memory_row", { agentKey: ai!.id, row: {
+      id: `one-ai-${Date.now().toString(36)}`, scope, kind: "rule", text: ONE, structured: null,
+      as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
+    } });
+    await browser.execute(() => {
+      localStorage.setItem("yoai-memory-more", "1");
+      window.dispatchEvent(new CustomEvent("yoai-memory-more"));
+    });
+    await browser.url("tauri://localhost/your-memory/");
+    const face = await $(`[data-testid="memory-owner-ai"][data-ai-id="${ai!.id}"]`);
+    await face.waitForExist({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), face);
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
+    const mine = await $(`//*[@data-testid="ai-rules"]//*[@data-testid="memory-rule"][contains(., "${ONE.slice(0, 30)}")]`);
+    await mine.waitForExist({ timeout: 60_000, timeoutMsg: "the AI's own rule is not listed under its face" });
+    await browser.execute((e) => (e as HTMLElement).click(), await mine.$('[data-testid="rule-for-every-ai"]'));
+    await browser.waitUntil(
+      async () => (await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" })).some((r) => r.kind === "rule" && r.text === ONE),
+      { timeout: 60_000, timeoutMsg: "the rule did not reach the person's own list" },
+    );
+    await browser.waitUntil(
+      async () => !(await invoke<{ text: string }[]>("list_memory_rows", { agentKey: ai!.id, scope })).some((r) => r.text === ONE),
+      { timeout: 60_000, timeoutMsg: "the rule is still in the one AI's list" },
+    );
+    // On the page: gone from the AI's rules, there among the person's own.
+    await mine.waitForExist({ reverse: true, timeout: 30_000 });
+    const moved = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === ONE);
+    if (moved) await invoke("save_memory_row", { agentKey: null, row: { ...moved, deleted: true, updated_at: Date.now(), action_hash: null } });
+  });
 });
