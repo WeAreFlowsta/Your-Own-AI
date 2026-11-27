@@ -7,12 +7,35 @@
 //   YOAI_E2E_JUDGE_SEEDS: "1" (default) or "1,2,3"
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { request } from "node:http";
 import { waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const FILE = process.env.YOAI_E2E_JUDGE_FORMS ?? "";
 const OUT = process.env.YOAI_MEMORY_OUT ?? "";
 const SEEDS = (process.env.YOAI_E2E_JUDGE_SEEDS ?? "1").split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
 const BASE = "http://127.0.0.1:11435/internal";
+
+// One pass of the pairs can take longer than fetch waits for an answer's
+// first byte (five minutes), so the request is made with no such limit.
+function post(body: unknown): Promise<{ said?: Said[]; seconds?: number; error?: string }> {
+  return new Promise((done) => {
+    const text = JSON.stringify(body);
+    const req = request(`${BASE}/memory-judge-trial`, { method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(text) } }, (res) => {
+      let got = "";
+      res.on("data", (c) => (got += c));
+      res.on("end", () => {
+        try {
+          done(JSON.parse(got));
+        } catch {
+          done({ error: `status ${res.statusCode}: ${got.slice(0, 200)}` });
+        }
+      });
+    });
+    req.on("error", (e) => done({ error: String(e) }));
+    req.setTimeout(0);
+    req.end(text);
+  });
+}
 
 type Form = { name: string; system: string; schema: unknown; max_tokens?: number };
 type Said = { id: string; expected_yes: boolean; said_yes: boolean | null; reply: string };
@@ -29,14 +52,9 @@ describe("wordings of the replacement judgment", () => {
     const results: { form: string; seed: number; seconds: number; caught: number; ofYes: number; wrongYes: number; ofNo: number; noAnswer: number; said: Said[] }[] = [];
     for (const form of forms) {
       for (const seed of SEEDS) {
-        const r = await fetch(`${BASE}/memory-judge-trial`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ system: form.system, schema: form.schema, seed, max_tokens: form.max_tokens ?? 300 }),
-        });
-        const body = (await r.json()) as { said?: Said[]; seconds?: number; error?: string };
+        const body = await post({ system: form.system, schema: form.schema, seed, max_tokens: form.max_tokens ?? 300 });
         if (!body.said) {
-          console.log(`e2e: JUDGE FORM ${form.name} seed ${seed}: did not run: ${body.error ?? r.status}`);
+          console.log(`e2e: JUDGE FORM ${form.name} seed ${seed}: did not run: ${body.error ?? "no answer"}`);
           continue;
         }
         const yes = body.said.filter((s) => s.expected_yes);
