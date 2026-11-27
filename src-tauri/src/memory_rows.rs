@@ -426,7 +426,7 @@ pub(crate) fn counts_of(scope: &str, rows: &[MemoryRow]) -> (usize, usize) {
         let items = crate::memory_items::items(rows).iter().filter(|i| !matches!(i.meta.state, crate::memory_items::ItemState::Forgotten)).count();
         (items, 0)
     } else {
-        (0, rows.iter().filter(|r| !r.deleted && crate::memory_prompt::is_rule_kind(&r.kind) && !r.text.trim().is_empty()).count())
+        (0, rows.iter().filter(|r| !r.deleted && crate::memory_prompt::is_live_rule(r) && !r.text.trim().is_empty()).count())
     }
 }
 

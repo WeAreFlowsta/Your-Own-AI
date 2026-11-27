@@ -6,7 +6,8 @@
  * (the memory design §9).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
-import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight } from "@qwikest/icons/lucide";
+import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight, LuPauseCircle, LuPlayCircle } from "@qwikest/icons/lucide";
+import { useMoreMemoryControls } from "../utils/memoryMore";
 import {
   listMemoryRows,
   listMemoryRowsCached,
@@ -55,6 +56,7 @@ export default component$<Props>((props) => {
   const episodes = useSignal<MemoryRow[]>([]);
   const sessionsOpen = useSignal(false);
   const openEpisode = useSignal<string | null>(null);
+  const more = useMoreMemoryControls();
   const editingId = useSignal<string | null>(null);
   const editValue = useSignal("");
   const scope = useSignal("");
@@ -177,10 +179,30 @@ export default component$<Props>((props) => {
                         class="flex-1 px-2.5 py-1.5 rounded-lg bg-[var(--bg-card)] border border-[var(--border-subtle)] text-sm text-[var(--text-primary)] focus:outline-none focus:border-[var(--bg-button-primary)]"
                       />
                     ) : (
-                      <p class="min-w-0 flex-1 text-sm text-[var(--text-primary)]">{r.text}</p>
+                      <p class={`min-w-0 flex-1 text-sm ${r.valid_to ? "text-[var(--text-muted)]" : "text-[var(--text-primary)]"}`}>
+                        {r.text}
+                        {r.valid_to ? <span class="ml-2 text-xs" data-testid="memory-rule-off">Turned off</span> : null}
+                      </p>
                     )}
                     {!props.readOnly && editingId.value !== r.id && (
                       <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        {/* A rule turned off is not given to any AI and stays
+                            listed. Turning one back on is always there;
+                            turning one off is one of the further controls. */}
+                        {(r.valid_to || more.value) && (
+                          <button
+                            type="button"
+                            class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                            title={r.valid_to ? "Turn on" : "Turn off"}
+                            data-testid={r.valid_to ? "memory-rule-turn-on" : "memory-rule-turn-off"}
+                            onClick$={async () => {
+                              await saveMemoryRow(revise(r, { valid_to: r.valid_to ? null : Date.now() }), props.agentKey);
+                              await load$();
+                            }}
+                          >
+                            {r.valid_to ? <LuPlayCircle class="w-3.5 h-3.5" /> : <LuPauseCircle class="w-3.5 h-3.5" />}
+                          </button>
+                        )}
                         <button
                           type="button"
                           class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"

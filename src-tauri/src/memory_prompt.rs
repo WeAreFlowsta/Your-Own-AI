@@ -99,6 +99,12 @@ pub(crate) fn is_rule_kind(kind: &str) -> bool {
     matches!(kind, "rule" | "command" | "location")
 }
 
+/// A rule that is given: of a rule kind and not turned off. The person
+/// turns a rule off without removing it; the row then says when it ended.
+pub(crate) fn is_live_rule(row: &MemoryRow) -> bool {
+    is_rule_kind(&row.kind) && row.valid_to.is_none()
+}
+
 fn layer_text(rows: &[&MemoryRow]) -> String {
     let of = |kind: &str| rows.iter().filter(|r| r.kind == kind).map(|r| r.text.as_str()).collect::<Vec<_>>();
     let mut lines: Vec<String> = Vec::new();
@@ -125,7 +131,7 @@ pub(crate) const RULES_BESIDE_BUDGET: usize = 1200;
 /// is beside the question and skims a long system message. Pinned rules
 /// first, then the newest, within a budget; given in their own order.
 pub(crate) fn rules_beside(project_rows: &[MemoryRow]) -> Option<String> {
-    let all: Vec<&MemoryRow> = project_rows.iter().filter(|r| !r.deleted && is_rule_kind(&r.kind) && !r.text.trim().is_empty()).collect();
+    let all: Vec<&MemoryRow> = project_rows.iter().filter(|r| !r.deleted && is_live_rule(r) && !r.text.trim().is_empty()).collect();
     let mut wanted = all.clone();
     wanted.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
     let mut kept: Vec<&MemoryRow> = Vec::new();
@@ -178,8 +184,8 @@ fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a Memory
 /// The rules layer: the person's words, first, on every turn. The rows of
 /// the person and the AI, then the rows of the project the turn is in.
 fn rules_layer(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
-    let mut own: Vec<&MemoryRow> = rows.iter().filter(|r| is_rule_kind(&r.kind)).collect();
-    let mut project: Vec<&MemoryRow> = project_rows.iter().filter(|r| is_rule_kind(&r.kind)).collect();
+    let mut own: Vec<&MemoryRow> = rows.iter().filter(|r| is_live_rule(r)).collect();
+    let mut project: Vec<&MemoryRow> = project_rows.iter().filter(|r| is_live_rule(r)).collect();
     let text_of = |own: &[&MemoryRow], project: &[&MemoryRow]| {
         let (a, b) = (layer_text(own), layer_text(project));
         match (a.is_empty(), b.is_empty()) {
@@ -1002,6 +1008,24 @@ mod tests {
         let cut = rules_beside(&many).unwrap();
         assert!(cut.len() <= RULES_BESIDE_BUDGET + PROJECT_HEADING.len() + 1);
         assert!(cut.contains("Rule number 59 ") && !cut.contains("Rule number 0 "), "the newest are kept");
+    }
+
+    #[test]
+    fn a_rule_turned_off_is_not_given_and_comes_back_when_turned_on() {
+        let mut off = row("person", "rule", "Answer in French.", 5, false);
+        off.valid_to = Some(6);
+        let on = row("person", "rule", "Use metric units.", 4, false);
+        let (text, _) = with_rows(&[off.clone(), on.clone()], &[]);
+        assert!(text.contains("Use metric units."), "{text}");
+        assert!(!text.contains("Answer in French."), "{text}");
+        off.valid_to = None;
+        let (text, _) = with_rows(&[off, on], &[]);
+        assert!(text.contains("Answer in French."), "{text}");
+        // The same holds for a project's rules.
+        let mut p = row("project:p1", "rule", "Bread only.", 9, false);
+        p.valid_to = Some(10);
+        let (text, _) = with_rows(&[], &[p]);
+        assert!(!text.contains("Bread only."), "{text}");
     }
 
     #[test]
