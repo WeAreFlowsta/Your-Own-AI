@@ -23,6 +23,7 @@ import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
 import { givenLineWords, type Sent, hasMemoryToShow } from '../utils/givenLine';
 import { useMoreMemoryControls } from '../utils/memoryMore';
+import { MemoryDownload } from './memory/MemoryDownload';
 import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
 import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
@@ -676,6 +677,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
                   )}
                 </div>
               )}
+              {line?.kind === 'did-not-look' && line.why === 'component_missing' && <MemoryDownload />}
             </div>
           </div>
         );
