@@ -5,9 +5,13 @@
 import os from "node:os";
 import { invoke, waitForChat } from "./_helpers";
 
+// A measuring run that also asks the harder questions (YOAI_QUALITY_HARD)
+// needs hours, not minutes: it gives its own limit.
+const LIMIT = Number(process.env.YOAI_E2E_TIMEOUT_MS) || 2_400_000;
+
 describe("answer quality leg", () => {
   it("grades the installed models on plain questions and shows the registry score beside each", async function () {
-    this.timeout(2_400_000);
+    this.timeout(LIMIT);
     // The app reopens on the page it was left on; only the chat page loads a
     // model on its own (in a suite run the previous spec may have left Offline Models).
     await waitForChat();
@@ -24,7 +28,7 @@ describe("answer quality leg", () => {
       });
       w.__TAURI__.core.invoke("matrix_run", { stamp: st, legs: ["quality"] }).then((p: string) => { w.__matrixPath = p; w.__matrixDone = true; }).catch((e: unknown) => { w.__matrixError = String(e); w.__matrixDone = true; });
     }, stamp);
-    await browser.waitUntil(async () => browser.execute(() => (window as any).__matrixDone === true), { timeout: 2_300_000, interval: 10_000, timeoutMsg: "the matrix never finished" });
+    await browser.waitUntil(async () => browser.execute(() => (window as any).__matrixDone === true), { timeout: LIMIT - 100_000, interval: 10_000, timeoutMsg: "the matrix never finished" });
     const lines = await browser.execute(() => (window as any).__matrixLines as string[]);
     for (const l of lines) if (l.trim()) console.log(`e2e: matrix | ${l.slice(0, 220)}`);
     const graded = lines.filter((l) => /^quality: .+: \d+\/\d+ points/.test(l));

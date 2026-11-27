@@ -887,6 +887,10 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                 continue;
             }
         };
+        // A measuring run asks for the harder questions as well
+        // (`YOAI_QUALITY_HARD`): the plain ones top out, so they do not
+        // tell one local model from another. Such a run is given its time.
+        let harder_too = std::env::var("YOAI_QUALITY_HARD").is_ok();
         let started = std::time::Instant::now();
         let mut points = 0u32;
         let mut per: Vec<String> = Vec::new();
@@ -900,7 +904,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             // A model that thinks at length on a small card took 8 minutes for
             // ten questions with nothing on the screen (10-20, Linux): a time
             // limit per model, and a line when a question runs long.
-            if started.elapsed() > QUALITY_MODEL_BUDGET {
+            if started.elapsed() > QUALITY_MODEL_BUDGET && !harder_too {
                 too_slow = true;
                 break;
             }
@@ -978,6 +982,48 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
         ));
         for n in notes.iter().take(8) {
             sink(n.clone());
+        }
+        if harder_too {
+            // The harder set, asked the way it is asked of online models:
+            // one checkable answer each, read from the last "Answer:" line.
+            let hard_started = std::time::Instant::now();
+            let (mut right, mut asked, mut written) = (0usize, 0usize, 0u64);
+            let mut missed: Vec<String> = Vec::new();
+            for (i, case) in QUALITY_HARD.iter().enumerate() {
+                if cancelled() || hard_started.elapsed() > Duration::from_secs(3600) {
+                    break;
+                }
+                let mut body = serde_json::json!({
+                    "model": model,
+                    "messages": [{"role": "system", "content": HARD_SYSTEM}, {"role": "user", "content": case.ask}],
+                    "max_tokens": 2000, "temperature": 0.0, "stream": false,
+                    "stop": crate::llm::chat_stop_strings(&model),
+                });
+                crate::llm::apply_no_think(&mut body, dir, &model);
+                let v: Result<serde_json::Value, String> = async {
+                    client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(600)).send().await
+                        .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+                }.await;
+                asked += 1;
+                match v {
+                    Ok(v) => {
+                        written += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                        if score_hard(case, &crate::llm::completion_text(&v)) {
+                            right += 1;
+                        } else {
+                            missed.push(format!("q{}", i + 1));
+                        }
+                    }
+                    Err(e) => missed.push(format!("q{} no answer ({})", i + 1, e.chars().take(40).collect::<String>())),
+                }
+            }
+            figure(serde_json::json!({"kind": "quality-hard", "model": model, "right": right, "of": QUALITY_HARD.len(), "asked": asked, "seconds": hard_started.elapsed().as_secs()}));
+            sink(format!(
+                "quality hard: {model}: {right} of {} right ({asked} asked) | registry overall {registry} | {written} tokens in {} s | missed: {}",
+                QUALITY_HARD.len(),
+                hard_started.elapsed().as_secs(),
+                if missed.is_empty() { "none".to_string() } else { missed.join(", ") }
+            ));
         }
         // Under half the points is a model that is not answering plain questions here.
         if points * 2 < max_points {
