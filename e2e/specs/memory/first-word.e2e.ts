@@ -39,7 +39,8 @@ async function timed(question: string): Promise<{ firstWordMs: number; doneMs: n
     async () => {
       const n = await replies();
       const r = await lastReply();
-      if (n > before && r && r.text.trim().length > 0 && !first) first = Date.now() - t0;
+      // "thinking" is the bubble before the model has written anything.
+      if (n > before && r && (r.state === "streaming" || r.state === "done") && !first) first = Date.now() - t0;
       chars = r?.text.length ?? 0;
       return n > before && r?.state === "done";
     },

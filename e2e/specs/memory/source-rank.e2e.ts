@@ -6,7 +6,8 @@
 // passage is written down, with what stood in the first places instead.
 // Everything is given by path, outside the repository:
 //   YOAI_E2E_SOURCES      [{ n, kind, question, sources: [{ title, lo, hi, date }] }]
-//   YOAI_MEMORY_OUT       folder for source-rank.json
+//   YOAI_MEMORY_OUT       folder for source-rank.json, and source-rank-found.json
+//                         (every result for each question)
 //   YOAI_MEMORY_UNTIL_MS  search nothing begun after this (the run's own questions)
 // Nothing is asserted about the places: this is a measure.
 import * as fs from "node:fs";
@@ -38,6 +39,7 @@ describe("where the answer's passage stands in the search", () => {
     await browser.waitUntil(async () => invoke<unknown[]>("memory_items").then(() => true, () => false), { timeout: 600_000, interval: 5_000, timeoutMsg: "memory did not answer within ten minutes" });
     if (UNTIL_MS > 0) await fetch(`${BASE}/memory-search-until`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ at: UNTIL_MS * 1000 }) });
     const rows: unknown[] = [];
+    const all: unknown[] = [];
     let inGiven = 0;
     let inDeep = 0;
     let asked = 0;
@@ -61,6 +63,9 @@ describe("where the answer's passage stands in the search", () => {
       rows.push({ n: q.n, kind: q.kind, place, firstOfItsConversation: sameConversation < 0 ? null : sameConversation + 1, scoreAtPlace, scoreAtCut, topScore: body.found[0]?.score ?? null, found: body.found.length, read: body.read, total: body.total, top });
       console.log(`e2e: SOURCE RANK Q${q.n} ${q.kind}: place ${place ?? `not in ${body.found.length}`}; its conversation first at ${sameConversation < 0 ? "none" : sameConversation + 1}; score ${scoreAtPlace?.toFixed(3) ?? "-"} against ${scoreAtCut?.toFixed(3) ?? "-"} at place ${GIVEN}`);
       if (OUT) fs.writeFileSync(path.resolve(OUT, "source-rank.json"), JSON.stringify(rows, null, 1));
+      // Every result, for trying another order without asking again.
+      all.push({ n: q.n, found: body.found.map((f) => ({ c: f.conversation, seq: f.seq, at: f.at, role: f.role, score: f.score, src: q.sources.some((s) => fromSource(f, s)) })) });
+      if (OUT) fs.writeFileSync(path.resolve(OUT, "source-rank-found.json"), JSON.stringify(all));
     }
     console.log(`e2e: SOURCE RANK TOTAL: of ${asked} questions, the answer's passage is in the first ${GIVEN} for ${inGiven}, in the first ${DEEP} for ${inDeep}`);
     expect(asked).toBeGreaterThan(0);
