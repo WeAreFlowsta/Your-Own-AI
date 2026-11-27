@@ -322,6 +322,7 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/memory-ask", post(memory_ask_dev))
         .route("/internal/last-chat-request", get(last_chat_request_dev))
         .route("/internal/memory-check", post(memory_check_dev))
+        .route("/internal/memory-judge-trial", post(memory_judge_trial_dev))
         .route("/internal/memory-tidy", post(memory_tidy_dev))
         .route("/internal/memory-keeping", post(memory_keeping_dev))
         .route("/internal/memory-update-forget", post(memory_update_forget_dev))
@@ -1082,6 +1083,29 @@ async fn memory_ask_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -
     match crate::llm::chat_turn_once(&state, messages).await {
         Ok((request, reply)) => Json(json!({ "ai": ai.name, "path": "port", "question": question, "request": request, "reply": reply })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+/// Dev builds only: the shipped pairs judged once with the wording and
+/// form in the body (`system`, `schema`, optional `seed` and
+/// `max_tokens`), for measuring a wording before it is the app's.
+async fn memory_judge_trial_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (&app, &body);
+        err(StatusCode::NOT_FOUND, "not found", "not_found")
+    }
+    #[cfg(debug_assertions)]
+    {
+        let Some(system) = body["system"].as_str() else { return err(StatusCode::BAD_REQUEST, "system is missing", "bad_request") };
+        let seed = body["seed"].as_u64().unwrap_or(1);
+        let max_tokens = body["max_tokens"].as_u64().unwrap_or(300) as u32;
+        let state = app.state::<crate::llm::LLMState>();
+        let started = std::time::Instant::now();
+        match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens).await {
+            Ok(said) => Json(json!({ "said": said, "seconds": started.elapsed().as_secs() })).into_response(),
+            Err(e) => Json(json!({ "error": e })).into_response(),
+        }
     }
 }
 

@@ -8,8 +8,7 @@
 // record; which way the verdict falls is a measure, not an assertion.
 import { waitForChat, ask, waitForReplyDone, invoke, shot } from "./_helpers";
 
-type Mark = { passed: boolean; caught: number; ofYes: number; wrongYes: number; ofNo: number; right: number; examples: number };
-type Check = { model: string | null; done: number; total: number; result: { mayTidy: boolean; mayKeep: boolean; mayClose: boolean; [k: string]: unknown } | null };
+type Check = { model: string | null; done: number; total: number; result: { may_tidy: boolean; may_keep: boolean; may_close: boolean; runs?: { parts: { part: string; caught: number; ofYes: number; wrongYes: number; ofNo: number; passed: boolean }[] }[]; [k: string]: unknown } | null };
 type Tidy = { state: string; model: string | null; mayKeep: boolean };
 
 const ASKED = !!process.env.YOAI_MEMORY_CHECK;
@@ -36,14 +35,13 @@ describe("the built-in check", () => {
     );
     const c = await invoke<Check>("memory_check_status");
     console.log(`e2e: CHECK RESULT on ${c.model}: ${JSON.stringify(c.result)}`);
-    for (const [part, m] of Object.entries(c.result ?? {})) {
-      const mark = m as Mark | boolean | number | string | null;
-      if (mark && typeof mark === "object" && "caught" in mark) console.log(`e2e: ${part}: caught ${mark.caught} of ${mark.ofYes}, wrong ${mark.wrongYes} of ${mark.ofNo}, passed ${mark.passed}`);
+    for (const [n, run] of (c.result?.runs ?? []).entries()) {
+      for (const m of run.parts) console.log(`e2e: run ${n + 1} ${m.part}: caught ${m.caught} of ${m.ofYes}, wrong ${m.wrongYes} of ${m.ofNo}, passed ${m.passed}`);
     }
     const t = await invoke<Tidy>("memory_tidy_status");
     console.log(`e2e: tidying line state: ${t.state}, may keep ${t.mayKeep}`);
-    expect(t.state).toBe(c.result!.mayTidy ? "on" : "not-passed");
-    expect(t.mayKeep).toBe(c.result!.mayKeep);
+    expect(t.state).toBe(c.result!.may_tidy ? "on" : "not-passed");
+    expect(t.mayKeep).toBe(c.result!.may_keep);
     await browser.url("tauri://localhost/your-memory/");
     await (await $('[data-testid="memory-tabs"]')).waitForExist({ timeout: 60_000 });
     await (await $('[data-testid="memory-tab"][data-tab="recently"]')).click();
