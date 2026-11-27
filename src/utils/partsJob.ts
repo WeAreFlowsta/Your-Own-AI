@@ -20,6 +20,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { modelManager } from "./modelManager";
 import { EMBEDDING_MODEL } from "../data/recommended-models";
+import { onlineOnlyStep } from "./partsStep";
+
+export { onlineOnlyStep };
 
 const REMOVED_PREFIX = "part-removed:";
 
@@ -105,14 +108,6 @@ async function ensureProjectsHelper(): Promise<string> {
     }
   }
   return outcome;
-}
-
-/** What the job does for a person with no model on this computer. Pure,
- *  for the tests. */
-export function onlineOnlyStep(s: { aiModels: string[]; metered: boolean }): "no-ais-yet" | "ask-first" | "fetch" {
-  const online = s.aiModels.some((m) => m.startsWith("online:") || m === "auto:online" || m === "auto:online-offline");
-  if (!online) return "no-ais-yet";
-  return s.metered ? "ask-first" : "fetch";
 }
 
 async function onlineOnlyPersonMayFetch(): Promise<boolean> {
