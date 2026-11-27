@@ -1,4 +1,165 @@
 {
- "note": "Measured results per local model file. Written by the grading run; merged from reports. Do not edit by hand.",
- "results": []
+ "note": "Measured results per local model file: our harder questions (matrix.rs QUALITY_HARD) and the built-in memory check. Written by the grading run and merged from reports; not edited by hand.",
+ "results": [
+  {
+   "file": "gemma-4-E2B-it-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 35,
+    "of": 36
+   },
+   "sha256": "9378bc471710229ef165709b62e34bfb62231420ddaf6d729e727305b5b8672d",
+   "memory": {
+    "set": 3,
+    "may_keep": true,
+    "may_close": true,
+    "may_tidy": false,
+    "judge_right": 20
+   }
+  },
+  {
+   "file": "LFM2.5-8B-A1B-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 25,
+    "of": 36
+   },
+   "sha256": "4923ec14f06b968b74d663e5949867d2d9c3bf13a20b8be1a9f9af39989b2bb0",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 18
+   }
+  },
+  {
+   "file": "medgemma-1.5-4b-it-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 15,
+    "of": 36
+   },
+   "sha256": "b31becdf4f39561800505514cce67681604fe449d04dd35c8c92fd7848c6d7bd",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 24
+   }
+  },
+  {
+   "file": "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 28,
+    "of": 36
+   },
+   "sha256": "fd46fc371ff0509bfa8657ac956b7de8534d7d9baaa4947975c0648c3aa397f4",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 19
+   }
+  },
+  {
+   "file": "Nemotron-3.5-Bolt-E4B-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 33,
+    "of": 36
+   },
+   "sha256": "c8af2b8aea10a690a1d9491db744a9446660173cb38fc489612b556615a69612",
+   "memory": {
+    "set": 3,
+    "may_keep": true,
+    "may_close": true,
+    "may_tidy": false,
+    "judge_right": 22
+   }
+  },
+  {
+   "file": "Phi-4-mini-instruct-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 24,
+    "of": 36
+   },
+   "sha256": "88c00229914083cd112853aab84ed51b87bdf6b9ce42f532d8c85c7c63b1730a",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": true,
+    "may_tidy": false,
+    "judge_right": 23
+   }
+  },
+  {
+   "file": "Qwen3.5-2B-Uncensored-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 25,
+    "of": 36
+   },
+   "sha256": "be3ccca13a9d1bc8b67165ea80bd103cd6151a37ad131183cc7ca388f78d9517",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 15
+   }
+  },
+  {
+   "file": "Qwen3.5-4B-Opus-Distilled-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 33,
+    "of": 36
+   },
+   "sha256": "de8cf2454c46ec34e6b991dc11f5dd42d543926272d8a59d36ceb5a2eaf7962a",
+   "memory": {
+    "set": 3,
+    "may_keep": true,
+    "may_close": true,
+    "may_tidy": false,
+    "judge_right": 21
+   }
+  },
+  {
+   "file": "Qwen3.8-2B-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 21,
+    "of": 36
+   },
+   "sha256": "4aa0fb13c431514262f259d420ecc95a8714df58ac2a2384514e20b93983f0ff",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 16
+   }
+  },
+  {
+   "file": "Qwen3.8-4B-Q4_K_M.gguf",
+   "questions": {
+    "set": 1,
+    "right": 31,
+    "of": 36
+   },
+   "sha256": "dec96e8cf2e11b613bb46513dec485377f9ca5a351e71712ee0e244f287c6790",
+   "memory": {
+    "set": 3,
+    "may_keep": false,
+    "may_close": false,
+    "may_tidy": false,
+    "judge_right": 23
+   }
+  }
+ ]
 }
