@@ -769,6 +769,10 @@ pub enum SaidRemember {
 /// only when it begins with one of the phrases and is not a question.
 pub(crate) fn said_remember(message: &str) -> Option<SaidRemember> {
     const PHRASES: [&str; 6] = ["remember that", "remember this", "keep that", "keep this", "don't forget that", "dont forget that"];
+    // "Keep this conversation out of memory" asks for the opposite.
+    if said_control(message).is_some() {
+        return None;
+    }
     let said = message.trim().to_lowercase().replace('\u{2019}', "'");
     if said.ends_with('?') {
         return None;
@@ -777,6 +781,12 @@ pub(crate) fn said_remember(message: &str) -> Option<SaidRemember> {
     let rest = PHRASES.iter().find_map(|p| said.strip_prefix(p))?;
     // "remember thatch roofs leak" is not the phrase.
     if rest.chars().next().is_some_and(|c| c.is_alphanumeric()) {
+        return None;
+    }
+    // "Keep that out of it", "keep this private", "keep that to yourself":
+    // not a request to keep something in memory.
+    let after = rest.trim_start();
+    if ["out of ", "private", "secret", "to yourself", "between us", "off the record"].iter().any(|p| after.starts_with(p)) {
         return None;
     }
     let more = rest.trim_matches(|c: char| !c.is_alphanumeric());
@@ -1452,6 +1462,10 @@ mod tests {
         }
         for not in ["Do you remember that?", "remember that time we talked about ovens?", "I remember that well", "remember thatch roofs leak", "What should I remember?", "keep going", ""] {
             assert_eq!(said_remember(not), None, "{not}");
+        }
+        // Asking for something to be kept out is not asking for it to be kept.
+        for out in ["Keep this conversation out of memory.", "keep this out of memory", "Keep this chat private", "keep that out of it", "Keep this private.", "keep that to yourself", "Keep this between us"] {
+            assert_eq!(said_remember(out), None, "{out}");
         }
     }
 

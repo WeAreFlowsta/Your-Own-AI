@@ -66,6 +66,11 @@ describe("controls said in the chat", () => {
     expect(line.said).toBe("kept_out");
     expect(line.text).toContain("kept out of memory");
     await browser.waitUntil(async () => (await notUsed()).some((u) => u.private), { timeout: 30_000, timeoutMsg: "the conversation was not made private" });
+    // The request itself is not kept as something to remember, and the
+    // line under it stays the one that says what was done.
+    await browser.pause(6_000);
+    expect((await invoke<Seen[]>("memory_items")).some((i) => /out of memory/i.test(i.text))).toBe(false);
+    expect((await saidLine()).said).toBe("kept_out");
     await browser.execute((e) => (e as HTMLElement).click(), await $('(//*[@data-testid="chat-message"][@data-role="user"])[last()]//*[@data-testid="kept-undo"]'));
     await browser.waitUntil(async () => !(await notUsed()).some((u) => u.private), { timeout: 30_000, timeoutMsg: "Undo did not make it usable again" });
   });

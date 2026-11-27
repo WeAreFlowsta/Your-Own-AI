@@ -178,7 +178,7 @@ pub struct HeardAnswer {
     pub offer: bool,
     /// The earlier words, when it was given before.
     pub earlier: Option<String>,
-    /// `first` | `offer` | `answered` | `is_a_rule` | `not_measured`.
+    /// `first` | `offer` | `answered` | `is_a_rule` | `not_measured` | `a_control`.
     pub why: &'static str,
     /// How close the nearest instruction heard before is (1 = the same).
     pub closest: Option<f32>,
@@ -192,6 +192,12 @@ pub async fn memory_rule_heard(app: tauri::AppHandle, input: HeardInput) -> Resu
     let text = input.text.trim().to_string();
     if text.is_empty() || text.len() > 400 {
         return Ok(HeardAnswer { why: "not_measured", ..Default::default() });
+    }
+    // Words the app acts on by a fixed rule ("that's done", "forget
+    // that", "keep this conversation out of memory") are not instructions
+    // for how to answer.
+    if crate::memory_items::said_control(&text).is_some() || crate::memory_items::said_done(&text) {
+        return Ok(HeardAnswer { why: "a_control", ..Default::default() });
     }
     let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get()?.data_key()?;
     // The turn does not wait for this, so it can wait for the part that
