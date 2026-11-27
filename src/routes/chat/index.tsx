@@ -610,6 +610,9 @@ export default component$(() => {
 
   // A message sent while a reply was streaming (see handleSubmit).
   const queuedMessage = useSignal<string | null>(null);
+  // The key ask was answered for the session message about to be sent
+  // again: it is not asked a second time.
+  const sessionKeyAnswered = useSignal(false);
 
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
@@ -1859,7 +1862,24 @@ export default component$(() => {
       agentState.mode === "tools" &&
       activeTools(selectedAi.value.aiConfig).length > 0 &&
       (!agentState.sessionAiId || agentState.sessionAiId === selectedAi.value.aiConfig?.id);
+    // A message that looks like it holds a password or a key, on its way
+    // to a session whose AI answers off this computer: asked first, as a
+    // direct chat asks.
+    const sessionKeyAsk = async (): Promise<boolean> => {
+      const model = selectedAi.value.aiConfig?.model ?? "";
+      if (!/^(online|external):/.test(model)) return false;
+      if (sessionKeyAnswered.value) {
+        sessionKeyAnswered.value = false;
+        return false;
+      }
+      const masked = await invoke<{ text: string; hidden: number }>("mask_text", { text: finalInput }).catch(() => null);
+      if (!masked || masked.hidden === 0) return false;
+      const { whereWords } = await import("../../utils/givenLine");
+      chatState.error = JSON.stringify({ code: "key_ask", where: whereWords(model), without: masked.text, session: true, typed: input.value });
+      return true;
+    };
     if (agentState.folderPath && (agentState.mode === "project" || toolsSessionIsThisAis)) {
+      if (await sessionKeyAsk()) return;
       // Document text goes to the model as context; the bubble shows file
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
@@ -1887,6 +1907,7 @@ export default component$(() => {
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
     if (wantsTools) {
+      if (await sessionKeyAsk()) return;
       // The turn goes on screen NOW, on the tools surface, and the session
       // opens behind it (its tool servers, sometimes a model load: 15 s of
       // a blank page on 09-25). The pearl says what it waits for.
@@ -2763,7 +2784,7 @@ export default component$(() => {
                   }
 
                   if (online?.code === "key_ask") {
-                    const k = online as { where?: string; without?: string };
+                    const k = online as { where?: string; without?: string; session?: boolean; typed?: string };
                     const link = "text-sm text-yellow-700 dark:text-yellow-300 hover:underline";
                     return (
                       <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4" data-testid="key-ask">
@@ -2774,6 +2795,17 @@ export default component$(() => {
                           <LiquidMetalButton
                             testId="key-ask-without"
                             onClick$={async () => {
+                              // In a session the message is still in the field: it
+                              // is sent again from there.
+                              if (k.session) {
+                                chatState.error = null;
+                                sessionKeyAnswered.value = true;
+                                // What is sent without the key already carries the chosen action's words.
+                                selectedAction.value = null;
+                                input.value = k.without ?? "";
+                                await handleSubmit();
+                                return;
+                              }
                               const t = chatState.pendingTurn;
                               chatState.error = null;
                               if (t && k.without) await sendMessage(k.without, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
@@ -2786,6 +2818,15 @@ export default component$(() => {
                             type="button"
                             data-testid="key-ask-send"
                             onClick$={async () => {
+                              // In a session the message is still in the field: it
+                              // is sent again from there.
+                              if (k.session) {
+                                chatState.error = null;
+                                sessionKeyAnswered.value = true;
+                                input.value = k.typed ?? input.value;
+                                await handleSubmit();
+                                return;
+                              }
                               const t = chatState.pendingTurn;
                               chatState.error = null;
                               if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
