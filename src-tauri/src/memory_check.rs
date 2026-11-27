@@ -393,6 +393,24 @@ pub async fn memory_check_status(app: tauri::AppHandle) -> Result<CheckStatus, S
     Ok(CheckStatus { model, result: stored(&app, &m), done, total })
 }
 
+/// How long the check waits for a model file's hash before it runs without one.
+const HASH_WAIT: std::time::Duration = std::time::Duration::from_secs(1800);
+/// The model whose hash is waited for, and since when.
+static HASH_WAITED: std::sync::Mutex<Option<(String, std::time::Instant)>> = std::sync::Mutex::new(None);
+
+/// Has this model's hash been waited for long enough? The wait starts the
+/// first time it is asked about a model, and again for another model.
+fn waited_long_enough_for_a_hash(model: &str, now: std::time::Instant) -> bool {
+    let mut held = HASH_WAITED.lock().unwrap_or_else(|e| e.into_inner());
+    match held.as_ref() {
+        Some((m, since)) if m == model => now.duration_since(*since) >= HASH_WAIT,
+        _ => {
+            *held = Some((model.to_string(), now));
+            false
+        }
+    }
+}
+
 /// One stretch of the check: as many examples as the computer's idle time
 /// gives. Answers how long to wait before looking again.
 async fn stretch(app: &tauri::AppHandle) -> std::time::Duration {
@@ -409,7 +427,15 @@ async fn stretch(app: &tauri::AppHandle) -> std::time::Duration {
     }
     let set = shipped_set();
     let per_run = set.pairs.len() + set.exchanges.len() + set.done.len();
+    // A result is kept for the file as it is, by its hash, and the hash is
+    // made some minutes after launch. A check begun before it is known
+    // would keep a result that reads as stale the moment the hash exists,
+    // and the whole check would run a second time. So it waits for the
+    // hash, and goes without one only when none came in half an hour.
     let sha256 = crate::model_hash::get(app, &model);
+    if sha256.is_none() && !waited_long_enough_for_a_hash(&model, std::time::Instant::now()) {
+        return Duration::from_secs(60);
+    }
     let mut progress = read_progress(app).filter(|p| p.model == model && p.set == set.v && p.sha256 == sha256).unwrap_or_else(|| Progress { model: model.clone(), set: set.v, sha256: sha256.clone(), runs: Vec::new() });
     let mut order: Option<(usize, Vec<Asked>)> = None;
     while let Some((run, at)) = next_to_ask(&progress, per_run) {
@@ -497,6 +523,19 @@ mod tests {
         let mut out: Vec<Answered> = (0..yes).map(|i| Answered { part, expected_yes: true, said_yes: Some(i < caught) }).collect();
         out.extend((0..no).map(|i| Answered { part, expected_yes: false, said_yes: Some(i < wrong) }));
         out
+    }
+
+    #[test]
+    fn the_check_waits_for_a_files_hash_and_then_goes_without() {
+        let t0 = std::time::Instant::now();
+        assert!(!waited_long_enough_for_a_hash("wait-test-a.gguf", t0), "the wait starts");
+        assert!(!waited_long_enough_for_a_hash("wait-test-a.gguf", t0 + HASH_WAIT - std::time::Duration::from_secs(1)));
+        assert!(waited_long_enough_for_a_hash("wait-test-a.gguf", t0 + HASH_WAIT));
+        // Another model starts its own wait.
+        assert!(!waited_long_enough_for_a_hash("wait-test-b.gguf", t0 + HASH_WAIT));
+        // A result kept with no hash is stale once the file has one: the reason for the wait.
+        let s = settled(&[], None, 0);
+        assert!(s.is_none());
     }
 
     #[test]

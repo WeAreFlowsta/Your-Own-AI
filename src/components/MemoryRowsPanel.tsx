@@ -181,7 +181,7 @@ export default component$<Props>((props) => {
                     ) : (
                       <p class={`min-w-0 flex-1 text-sm ${r.valid_to ? "text-[var(--text-muted)]" : "text-[var(--text-primary)]"}`}>
                         {r.text}
-                        {r.valid_to ? <span class="ml-2 text-xs" data-testid="memory-rule-off">Turned off</span> : null}
+                        {r.valid_to ? <span class="ml-2 text-xs" data-testid="rule-off-mark">Turned off</span> : null}
                       </p>
                     )}
                     {!props.readOnly && editingId.value !== r.id && (
@@ -194,7 +194,7 @@ export default component$<Props>((props) => {
                             type="button"
                             class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
                             title={r.valid_to ? "Turn on" : "Turn off"}
-                            data-testid={r.valid_to ? "memory-rule-turn-on" : "memory-rule-turn-off"}
+                            data-testid={r.valid_to ? "rule-turn-on" : "rule-turn-off"}
                             onClick$={async () => {
                               await saveMemoryRow(revise(r, { valid_to: r.valid_to ? null : Date.now() }), props.agentKey);
                               await load$();

@@ -73,9 +73,10 @@ describe("controls said in the chat", () => {
   it("that's right confirms the one thing an AI kept from the exchange before", async function () {
     this.timeout(600_000);
     await newChat();
-    await ask("Name one primary color and nothing else.");
-    const first = await waitForReplyDone();
-    // Where the exchange is in the records: keeping the reply by hand
+    const QUESTION = "Name one primary color and nothing else.";
+    await ask(QUESTION);
+    await waitForReplyDone();
+    // Where the exchange is in the records: keeping the question by hand
     // answers with its place, and that keep is then forgotten, so the one
     // thing left from the exchange is the AI's item below.
     const turn = (await browser.execute(() => ((window as any).__yoaiTurnsFull?.() ?? []).slice(-1)[0])) as { agentKey?: string; conversationHash?: string } | undefined;
@@ -83,10 +84,10 @@ describe("controls said in the chat", () => {
     let mine: { item: Seen } | null = null;
     await browser.waitUntil(
       async () => {
-        mine = await invoke<{ item: Seen }>("memory_keep_message", { input: { conversation: turn!.conversationHash, agentKey: turn!.agentKey ?? null, seq: null, role: "assistant", text: first.text, why: "pressed" } }).catch(() => null);
+        mine = await invoke<{ item: Seen }>("memory_keep_message", { input: { conversation: turn!.conversationHash, agentKey: turn!.agentKey ?? null, seq: null, role: "user", text: QUESTION, why: "pressed" } }).catch(() => null);
         return !!mine;
       },
-      { timeout: 60_000, interval: 3_000, timeoutMsg: "the reply could not be found in the records" },
+      { timeout: 60_000, interval: 3_000, timeoutMsg: "the question could not be found in the records" },
     );
     const at = mine!.item.item.source?.ptr;
     const c = at?.c ?? 0;
