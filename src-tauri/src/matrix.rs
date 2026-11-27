@@ -367,6 +367,14 @@ async fn spawn_bench_server(
 ) -> Result<KillOnDrop, String> {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
+    // A bench engine answers one-off questions; none comes back. Left alone
+    // the engine keeps the states of past prompts in memory, up to 8 GB of
+    // them: a long leg (36 questions of a model that writes at length) grew
+    // past 6 GB and was stopped for memory. It keeps none here.
+    let mut args = args;
+    if !args.iter().any(|a| a == "--cache-ram") {
+        args.extend(["--cache-ram".to_string(), "0".to_string()]);
+    }
     let child = bench_command(bin, &args)
         .current_dir(work_dir)
         .stdout(Stdio::null())
