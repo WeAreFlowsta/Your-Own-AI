@@ -1090,22 +1090,17 @@ async fn memory_ask_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -
 /// form in the body (`system`, `schema`, optional `seed` and
 /// `max_tokens`), for measuring a wording before it is the app's.
 async fn memory_judge_trial_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
-    #[cfg(not(debug_assertions))]
-    {
-        let _ = (&app, &body);
-        err(StatusCode::NOT_FOUND, "not found", "not_found")
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
-    #[cfg(debug_assertions)]
-    {
-        let Some(system) = body["system"].as_str() else { return err(StatusCode::BAD_REQUEST, "system is missing", "bad_request") };
-        let seed = body["seed"].as_u64().unwrap_or(1);
-        let max_tokens = body["max_tokens"].as_u64().unwrap_or(300) as u32;
-        let state = app.state::<crate::llm::LLMState>();
-        let started = std::time::Instant::now();
-        match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens).await {
-            Ok(said) => Json(json!({ "said": said, "seconds": started.elapsed().as_secs() })).into_response(),
-            Err(e) => Json(json!({ "error": e })).into_response(),
-        }
+    let Some(system) = body["system"].as_str() else { return err(StatusCode::BAD_REQUEST, "system is missing", "bad_request") };
+    let seed = body["seed"].as_u64().unwrap_or(1);
+    let max_tokens = body["max_tokens"].as_u64().unwrap_or(300) as u32;
+    let state = app.state::<crate::llm::LLMState>();
+    let started = std::time::Instant::now();
+    match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens).await {
+        Ok(said) => Json(json!({ "said": said, "seconds": started.elapsed().as_secs() })).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
     }
 }
 

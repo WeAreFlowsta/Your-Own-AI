@@ -393,12 +393,11 @@ pub async fn memory_check_status(app: tauri::AppHandle) -> Result<CheckStatus, S
     Ok(CheckStatus { model, result: stored(&app, &m), done, total })
 }
 
-/// Development builds only: the replacement judgment of every pair of the
+/// For the development route only: the replacement judgment of every pair of the
 /// shipped set, asked once with another wording and form, so a wording
 /// can be measured before it is made the app's. The form's `verdict`
 /// field is read as the shipped one is. Answers, per pair: its id, what
 /// was expected, what was said, and the reply.
-#[cfg(debug_assertions)]
 pub(crate) async fn judge_trial(state: &crate::llm::LLMState, system: &str, schema: serde_json::Value, seed: u64, max_tokens: u32) -> Result<Vec<serde_json::Value>, String> {
     let set = shipped_set();
     let mut out = Vec::new();
