@@ -698,8 +698,10 @@ async fn found_beside(
             Ok(v) => v,
             Err(why) => return not_run(why),
         },
-        // The sender embeds the question itself and could not.
-        None => return not_run(WhyNot::DidNotStartInTime),
+        // The sender embeds the question itself and could not. When the
+        // part that searches is not on this computer, that is the cause to
+        // name: it is the one the person can do something about.
+        None => return not_run(if crate::inference_memory::search_part_is_here(app) { WhyNot::DidNotStartInTime } else { WhyNot::ComponentMissing }),
     };
     // The open conversation's own messages are already being sent.
     let open_k = input.conversation.as_deref().filter(|c| !c.is_empty()).and_then(|c| crate::transcript_search::row_key(app, c).ok());
