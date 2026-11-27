@@ -87,6 +87,31 @@ describe("show more memory controls", () => {
     await shot("memory-more-on");
   });
 
+  it("on: who can use this, for the whole subject, is given to every item in it", async function () {
+    this.timeout(300_000);
+    await setMore(true);
+    await openItem(mine);
+    const open = await $('[data-testid="subject-audience"]');
+    await open.waitForExist({ timeout: 30_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), open);
+    const local = await $('[data-testid="subject-audience-to"][data-ai="local_ais"]');
+    await local.waitForExist({ timeout: 20_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), local);
+    const subject = mine.item.subject || "sub-about-you";
+    await browser.waitUntil(
+      async () => {
+        const all = await invoke<{ id: string; item: { state: string; subject?: string | null; audience?: { kind: string }; source?: { kind: string } | null } }[]>("memory_items");
+        const here = all.filter((i) => (i.item.subject || "sub-about-you") === subject && (i.item.state === "current" || i.item.state === "open") && i.item.source?.kind !== "document");
+        return here.length > 0 && here.every((i) => i.item.audience?.kind === "local_ais");
+      },
+      { timeout: 60_000, timeoutMsg: "not every item of the subject was given the choice" },
+    );
+    // Off again: the control is gone.
+    await setMore(false);
+    await openItem(mine);
+    expect(await (await $('[data-testid="subject-audience"]')).isExisting()).toBe(false);
+  });
+
   it("the switch in Settings turns it", async function () {
     this.timeout(300_000);
     await setMore(false);

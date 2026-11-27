@@ -6,7 +6,7 @@
  * (the memory design §9).
  */
 import { component$, useSignal, useVisibleTask$, $ } from "@builder.io/qwik";
-import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight, LuPauseCircle, LuPlayCircle } from "@qwikest/icons/lucide";
+import { LuPencil, LuTrash2, LuChevronDown, LuChevronRight, LuPauseCircle, LuPlayCircle, LuUsers } from "@qwikest/icons/lucide";
 import { useMoreMemoryControls } from "../utils/memoryMore";
 import {
   listMemoryRows,
@@ -18,6 +18,8 @@ import {
   revise,
   deletion,
   aiScope,
+  newRow,
+  personScope,
   type MemoryRow,
   type MemoryRevision,
 } from "../utils/memoryRows";
@@ -44,6 +46,8 @@ interface Props {
   /** Heading for the rules group ("Rules your AIs follow" / "Rules this AI follows"). */
   rulesHeading?: string;
 }
+
+const RULES_MOVED_EVENT = "yoai-rules-moved";
 
 export default component$<Props>((props) => {
   const rows = useSignal<MemoryRow[]>([]);
@@ -83,6 +87,15 @@ export default component$<Props>((props) => {
       revisions.value = all;
       dreams.value = all.filter((r) => r.provenance.startsWith("dream:")).slice(0, 20);
     } catch { /* records not up yet */ }
+  });
+
+  // A rule moved from one list to another (an AI's rule made a rule for
+  // every AI): both lists read again.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    const again = () => void load$();
+    window.addEventListener(RULES_MOVED_EVENT, again);
+    cleanup(() => window.removeEventListener(RULES_MOVED_EVENT, again));
   });
 
   // eslint-disable-next-line qwik/no-use-visible-task
@@ -189,6 +202,23 @@ export default component$<Props>((props) => {
                         {/* A rule turned off is not given to any AI and stays
                             listed. Turning one back on is always there;
                             turning one off is one of the further controls. */}
+                        {/* One AI's rule becomes a rule for all the person's
+                            AIs: it moves to their own list. */}
+                        {more.value && r.scope.startsWith("ai:") && r.kind === "rule" && (
+                          <button
+                            type="button"
+                            class="p-1 rounded text-[var(--text-muted)] hover:text-[var(--text-primary)]"
+                            title="Make it a rule for every AI"
+                            data-testid="rule-for-every-ai"
+                            onClick$={async () => {
+                              await saveMemoryRow(newRow(personScope, "rule", r.text, { pinned: r.pinned }));
+                              await saveMemoryRow(deletion(r), props.agentKey);
+                              window.dispatchEvent(new CustomEvent(RULES_MOVED_EVENT));
+                            }}
+                          >
+                            <LuUsers class="w-3.5 h-3.5" />
+                          </button>
+                        )}
                         {(r.valid_to || more.value) && (
                           <button
                             type="button"

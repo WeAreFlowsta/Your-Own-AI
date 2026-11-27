@@ -53,6 +53,26 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
   const moreControls = useMoreMemoryControls();
   const query = useSignal('');
   const everything = useSignal<KeptItem[] | null>(null);
+  // "Who can use this" for a whole subject (one of the further controls):
+  // the choice is given to every item in it.
+  const subjectSharing = useSignal(false);
+  const subjectBusy = useSignal(false);
+  const shareSubject = $(async (audience: Record<string, unknown>) => {
+    if (subjectBusy.value) return;
+    subjectBusy.value = true;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      for (const i of held.value) {
+        if (i.item.source?.kind === 'document') continue;
+        await invoke('memory_item_change', { id: i.id, edit: { do: 'audience', audience } });
+      }
+      subjectSharing.value = false;
+      window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
+    } catch {
+      /* what was changed stays changed; the tags show where it stands */
+    }
+    subjectBusy.value = false;
+  });
   const allShown = useSignal(false);
   const naming = useSignal(false);
   const nameDraft = useSignal('');
@@ -425,6 +445,31 @@ export const MemoryMapBoard = component$<{ aiId?: string; project?: { id: string
                 {subject.open > 0 && <span class={tag}>{subject.open} open</span>}
                 <span class={tag}>{audienceWords(subject.audience)}</span>
               </div>
+              {moreControls.value && held.value.length > 0 && (
+                subjectSharing.value ? (
+                  <div class="flex flex-col items-start gap-1" data-testid="subject-audience-list">
+                    <span class="text-xs text-[var(--text-secondary)]">Who can use everything kept here</span>
+                    <button type="button" class="text-xs text-[var(--text-link)] hover:underline disabled:opacity-50" data-testid="subject-audience-to" data-ai="" disabled={subjectBusy.value} onClick$={() => shareSubject({ kind: 'all' })}>
+                      All your AIs
+                    </button>
+                    {ais.value.map((a) => (
+                      <button key={a.founding} type="button" class="text-xs text-[var(--text-link)] hover:underline disabled:opacity-50" data-testid="subject-audience-to" data-ai={a.founding} disabled={subjectBusy.value} onClick$={() => shareSubject({ kind: 'ai', ai: a.founding })}>
+                        Only {a.name}
+                      </button>
+                    ))}
+                    <button type="button" class="text-xs text-[var(--text-link)] hover:underline disabled:opacity-50" data-testid="subject-audience-to" data-ai="local_ais" disabled={subjectBusy.value} onClick$={() => shareSubject({ kind: 'local_ais' })}>
+                      Only AIs on your devices
+                    </button>
+                    <button type="button" class="text-xs text-[var(--text-muted)] hover:underline" onClick$={() => (subjectSharing.value = false)}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button type="button" class="self-start text-xs text-[var(--text-link)] hover:underline" data-testid="subject-audience" onClick$={() => (subjectSharing.value = true)}>
+                    Who can use this
+                  </button>
+                )
+              )}
               <p class="text-sm text-[var(--text-secondary)]">
                 {subject.lastCameUp ? `Last came up ${ago(subject.lastCameUp)}.` : 'Has not come up in an answer on this computer yet.'}
                 {together.length > 0 ? ` Comes up together with ${together.join(', ')}.` : ''}
