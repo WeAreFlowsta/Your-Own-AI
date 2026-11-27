@@ -823,6 +823,44 @@ pub enum SaidControl {
     Forget,
     /// "Keep this conversation out of memory."
     KeepOut,
+    /// "Stop using memory on this computer": replies here no longer look
+    /// in memory (a slow computer answers sooner without it).
+    OffHere,
+    /// "Use memory on this computer again."
+    OnHere,
+}
+
+/// Where the phrases below say it applies. Without one of these the
+/// words could mean keeping, or every device, and nothing is done.
+const HERE: [&str; 3] = ["on this computer", "on this device", "here"];
+const SAID_OFF_HERE: [&str; 10] = [
+    "stop using memory", "stop using your memory", "turn memory off", "turn off memory", "turn off your memory", "switch memory off", "switch off memory",
+    "don't use memory", "dont use memory", "do not use memory",
+];
+const SAID_ON_HERE: [&str; 12] = [
+    "use memory again", "use your memory again", "start using memory again", "start using memory", "start using your memory again", "turn memory on", "turn memory back on", "turn on memory", "turn memory on again",
+    "switch memory on", "switch memory back on", "switch on memory",
+];
+
+/// "Stop using memory on this computer", "turn memory back on here": one
+/// of the phrases, then where, in either order of "again" ("use memory on
+/// this computer again"), and nothing else.
+fn said_here(said: &str) -> Option<SaidControl> {
+    let said = said.trim_end_matches(|c: char| !c.is_alphanumeric());
+    let said = said.strip_suffix(" please").unwrap_or(said);
+    let (said, again) = match said.strip_suffix(" again") {
+        Some(rest) => (rest, true),
+        None => (said, false),
+    };
+    let what = HERE.iter().find_map(|h| said.strip_suffix(h))?.trim_end();
+    let is = |phrases: &[&str]| phrases.iter().any(|p| *p == what || (again && p.strip_suffix(" again") == Some(what)));
+    if is(&SAID_OFF_HERE) && !again {
+        Some(SaidControl::OffHere)
+    } else if is(&SAID_ON_HERE) {
+        Some(SaidControl::OnHere)
+    } else {
+        None
+    }
 }
 
 const SAID_RIGHT: [&str; 18] = [
@@ -874,7 +912,9 @@ pub(crate) fn said_control(message: &str) -> Option<SaidControl> {
             })
         })
     };
-    if ends_it(&SAID_KEEP_OUT) {
+    if let Some(here) = said_here(said) {
+        Some(here)
+    } else if ends_it(&SAID_KEEP_OUT) {
         Some(SaidControl::KeepOut)
     } else if ends_it(&SAID_FORGET) {
         Some(SaidControl::Forget)
@@ -927,6 +967,15 @@ pub struct SaidAnswer {
 #[tauri::command]
 pub async fn memory_said(app: tauri::AppHandle, input: KeepMessageInput, used: Vec<String>) -> Result<Option<SaidAnswer>, String> {
     let Some(what) = said_control(&input.text) else { return Ok(None) };
+    // About this computer, not about a place in a conversation.
+    if matches!(what, SaidControl::OffHere | SaidControl::OnHere) {
+        let on = what == SaidControl::OnHere;
+        if crate::memory_prompt::replies_use_memory(&app) == on {
+            return Ok(None);
+        }
+        crate::memory_prompt::memory_in_replies_set(app.clone(), on)?;
+        return Ok(Some(SaidAnswer { did: if on { "on_here" } else { "off_here" }, item: None, change: None, started_at: 0, seqs: Vec::new() }));
+    }
     let ptr = place_of(&app, &input).await?;
     if what == SaidControl::KeepOut {
         crate::memory_use::memory_conversation_use_set(app.clone(), crate::memory_use::ConvChange { started_at: ptr.c, private: Some(true), ..Default::default() }).await?;
@@ -1479,6 +1528,14 @@ mod tests {
             ("Please forget what I just said.", SaidControl::Forget),
             ("ok, don't remember that", SaidControl::Forget),
             ("Keep this conversation out of memory", SaidControl::KeepOut),
+            ("Stop using memory on this computer", SaidControl::OffHere),
+            ("please turn memory off on this device.", SaidControl::OffHere),
+            ("Don't use memory here", SaidControl::OffHere),
+            ("ok, switch off memory on this computer please", SaidControl::OffHere),
+            ("Use memory on this computer again", SaidControl::OnHere),
+            ("use memory again on this computer", SaidControl::OnHere),
+            ("Turn memory back on on this computer", SaidControl::OnHere),
+            ("start using memory here again", SaidControl::OnHere),
             ("This is off the record.", SaidControl::KeepOut),
             ("please make this chat private", SaidControl::KeepOut),
             ("Can you keep this chat out of memory please", SaidControl::KeepOut),
@@ -1495,6 +1552,12 @@ mod tests {
             "Forget thatch, use slate",
             "Why is this conversation private?",
             "How do I keep this out of memory on my laptop when it is full",
+            "Stop using memory",
+            "Turn memory off",
+            "How do I stop using memory on this computer?",
+            "Stop using memory on this computer for the oven question",
+            "Stop using so much memory on this computer",
+            "Use memory on this computer again and again and tell me what you find",
             "Right",
             "",
         ] {

@@ -11,7 +11,8 @@ export type WhyNot =
   | "timed_out"
   | "vault_locked"
   | "index_rebuilding"
-  | "switched_off_for_this_ai";
+  | "switched_off_for_this_ai"
+  | "off_on_this_computer";
 
 export type ReplyLine =
   | { kind: "given"; passages: number }
@@ -35,6 +36,7 @@ export function whyNotWords(why: WhyNot): string {
     case "vault_locked": return "your Vault is locked";
     case "index_rebuilding": return "the search index is being rebuilt";
     case "switched_off_for_this_ai": return "memory is switched off for this AI";
+    case "off_on_this_computer": return "memory is turned off on this computer";
   }
 }
 
@@ -67,6 +69,9 @@ export function givenLineWords(line: ReplyLine, ai: string): LineWords {
     case "did-not-look":
       if (line.why === "switched_off_for_this_ai") {
         return { label: null, text: `Memory is not shared with ${ai}. ${ai} answered from this conversation only, without looking at your earlier conversations. Your rules were still sent.`, show: false, readRest: false };
+      }
+      if (line.why === "off_on_this_computer") {
+        return { label: null, text: `Memory is turned off on this computer, so ${ai} answered without looking at your earlier conversations. Your conversations are still kept, and your rules were still sent.`, show: false, readRest: false };
       }
       return { label: null, text: `${ai} answered without looking at your earlier conversations: ${whyNotWords(line.why)}.`, show: false, readRest: false };
     case "withheld":

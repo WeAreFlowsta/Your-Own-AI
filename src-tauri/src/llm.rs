@@ -4924,9 +4924,10 @@ impl Drop for ForegroundTurn {
 /// Warm the chat server's prompt cache with an AI's instructions right
 /// after a load, so the first real question only pays for its own words.
 /// A one-token request straight to llama-server (not the streaming path,
-/// so no speed sample is recorded). Silent no-op when nothing is serving.
+/// so no writing-speed sample is recorded; the reading speed is noted).
+/// Silent no-op when nothing is serving.
 #[tauri::command]
-pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Result<u64, String> {
+pub async fn warm_chat_prompt(app: AppHandle, state: State<'_, LLMState>, system: String) -> Result<u64, String> {
     if !*state.is_server_running.lock().await || system.trim().is_empty() {
         return Ok(0);
     }
@@ -4968,6 +4969,11 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
     }
     let parsed: serde_json::Value = resp.json().await.unwrap_or_default();
     let tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+    // How fast this model reads here, known before the first question:
+    // what memory gives that question is sized by it.
+    if let Some(model) = state.current_model.lock().await.clone() {
+        crate::read_speed::note(&app, &model, parsed["timings"]["prompt_per_second"].as_f64(), parsed["timings"]["prompt_n"].as_u64());
+    }
     log::info!(
         "[LLM] warmed the AI's instructions: {tokens} tokens in {} ms",
         started.elapsed().as_millis()

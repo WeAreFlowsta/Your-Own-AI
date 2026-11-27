@@ -208,23 +208,47 @@ pub(crate) struct About {
 
 /// What was found, held to what the model can read within the wait before
 /// its first word (`wait_chars`; absent = no such limit) and to the room
-/// the turn has left. The best result is always given: when even that one
-/// exchange is more than the wait allows, the found message goes alone,
-/// without the messages around it, and nothing else with it.
-pub(crate) fn within_wait(mut found: Vec<Exchange>, room_chars: Option<usize>, wait_chars: Option<usize>, wording: Wording) -> (Vec<Exchange>, Option<usize>) {
+/// the turn has left. When not everything fits, the found messages come
+/// first, each alone, as many as fit in rank order: the answer is nearly
+/// always in the found message itself, so three found messages serve a
+/// question better than one with the messages around it. Room left over
+/// then goes to the messages around them, the best result's first. The
+/// best result is always given, even when it alone is more than the wait
+/// allows.
+pub(crate) fn within_wait(mut found: Vec<Exchange>, at_most: usize, room_chars: Option<usize>, wait_chars: Option<usize>, wording: Wording) -> (Vec<Exchange>, Option<usize>) {
     let Some(wait) = wait_chars else { return (found, room_chars) };
-    let size = |e: &Exchange| exchange_text(e, wording).0.chars().count();
-    let least = |a: usize| Some(room_chars.map_or(a, |r| r.min(a)));
-    match found.first() {
-        Some(first) if size(first) > wait => {
-            found.truncate(1);
-            found[0].before = None;
-            found[0].after = None;
-            let alone = size(&found[0]);
-            (found, least(alone.max(wait)))
+    let cap = room_chars.map_or(wait, |r| r.min(wait));
+    // As `block_with` counts: each one's text, and the blank line after it.
+    let size = |e: &Exchange| exchange_text(e, wording).0.chars().count() + 2;
+    let whole: Vec<(Option<Said>, Option<Said>)> = found.iter_mut().map(|e| (e.before.take(), e.after.take())).collect();
+    let mut used = 0;
+    let mut taken = 0;
+    for e in found.iter().take(at_most) {
+        let n = size(e);
+        if taken > 0 && used + n > cap {
+            break;
         }
-        _ => (found, least(wait)),
+        used += n;
+        taken += 1;
     }
+    for (e, (before, after)) in found.iter_mut().zip(whole).take(taken) {
+        let alone = size(e);
+        // Both, or the one after (what was answered to it), or the one before.
+        for (b, a) in [(before.clone(), after.clone()), (None, after), (before, None)] {
+            if b.is_none() && a.is_none() {
+                continue;
+            }
+            let with = size(&Exchange { before: b.clone(), after: a.clone(), ..e.clone() });
+            if used - alone + with <= cap {
+                e.before = b;
+                e.after = a;
+                used = used - alone + with;
+                break;
+            }
+        }
+    }
+    let least = used.max(wait);
+    (found, Some(room_chars.map_or(least, |r| r.min(least))))
 }
 
 /// The block and what it holds.
@@ -331,6 +355,8 @@ pub enum WhyNot {
     VaultLocked,
     IndexRebuilding,
     SwitchedOffForThisAi,
+    /// The person turned off using memory in replies on this computer.
+    OffOnThisComputer,
 }
 
 impl WhyNot {
@@ -345,6 +371,7 @@ impl WhyNot {
             WhyNot::VaultLocked => "their Vault is locked, so their conversations cannot be opened",
             WhyNot::IndexRebuilding => "the search index is being rebuilt",
             WhyNot::SwitchedOffForThisAi => "they have switched memory off for this AI",
+            WhyNot::OffOnThisComputer => "they have turned off using memory in replies on this computer",
         }
     }
 }
@@ -616,8 +643,10 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
     let checked = match (&rebuilt, record.block.is_empty()) {
         (None, _) => Checked::SomeGone,
         (Some(_), true) => Checked::NoRecord,
-        (Some(b), false) if fingerprint(&b.text) == record.block && s.found == s.given => Checked::Exact,
-        // More was found than fit: the report's first sentence said so in
+        // The same text, to the character: what is shown is what was given,
+        // whether or not more was found than fit.
+        (Some(b), false) if fingerprint(&b.text) == record.block => Checked::Exact,
+        // More was found than fit and none of it did: the report said so in
         // words this rebuild does not have; compare what was shown instead.
         (Some(b), false) if s.found != s.given && b.texts.len() as u32 == s.given => Checked::NoRecord,
         (Some(_), false) => Checked::Differs,
@@ -876,30 +905,45 @@ mod tests {
     #[test]
     fn what_is_given_is_held_to_the_wait_and_the_best_result_always_goes() {
         let w = Wording::shipped();
-        let size = |e: &Exchange| exchange_text(e, w).0.chars().count();
+        let size = |e: &Exchange| exchange_text(e, w).0.chars().count() + 2;
         let whole = size(&mill());
+        let alone = size(&Exchange { before: None, after: None, ..mill() });
+        let shown = |found: &[Exchange], room: Option<usize>| block(found, &About::default(), 12, 42_000, room, w);
         // No wait known: nothing changes.
-        let (found, room) = within_wait(vec![mill(), mill()], Some(900), None, w);
-        assert_eq!((found.len(), room), (2, Some(900)));
-        // A wait that holds two: the room is the wait, or the turn's own room when that is less.
-        let (found, room) = within_wait(vec![mill(), mill(), mill()], None, Some(whole * 2 + 10), w);
-        assert_eq!(found.len(), 3);
-        let b = block(&found, &About::default(), 12, 42_000, room, w);
-        assert_eq!(b.shown, 2);
-        assert_eq!(within_wait(vec![mill()], Some(50), Some(whole + 1), w).1, Some(50));
+        let (found, room) = within_wait(vec![mill(), mill()], 12, Some(900), None, w);
+        assert_eq!((found.len(), room, found[0].before.is_some()), (2, Some(900), true));
+        // A wait that holds everything: everything goes, whole.
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 12, None, Some(whole * 3), w);
+        assert!(found.iter().all(|e| e.before.is_some() && e.after.is_some()));
+        assert_eq!(shown(&found, room).shown, 3);
+        // A wait that holds two whole or three alone: three found messages
+        // go, and the room left over gives the best one its neighbors back.
+        let wait = alone * 3 + (whole - alone);
+        assert!(wait < whole * 3 && wait >= whole + alone * 2);
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 12, None, Some(wait), w);
+        let b = shown(&found, room);
+        assert_eq!(b.shown, 3);
+        assert!(found[0].before.is_some() && found[0].after.is_some() && found[2].before.is_none() && found[2].after.is_none());
+        assert_eq!(b.found, 3, "what was found is still counted whole");
+        // The turn's own room, when less than the wait, is the limit.
+        assert_eq!(within_wait(vec![mill()], 12, Some(50), Some(whole + 1), w).1, Some(50));
+        // No more than the count allowed.
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 2, None, Some(alone * 3), w);
+        assert_eq!(block(&found, &About::default(), 2, 42_000, room, w).shown, 2);
         // A wait shorter than the best exchange: the found message goes
         // alone, without the ones around it, and it is shown.
-        let (found, room) = within_wait(vec![mill(), mill()], None, Some(whole - 1), w);
-        assert_eq!(found.len(), 1);
-        assert!(found[0].before.is_none() && found[0].after.is_none());
-        let b = block(&found, &About::default(), 12, 42_000, room, w);
+        let (found, room) = within_wait(vec![mill(), mill()], 12, None, Some(whole - 3), w);
+        assert!(found[0].before.is_none() || found[0].after.is_none());
+        let b = shown(&found, room);
+        assert_eq!(b.shown, 1);
+        assert!(b.text.contains("Hartwell Mills"));
+        // Shorter than the found message itself: it still goes.
+        let (found, room) = within_wait(vec![mill(), mill()], 12, None, Some(10), w);
+        let b = shown(&found, room);
         assert_eq!(b.shown, 1);
         assert!(b.text.contains("Hartwell Mills") && !b.text.contains("Dunmore"));
-        // Shorter than the found message itself: it still goes.
-        let (found, room) = within_wait(vec![mill()], None, Some(10), w);
-        assert_eq!(block(&found, &About::default(), 12, 42_000, room, w).shown, 1);
         // Nothing found: nothing to give.
-        assert!(within_wait(Vec::new(), None, Some(10), w).0.is_empty());
+        assert!(within_wait(Vec::new(), 12, None, Some(10), w).0.is_empty());
     }
 
     #[test]
@@ -1031,7 +1075,7 @@ mod tests {
 
     #[test]
     fn did_not_run_says_why() {
-        for why in [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi] {
+        for why in [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi, WhyNot::OffOnThisComputer] {
             let text = did_not_run(why, "Today is 2026-11-24.", Wording::all());
             assert!(text.starts_with("[From memory. Today is 2026-11-24. No search of their conversations was run for this question: "), "{text}");
             assert!(text.contains(why.said()) && text.ends_with("do not answer about their past from guesswork.]"));
@@ -1039,8 +1083,9 @@ mod tests {
             assert!(!text.contains("was run for this question. It returned") && !text.contains("found nothing"));
         }
         assert_eq!(serde_json::to_string(&WhyNot::DidNotStartInTime).unwrap(), "\"did_not_start_in_time\"");
-        let all: std::collections::HashSet<&str> = [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi].iter().map(|w| w.said()).collect();
-        assert_eq!(all.len(), 8, "each cause has its own sentence");
+        let all: std::collections::HashSet<&str> = [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi, WhyNot::OffOnThisComputer].iter().map(|w| w.said()).collect();
+        assert_eq!(all.len(), 9, "each cause has its own sentence");
+        assert_eq!(serde_json::to_string(&WhyNot::OffOnThisComputer).unwrap(), "\"off_on_this_computer\"");
     }
 
     #[test]

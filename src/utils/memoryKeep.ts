@@ -30,7 +30,7 @@ export interface Kept {
   /** The item was open and is now marked done. */
   closed?: boolean;
   /** Said in the chat in place of a control: what the app did. */
-  said?: "confirmed" | "forgotten" | "kept_out" | "left_out";
+  said?: "confirmed" | "forgotten" | "kept_out" | "left_out" | "off_here" | "on_here";
   /** The conversation, and the messages left out, for the last two. */
   conversation?: { startedAt: number; seqs: number[] };
 }
@@ -210,6 +210,18 @@ export async function saidControl(req: { messageId: string; aiId: string; text: 
     }
   }
   return null;
+}
+
+/** Do replies on this computer look in memory? (This computer only; it
+ *  is never synced.) */
+export function memoryInReplies(): Promise<boolean> {
+  return invoke<boolean>("memory_in_replies");
+}
+
+/** Turn using memory in replies on or off, on this computer only. */
+export async function setMemoryInReplies(on: boolean): Promise<void> {
+  await invoke("memory_in_replies_set", { on });
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("yoai-memory-in-replies", { detail: { on } }));
 }
 
 /** Take back "keep this conversation out of memory" or a "forget that"

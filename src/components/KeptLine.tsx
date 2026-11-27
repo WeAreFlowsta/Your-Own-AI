@@ -4,7 +4,8 @@ import type { Kept } from '../utils/memoryKeep';
 /**
  * The line under a message once it is kept: "Kept", and Undo (or "Marked
  * done: ..." when the message closed something that was open, or what a
- * control said in the chat did: confirmed, forgotten, kept out of memory). Who it is
+ * control said in the chat did: confirmed, forgotten, kept out of memory,
+ * memory turned off or on for this computer). Who it is
  * for and what it says are in Memory, where it can be changed. A second
  * press on Remember shows "Already kept on [day]." in its place. Setting
  * the signal to null takes the line away (after an undo).
@@ -17,12 +18,14 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
   const undo = $(async () => {
     const k = kept.value;
     const about = k?.said === 'kept_out' || k?.said === 'left_out' ? k.conversation : undefined;
-    if (!k || (!k.change && !about) || busy.value) return;
+    const here = k?.said === 'off_here' || k?.said === 'on_here';
+    if (!k || (!k.change && !about && !here) || busy.value) return;
     busy.value = true;
     failed.value = '';
     try {
-      const { undoKeep, undoSaidAboutConversation } = await import('../utils/memoryKeep');
-      if (about) await undoSaidAboutConversation(about);
+      const { undoKeep, undoSaidAboutConversation, setMemoryInReplies } = await import('../utils/memoryKeep');
+      if (here) await setMemoryInReplies(k.said === 'on_here' ? false : true);
+      else if (about) await undoSaidAboutConversation(about);
       else if (k.change) await undoKeep(k.change);
       kept.value = null;
     } catch {
@@ -43,6 +46,8 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
           {k.said === 'forgotten' && `Forgotten: ${k.item.text}`}
           {k.said === 'kept_out' && 'This conversation is kept out of memory.'}
           {k.said === 'left_out' && 'Memory will not use what was just said.'}
+          {k.said === 'off_here' && 'Replies on this computer no longer look in memory. Your conversations are still kept.'}
+          {k.said === 'on_here' && 'Replies on this computer look in memory again.'}
         </span>
       ) : k.closed ? (
         <span class="text-[var(--text-secondary)]" data-testid="kept-closed">
@@ -53,7 +58,7 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
       ) : (
         <span class="text-[var(--text-secondary)]">Kept</span>
       )}
-      {!k.already && (k.change || k.said === 'kept_out' || k.said === 'left_out') && (
+      {!k.already && (k.change || k.said === 'kept_out' || k.said === 'left_out' || k.said === 'off_here' || k.said === 'on_here') && (
         <button type="button" class="ml-2 underline hover:text-[var(--text-primary)] disabled:opacity-50" disabled={busy.value} onClick$={undo} data-testid="kept-undo">
           Undo
         </button>

@@ -297,6 +297,8 @@ export default component$(() => {
   const memoryLearning = useSignal(true);
   // Further memory controls on the screens: off unless turned on here.
   const memoryMore = useSignal(false);
+  // Replies on this computer look in memory (this computer only).
+  const memoryInReplies = useSignal(true);
   // The one online dial ("How much goes online"); frontier-first by default.
   const routingShare = useSignal<"frontier" | "balanced" | "local">("frontier");
   const shareRecent = useSignal<{ online: number; total: number } | null>(null);
@@ -438,6 +440,10 @@ export default component$(() => {
       .then(({ invoke }) => invoke<{ state: string }>("memory_tidy_status"))
       .then((t) => (memoryLearning.value = t.state !== "off"))
       .catch(() => { /* not signed in or still starting: the switch shows on */ });
+    import("../../utils/memoryKeep")
+      .then(({ memoryInReplies: read }) => read())
+      .then((on) => (memoryInReplies.value = on))
+      .catch(() => { /* still starting: the switch shows on */ });
     loadedModelNow().then((m) => { currentModel.value = m; });
     const savedShare = localStorage.getItem("routingOnlineShare");
     if (savedShare === "balanced" || savedShare === "local") {
@@ -643,6 +649,17 @@ export default component$(() => {
       window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
     } catch {
       memoryLearning.value = !on;
+    }
+  });
+
+  const toggleMemoryInReplies = $(async () => {
+    const on = !memoryInReplies.value;
+    memoryInReplies.value = on;
+    try {
+      const { setMemoryInReplies } = await import("../../utils/memoryKeep");
+      await setMemoryInReplies(on);
+    } catch {
+      memoryInReplies.value = !on;
     }
   });
 
@@ -1055,6 +1072,22 @@ export default component$(() => {
                       what is out of date, by itself, on all your devices. Turn
                       off and it keeps only what you save with Remember and
                       changes nothing by itself. What is already kept stays.
+                    </SettingToggle>
+                  </div>
+                  <div>
+                    <SettingToggle
+                      title="Use memory in replies on this computer"
+                      checked={memoryInReplies}
+                      onToggle$={toggleMemoryInReplies}
+                      testId="settings-memory-in-replies"
+                    >
+                      Before a reply, memory looks through your earlier
+                      conversations for what bears on your question. On a
+                      slower computer that makes each reply start later. Turn
+                      off and replies here start sooner and do not look. Your
+                      conversations are still kept, and your rules still go
+                      with every reply. This switch is for this computer only,
+                      so a faster one keeps using memory.
                     </SettingToggle>
                   </div>
                   <div>

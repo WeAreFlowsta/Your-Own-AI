@@ -916,6 +916,8 @@ pub fn run() {
             memory_items::memory_not_replaced,
             memory_items::memory_replaces,
             memory_items::memory_said,
+            memory_prompt::memory_in_replies,
+            memory_prompt::memory_in_replies_set,
             memory_session::memory_session_given,
             memory_use::memory_conversation_use,
             memory_use::memory_conversation_use_set,

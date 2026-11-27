@@ -579,6 +579,8 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     // model is told, and does not answer that it cannot.
     let told = match crate::memory_items::said_control(&input.question) {
         Some(crate::memory_items::SaidControl::KeepOut) => Some("[The person asked for this conversation to be kept out of memory. That is being done, and they are shown a line that says so.]"),
+        Some(crate::memory_items::SaidControl::OffHere) if replies_use_memory(app) => Some("[The person asked for replies on this computer to stop using memory. The app does that from their next message on, and shows them a line that says so, with Undo. Their conversations are still recorded and kept, and their rules still apply.]"),
+        Some(crate::memory_items::SaidControl::OnHere) if !replies_use_memory(app) => Some("[The person asked for replies on this computer to use memory again. The app does that from their next message on, and shows them a line that says so.]"),
         Some(crate::memory_items::SaidControl::Forget) if input.conversation.as_deref().is_some_and(|c| !c.is_empty()) => Some("[The person asked memory to forget what was just said. The app does that, and shows them a line that says what it did. Do not say that you cannot forget.]"),
         _ => None,
     };
@@ -675,6 +677,36 @@ pub(crate) fn merge_hits(a: Vec<crate::memory_index::Hit>, b: Vec<crate::memory_
     all
 }
 
+/// The setting's name in this computer's own settings file. It is never
+/// synced: the reason to turn it off is how fast this computer is.
+const OFF_HERE_KEY: &str = "memoryInRepliesOff";
+
+/// Do replies on this computer look in memory? On unless the person
+/// turned it off here. Off changes nothing else: conversations are still
+/// recorded, read and kept, what they ask to be remembered is kept, and
+/// their rules and what they keep about themselves go with every reply.
+pub(crate) fn replies_use_memory(app: &tauri::AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    !app.store("settings.json").ok().and_then(|s| s.get(OFF_HERE_KEY)).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Is using memory in replies on, on this computer?
+#[tauri::command]
+pub fn memory_in_replies(app: tauri::AppHandle) -> bool {
+    replies_use_memory(&app)
+}
+
+/// Turn using memory in replies on or off, on this computer only.
+#[tauri::command]
+pub fn memory_in_replies_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+    store.set(OFF_HERE_KEY, serde_json::json!(!on));
+    store.save().map_err(|e| e.to_string())?;
+    log::info!("[memory] replies on this computer {} memory", if on { "use" } else { "no longer use" });
+    Ok(())
+}
+
 /// What memory found for the question, as the block that goes ahead of it,
 /// with the record of what was given, the texts given, and the note that
 /// goes after the question (what memory holds to be true now). No block at
@@ -706,6 +738,11 @@ async fn found_beside(
     let knowledge: Vec<&TranscriptEmbedding> = recall.unwrap_or(&[]).iter().filter(|e| e.kind == "authored" && !e.vector.is_empty()).collect();
     if passages == 0 && reading.total == 0 && notes.is_empty() && knowledge.is_empty() {
         return (None, None, Vec::new(), None);
+    }
+    // Turned off on this computer by the person: said only when there is
+    // something memory could have looked through (the check above).
+    if !replies_use_memory(app) {
+        return not_run(WhyNot::OffOnThisComputer);
     }
     if crate::memory_reading::rebuilding(app) {
         return not_run(WhyNot::IndexRebuilding);
@@ -848,7 +885,7 @@ async fn found_beside(
     let model = input.model.as_deref().filter(|m| crate::read_speed::is_local_file(m));
     let speed = if input.online { None } else { model.and_then(|m| crate::read_speed::of(app, m)) };
     let count = if !input.online && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
-    let (exchanges, room) = mb::within_wait(exchanges, room, speed.map(crate::read_speed::wait_chars), wording);
+    let (exchanges, room) = mb::within_wait(exchanges, count, room, speed.map(crate::read_speed::wait_chars), wording);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
     log::info!("[memory] searched for the turn in {} ms ({}); {} of {} given", begun.elapsed().as_millis(), took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "), b.shown, b.found);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
