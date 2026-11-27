@@ -14,7 +14,7 @@ import {
   getConversations,
   getTranscript,
 } from "./holochainTranscripts";
-import { getLocalCustomAis, getStoredCustomAis } from "./localAiStorage";
+import { getStoredCustomAis } from "./localAiStorage";
 
 export const WORKSPACE_MEMORY_SOURCE = "workspace-memory";
 /** The cap is the staleness defense - curation forced, accumulation refused. */
@@ -139,54 +139,6 @@ export async function listWorkspaceMemories(): Promise<WorkspaceMemory[]> {
     entries: scans.flat().map(({ agentKey, conv }) => ({ folder: conv.title!, agentKey: conv.agent_key || agentKey, hash: conv.hash })),
   }).catch(() => { /* older backend */ });
   return out;
-}
-
-/** Write a new revision. `writer` = the AI whose chain takes it (the one in
- *  the session, or any provisioned AI for manual edits). The backend finds
- *  the writer's memory conversation through the project-memory index and
- *  never starts a second one because a read was slow or failed. */
-export async function saveWorkspaceMemory(
-  writer: { agentPubKey: string; label: string },
-  folderPath: string,
-  content: string,
-): Promise<boolean> {
-  try {
-    await invoke("project_memory_save", {
-      writerKey: writer.agentPubKey,
-      writerLabel: writer.label,
-      folder: folderPath,
-      content: clampMemory(content),
-    });
-    return true;
-  } catch (e) {
-    console.error("[WorkspaceMemory] Revision write FAILED:", e);
-    return false;
-  }
-}
-
-/** A user-saved note from the Remember button: appended as its own row,
- *  marked as the user's, trimmed oldest-first when the cap would drop it
- *  (the next automatic revision curates it into shape). */
-export async function appendWorkspaceNote(folderPath: string, note: string): Promise<boolean> {
-  if (!note.trim()) return false;
-  const ais = await getLocalCustomAis();
-  const writer = ais.find((a) => a.agentPubKey);
-  if (!writer) {
-    console.error("[WorkspaceMemory] No provisioned AI to write the note");
-    return false;
-  }
-  try {
-    await invoke("project_memory_note", {
-      writerKey: writer.agentPubKey,
-      writerLabel: writer.name,
-      folder: folderPath,
-      note,
-    });
-    return true;
-  } catch (e) {
-    console.error("[WorkspaceMemory] Note write FAILED:", e);
-    return false;
-  }
 }
 
 /** Enforce the line cap + tidy blank runs. */
