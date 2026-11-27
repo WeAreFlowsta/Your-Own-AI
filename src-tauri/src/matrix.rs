@@ -940,10 +940,17 @@ pub async fn leg_grade(app: &AppHandle, bin: &Path, dir: &Path, redo: bool, sink
     let mut failures = Vec::new();
     let models = chat_models_in(dir);
     let memory_set = crate::memory_check::set_version();
+    // A result is for the exact file: its hash is made now when it is not
+    // yet known (a model added a moment ago), so a file that came with a
+    // result is not graded a second time and every figure names its file.
+    let mut hashes: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for m in &models {
+        hashes.insert(m.clone(), crate::model_hash::ensure(app, m).await);
+    }
     let todo: Vec<String> = models
         .iter()
         .filter(|m| {
-            let hash = crate::model_hash::get(app, m);
+            let hash = hashes.get(*m).cloned().flatten();
             let have = crate::local_results::for_file(m);
             let has_questions = have.and_then(|r| r.questions.as_ref()).is_some_and(|q| q.set == QUALITY_HARD_SET);
             let has_memory = crate::local_results::memory_for(m, hash.as_deref(), memory_set).is_some();
@@ -995,7 +1002,7 @@ pub async fn leg_grade(app: &AppHandle, bin: &Path, dir: &Path, redo: bool, sink
         if cancelled() {
             break;
         }
-        let hash = crate::model_hash::get(app, &model);
+        let hash = hashes.get(&model).cloned().flatten();
         let memory = if runs.len() == 3 { crate::memory_check::settled(&runs, hash.clone(), 0) } else { None };
         let words = |b: bool| if b { "yes" } else { "no" };
         match &memory {
