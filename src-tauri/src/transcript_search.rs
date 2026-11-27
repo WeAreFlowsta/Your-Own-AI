@@ -313,6 +313,11 @@ async fn build(app: &AppHandle, agent_key: &str) -> Result<(), String> {
     let gone = if cancelled { 0 } else { drop_missing(app, &key, &ais, &listed).unwrap_or(0) };
     log::info!("[search] read {read_count} of {total} conversations for search in {} ms{}{}", t0.elapsed().as_millis(), if cancelled { " - stopped" } else { "" }, if gone > 0 { format!(", {gone} no longer in the records dropped") } else { String::new() });
     let _ = app.emit("transcript-search-progress", SearchProgress { done, total, finished: true, cancelled });
+    // New text may hold new words: an old list of them is made again now,
+    // while nobody waits.
+    if read_count > 0 {
+        let _ = words(app, true);
+    }
     Ok(())
 }
 
@@ -391,8 +396,59 @@ pub(crate) fn mentions(app: &AppHandle, phrase: &str) -> Result<bool, String> {
     Ok(found.is_some())
 }
 
+/// Every word in the keyword index, read once and kept for a while.
+/// Listing them walks the whole index (seconds on a long history), so it
+/// is never done while a person waits for a reply: the list is made in
+/// the background, and until there is one the question "is there a word
+/// spelled nearly like this" has no answer.
+static WORDS: Mutex<Option<(std::time::Instant, std::sync::Arc<Vec<String>>)>> = Mutex::new(None);
+static WORDS_BEING_READ: AtomicBool = AtomicBool::new(false);
+/// A list this old is read again after conversations are next read in
+/// (in the background; the old one serves meanwhile). A word first used
+/// since then is found by `mentions`.
+const WORDS_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn read_words(app: &AppHandle) -> Result<Vec<String>, String> {
+    ensure_index(app)?;
+    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
+    idx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS temp.e_terms USING fts5vocab('main', 'e', 'row');").map_err(|e| e.to_string())?;
+    let mut st = idx.prepare("SELECT term FROM temp.e_terms WHERE length(term) >= 3").map_err(|e| e.to_string())?;
+    let terms = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    Ok(terms.flatten().collect())
+}
+
+/// The list as it is now. It is made when there is none; an old one is
+/// made again only when `again_when_old` (asked for after conversations
+/// were read in, not when a person has just asked something: making it
+/// holds the index, and their search would wait).
+fn words(app: &AppHandle, again_when_old: bool) -> Option<std::sync::Arc<Vec<String>>> {
+    let held = WORDS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let fresh = held.as_ref().is_some_and(|(at, _)| !again_when_old || at.elapsed() < WORDS_KEPT_FOR);
+    if !fresh && !WORDS_BEING_READ.swap(true, Ordering::SeqCst) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let began = std::time::Instant::now();
+            if let Ok(all) = read_words(&app) {
+                log::info!("[search] {} words of the keyword index listed in {} ms", all.len(), began.elapsed().as_millis());
+                *WORDS.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), std::sync::Arc::new(all)));
+            }
+            WORDS_BEING_READ.store(false, Ordering::SeqCst);
+        });
+    }
+    held.map(|(_, w)| w)
+}
+
+/// Have the list of words made, if it is not there or is old, without
+/// waiting for it.
+pub(crate) fn words_soon(app: &AppHandle) {
+    let _ = words(app, false);
+}
+
 /// Does the cache hold a word spelled nearly like this one (one or two
 /// letters apart; one for a four-letter word; none for a shorter one)?
+/// An error while the list of words is still being made: nothing can be
+/// said yet.
 pub(crate) fn has_close_spelling(app: &AppHandle, word: &str) -> Result<bool, String> {
     let word = word.to_lowercase();
     let n = word.chars().count();
@@ -400,18 +456,11 @@ pub(crate) fn has_close_spelling(app: &AppHandle, word: &str) -> Result<bool, St
         return Ok(false);
     }
     let limit = if n == 4 { 1 } else { 2 };
-    ensure_index(app)?;
-    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
-    idx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS temp.e_terms USING fts5vocab('main', 'e', 'row');").map_err(|e| e.to_string())?;
-    let mut st = idx.prepare("SELECT term FROM temp.e_terms WHERE length(term) BETWEEN ?1 AND ?2").map_err(|e| e.to_string())?;
-    let terms = st.query_map(params![(n - limit) as i64, (n + limit) as i64], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    for term in terms.flatten() {
-        if term != word && crate::memory_block::edit_distance(&word, &term, limit) <= limit {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    let Some(all) = words(app, false) else { return Err("the words of the keyword index are still being listed".into()) };
+    Ok(all.iter().any(|term| {
+        let len = term.chars().count();
+        len + limit >= n && len <= n + limit && *term != word && crate::memory_block::edit_distance(&word, term, limit) <= limit
+    }))
 }
 
 /// The row key of a conversation, from its record id.

@@ -97,6 +97,10 @@ pub fn decide(work: Work, r: &Reading, only_when_idle: bool, own_idle_secs: i64)
     }
     match r.away_secs {
         Some(s) if s < HEAVY_AWAY_SECS => Verdict::Wait("the computer is in use"),
+        // A question asked in the app shows the person is here even when
+        // the keyboard and mouse are still (asked by voice, or sent from
+        // another program).
+        Some(_) if own_idle_secs < HEAVY_AWAY_SECS as i64 => Verdict::Wait("the computer is in use"),
         Some(_) => Verdict::Go,
         // Unknown on this system: our own app's idle stands in for it.
         None if own_idle_secs < HEAVY_AWAY_SECS as i64 => Verdict::Wait("the computer is in use"),
@@ -138,7 +142,7 @@ fn only_when_idle(app: &AppHandle) -> bool {
 pub fn may_run(work: Work, job: &str) -> bool {
     let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
     let verdict = match reading() {
-        Some(r) => decide(work, &r, only, own_idle_secs()),
+        Some(r) => decide(work, &r, only, own_idle_for_the_rule()),
         None if work == Work::Light => Verdict::Go,
         None => Verdict::Wait("checking the computer"),
     };
@@ -163,7 +167,7 @@ pub fn may_run(work: Work, job: &str) -> bool {
 pub fn would_run(work: Work) -> bool {
     let only = ONLY_WHEN_IDLE.load(std::sync::atomic::Ordering::Relaxed);
     match reading() {
-        Some(r) => decide(work, &r, only, own_idle_secs()) == Verdict::Go,
+        Some(r) => decide(work, &r, only, own_idle_for_the_rule()) == Verdict::Go,
         None => work == Work::Light,
     }
 }
@@ -590,6 +594,17 @@ pub(crate) fn own_idle_secs() -> i64 {
     idle_for_secs()
 }
 
+/// The same, for the rule above. A debug build told how long nobody has
+/// touched the computer (the UI harness) is told the same about the app.
+/// A release build never reads it.
+fn own_idle_for_the_rule() -> i64 {
+    #[cfg(debug_assertions)]
+    if let Some(s) = std::env::var("YOAI_TEST_AWAY_SECS").ok().and_then(|v| v.trim().parse::<i64>().ok()) {
+        return s;
+    }
+    idle_for_secs()
+}
+
 fn idle_for_secs() -> i64 {
     let last = LAST_ACTIVITY_MS.load(std::sync::atomic::Ordering::Relaxed);
     if last == 0 {
@@ -615,12 +630,22 @@ mod tests {
     #[test]
     fn a_metered_connection_does_not_hold_background_work() {
         let r = Reading { metered: true, ..calm() };
-        assert_eq!(decide(Work::Heavy, &r, true, 0), Verdict::Go);
+        assert_eq!(decide(Work::Heavy, &r, true, 3600), Verdict::Go);
+    }
+
+    #[test]
+    fn a_question_asked_in_the_app_holds_heavy_work_while_the_keyboard_is_still() {
+        // Away by the system's clock for ten minutes, and a question was
+        // asked in the app half a minute ago.
+        assert_eq!(decide(Work::Heavy, &calm(), true, 30), Verdict::Wait("the computer is in use"));
+        assert_eq!(decide(Work::Heavy, &calm(), true, 180), Verdict::Go);
+        // The app never used since it started counts as idle.
+        assert_eq!(decide(Work::Heavy, &calm(), true, i64::MAX), Verdict::Go);
     }
 
     #[test]
     fn a_calm_machine_runs_heavy_work() {
-        assert_eq!(decide(Work::Heavy, &calm(), true, 0), Verdict::Go);
+        assert_eq!(decide(Work::Heavy, &calm(), true, 3600), Verdict::Go);
     }
 
     #[test]
@@ -735,7 +760,7 @@ mod tests {
     #[test]
     fn the_processor_figure_starts_unknown_and_does_not_hold() {
         let r = Reading { others_cpu_pct: None, ..calm() };
-        assert_eq!(decide(Work::Heavy, &r, true, 0), Verdict::Go);
+        assert_eq!(decide(Work::Heavy, &r, true, 3600), Verdict::Go);
     }
 
     #[test]

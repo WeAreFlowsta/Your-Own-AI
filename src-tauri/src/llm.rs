@@ -5013,6 +5013,9 @@ static STEP_ASIDE: tokio::sync::Notify = tokio::sync::Notify::const_new();
 /// not wait behind it.
 #[tauri::command]
 pub fn helper_step_aside() {
+    // Asking is being here: background work that waits for the person to
+    // be away waits from this moment, not from when the reply starts.
+    crate::machine::note_activity();
     STEP_ASIDE.notify_waiters();
 }
 

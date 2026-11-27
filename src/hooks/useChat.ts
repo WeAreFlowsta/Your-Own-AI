@@ -706,6 +706,7 @@ export function useChat(props: UseChatProps) {
       }
       state.isLoading = true;
       uiLog("[send] chat path: bubbles up");
+      const submittedAt = Date.now();
       // The page this turn was sent from. New (resetChat) starts a new page
       // key; a turn whose page has moved on by the time it would claim the
       // page stays detached - it finishes and records at the root, and the
@@ -1638,7 +1639,14 @@ export function useChat(props: UseChatProps) {
       try {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
+        // What the person waits for before the model is asked anything, by
+        // step, in one log line per turn.
+        const sendBegan = submittedAt;
+        const waited: string[] = [];
+        waited.push(`model chosen by ${Date.now() - sendBegan}`);
+        const lap = (what: string) => waited.push(`${what} by ${Date.now() - sendBegan}`);
         const turnMemory = await memoryPromise;
+        lap("memory's system part");
         const userMemory = turnMemory?.systemPart ?? "";
         // Report mode: a model that thinks by itself gets the ceremony-free
         // prompt (its thinking arrives as reasoning already): a local model
@@ -1665,6 +1673,7 @@ export function useChat(props: UseChatProps) {
           await queryVecPromise,
         );
         if (skillsBlock.block) systemPrompt += "\n\n" + skillsBlock.block;
+        lap("skills");
         const skillsUsed = skillsBlock.names;
         // Tools (MCP servers) work in projects only for now - chat has no
         // tool loop. Tell the model, so an AI that carries Playwright says
@@ -1754,7 +1763,9 @@ export function useChat(props: UseChatProps) {
           let room = Number.POSITIVE_INFINITY;
           if (!isOnlineModel && !isExternalModel) {
             const base = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
+            lap("turn counted");
             await growContextFor(base);
+            lap("room checked");
             room = roomCtx > 0 ? Math.max(0, roomCtx - base) : 0;
           }
           const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
@@ -1774,6 +1785,7 @@ export function useChat(props: UseChatProps) {
               previousQuestion: before ?? null,
             },
           }).catch(() => null);
+          lap("memory searched");
           if (foundMemory?.beforeQuestion && Number.isFinite(room)) {
             const used = await invoke<number>("count_tokens", { text: foundMemory.beforeQuestion }).catch(() => Math.ceil(foundMemory!.beforeQuestion!.length / 3));
             room = Math.max(0, room - used);
@@ -1795,6 +1807,7 @@ export function useChat(props: UseChatProps) {
           );
           docContext = recalled.text;
           libraryGiven = recalled.used;
+          lap("documents searched");
         }
         // The person's turn as sent, put together in one place: the file,
         // the pages, the document passages, what memory found, the question
@@ -1820,6 +1833,8 @@ export function useChat(props: UseChatProps) {
         if (!isOnlineModel && !isExternalModel) {
           const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt + "\n" + docContext);
           if ((await growContextFor(estTokens)) === "refused") return;
+          lap("room checked again");
+          uiLog(`[send] before the model: ${waited.join(", ")} ms`);
           if (roomCtx > 0 && estTokens > roomCtx) {
             // A fine-tune pin held the window below this turn: say so on the
             // bubble rather than let the engine trim the prompt silently.

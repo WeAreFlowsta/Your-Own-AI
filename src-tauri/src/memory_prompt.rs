@@ -475,8 +475,14 @@ pub(crate) fn rules_revision(app: &tauri::AppHandle, founding_key: Option<&str>,
 /// with the stores closed it gives the name-unknown line and the date.
 pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMemory {
     use tauri::Manager;
+    let turn_began = std::time::Instant::now();
+    // The early call of a turn comes seconds before its search: the list
+    // of words the name check needs is made meanwhile.
+    crate::transcript_search::words_soon(app);
+    let mut turn_took: Vec<(&str, u128)> = Vec::new();
     let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).ok();
     let facts = key.as_ref().and_then(|k| crate::memory::read_facts(app, k).ok()).unwrap_or_default();
+    turn_took.push(("facts", turn_began.elapsed().as_millis()));
     let mut rows: Vec<MemoryRow> = Vec::new();
     let mut project_rows: Vec<MemoryRow> = Vec::new();
     if let Some(k) = &key {
@@ -489,23 +495,28 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
             refresh_rows_soon(app, &scope);
         }
     }
+    turn_took.push(("rules", turn_began.elapsed().as_millis()));
     let ai_id = input.ai_id.as_deref().filter(|a| !a.is_empty());
+    // Read only while it is still given (see below): on a long history it
+    // is the largest read here, and the person waits for it.
+    let updated = crate::memory_migrate::update_done(app);
     let recall = match (&key, ai_id) {
-        (Some(k), Some(ai)) => Some(crate::transcript_memory::read_for(app, k, ai).unwrap_or_default()),
+        (Some(k), Some(ai)) if !updated => Some(crate::transcript_memory::read_for(app, k, ai).unwrap_or_default()),
         _ => None,
     };
+    turn_took.push(("earlier turns", turn_began.elapsed().as_millis()));
     // Once the update's pass has run on this profile, the older stores
     // are no longer given: what an AI had guessed about the person is set
     // aside, the short description of them is retired, and each AI's own
     // list of earlier turns is gone (whole conversations are searched).
     // Their name keeps working, and what they kept about themselves is
     // given as they kept it.
-    let updated = crate::memory_migrate::update_done(app);
     let (facts, recall) = if updated { (after_update(facts), None) } else { (facts, recall) };
     let about_you = match (&key, updated && shares_memory(input.online, input.memory_shared)) {
         (Some(k), true) => kept_about_them(&crate::memory_items::items(&crate::memory_rows::read_cache(app, k, crate::memory_items::SCOPE)), input.founding_key.as_deref().unwrap_or(""), input.project.as_deref(), input.online),
         _ => Vec::new(),
     };
+    turn_took.push(("about them", turn_began.elapsed().as_millis()));
     let asked = !input.question.trim().is_empty();
     let live_note = |f: &&crate::memory::MemoryFact| f.valid_to.is_none() && f.entry_kind == "note";
     let has_notes = facts.iter().filter(live_note).any(|f| f.embedding.as_ref().is_some_and(|v| !v.is_empty()));
@@ -526,6 +537,7 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         question_vector: question_vector.as_deref(),
         conversation: input.conversation.as_deref().filter(|c| !c.is_empty()),
     });
+    turn_took.push(("system part", turn_began.elapsed().as_millis()));
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
     // "Remember that", said in fixed words (no model reads it). With no
@@ -546,6 +558,8 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     // What the person keeps about themselves rides in the system part: for
     // an AI that answers elsewhere it left the computer too, and the line
     // under the reply counts it.
+    turn_took.push(("search", turn_began.elapsed().as_millis()));
+    log::info!("[memory] a turn's memory in {} ms ({})", turn_began.elapsed().as_millis(), turn_took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "));
     let given = sent_about(given, input.online, about_you.len(), &today);
     let after_question = match remember {
         None => after_question,
@@ -728,6 +742,11 @@ async fn found_beside(
     let searched = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
     let keep = |c: &crate::memory_index::Candidate| searched(c) && may(c) == crate::memory_use::May::Use;
     let at_most = crate::memory_index::FOUND_AT_MOST;
+    // How long each part of the search takes is in the log: it is time the
+    // person waits before the model is asked anything.
+    let begun = std::time::Instant::now();
+    let mut took: Vec<(&str, u128)> = Vec::new();
+    let mut mark = |what: &'static str| took.push((what, begun.elapsed().as_millis()));
     let mut hits = match crate::memory_reading::search(app, &question, at_most, &keep) {
         Ok(f) => f.hits,
         Err(_) => return not_run(WhyNot::IndexRebuilding),
@@ -743,6 +762,7 @@ async fn found_beside(
             }
         }
     }
+    mark("search");
     // A turn about the person's health is never given to an AI that
     // answers off this computer: found ones stay here, and are counted.
     {
@@ -759,10 +779,12 @@ async fn found_beside(
         conversations.dedup();
         if uses.is_empty() { 0 } else { conversations.len() as u32 }
     };
+    mark("withheld");
     let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits, input.online).unwrap_or_default();
     // What memory holds to be true now on this matter: the note for after
     // the question, and the found exchanges it marks as replaced, which
     // are left out of what is given and recorded as left out.
+    mark("texts");
     let stand = crate::memory_state::stand_for(app, &question, &memory_rows, &who);
     // The subjects of what the note was made from came up, together.
     if let Ok(k) = tauri::Manager::state::<std::sync::Arc<crate::commands_holochain::HolochainState>>(app).get().and_then(|m| m.data_key()) {
@@ -786,6 +808,7 @@ async fn found_beside(
         }
         (stay, left)
     };
+    mark("state");
     // Saved notes and knowledge given to this AI, found by the rule they
     // were always found by, as dated lines.
     let mut dated: Vec<String> = Vec::new();
@@ -802,6 +825,7 @@ async fn found_beside(
         hidden += m.hidden;
         dated.push(mb::dated_line(at, "knowledge they gave this AI", &m.text));
     }
+    mark("notes");
     // Names in the question that no conversation mentions. When the
     // keyword index cannot say, nothing is claimed.
     let absent = mb::absent_names(
@@ -809,6 +833,7 @@ async fn found_beside(
         &|name| crate::transcript_search::mentions(app, name).unwrap_or(true),
         &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
     );
+    mark("names");
     // The turn in hand was recorded a moment ago and is read into the
     // index within seconds: its own messages are not "the rest".
     const IN_HAND: i64 = 2;
@@ -825,6 +850,7 @@ async fn found_beside(
     let count = if !input.online && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
     let (exchanges, room) = mb::within_wait(exchanges, room, speed.map(crate::read_speed::wait_chars), wording);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    log::info!("[memory] searched for the turn in {} ms ({}); {} of {} given", begun.elapsed().as_millis(), took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "), b.shown, b.found);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
     let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial });
     rec.exchanges = b.given;
