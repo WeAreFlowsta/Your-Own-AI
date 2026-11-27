@@ -14,6 +14,7 @@
  *
  * One run at a time; safe to trigger from any surface.
  */
+import { whileAsking } from "./personAsking";
 import { invoke } from "@tauri-apps/api/core";
 import { runUtilityTask, isUtilityModelReady } from "./utilityModel";
 import { corpusDocuments, corpusDocumentText, corpusSetSummary, type DocRecord } from "./corpus";
@@ -165,7 +166,7 @@ async function writeCard(
   const { text } = await corpusDocumentText(doc.doc_id, FETCH_CHARS);
   const head = `Document: "${doc.meta.title || doc.meta.filename}"${doc.meta.author ? ` by ${doc.meta.author}` : ""}`;
   const run = (system: string, user: string, maxTokens: number) =>
-    runUtilityTask(system, user, undefined, maxTokens, writer.model, 120_000, writer.preferLoaded);
+    runUtilityTask(system, user, undefined, maxTokens, writer.model, 120_000, writer.preferLoaded, true);
   // A note of a line or two is its own card: asked to describe almost
   // nothing, a model invents (a 34-byte note came back as "practical video
   // creation tips tailored for self-taught AI developers"). Show its words.
@@ -183,7 +184,10 @@ async function writeCard(
     // A long document's card is many steps: between them the computer is
     // asked again, so a card under way steps aside when the person comes
     // back (their question's search shares this processor).
-    if (i > 0) await waitForCalm(CARDS_JOB);
+    if (i > 0) {
+      await whileAsking();
+      await waitForCalm(CARDS_JOB);
+    }
     onPart?.(i, parts.length + 1);
     const note = (await run(PART_SYSTEM, `${head} (part ${i + 1})\n\n${part}`, 120)).trim();
     if (note) notes.push(`Part ${i + 1}: ${note}`);
@@ -210,6 +214,7 @@ export function summarizePendingDocuments(): Promise<void> {
         // A card is model work nobody waits on: only while the computer is
         // idle (machine.ts); the Activity tray says it waits.
         await waitForLibrary();
+        await whileAsking();
         await waitForCalm(CARDS_JOB);
         notifyCardProgress(at, pending.length, doc.meta.filename);
         try {

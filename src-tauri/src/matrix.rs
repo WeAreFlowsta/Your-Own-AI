@@ -1623,7 +1623,7 @@ pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<
             if cancelled() {
                 break;
             }
-            match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12).await {
+            match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12, None).await {
                 Ok(out) => {
                     let verdict = out.trim().to_uppercase();
                     let mut words = verdict.split_whitespace();

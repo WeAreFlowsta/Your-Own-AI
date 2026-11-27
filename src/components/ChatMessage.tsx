@@ -12,6 +12,7 @@ import { renderMarkdown } from '../utils/renderMarkdown';
 import { Message } from '../types';
 import {
   LuBot,
+  LuBrain,
   LuFileText,
 } from '@qwikest/icons/lucide';
 import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
@@ -20,7 +21,7 @@ import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
-import { givenLineWords, type Sent, quietLine } from '../utils/givenLine';
+import { givenLineWords, type Sent, hasMemoryToShow } from '../utils/givenLine';
 import { SentLine } from './memory/SentLine';
 import { KeptLine } from './KeptLine';
 import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
@@ -370,7 +371,12 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // The rail no longer folds whole: its header carries the summary and
   // the Simple | Detailed control, so the action bar has no Steps button.
   const hasSteps = false;
-  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasWebNote || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
+  // Memory gave this reply something, and there is nothing more to say at
+  // rest: a button among the others, never a line that makes the bar taller.
+  const memoryLine = !props.message.isLoading ? props.message.givenLine : undefined;
+  const madeOffThisComputer = /^(online|external):/.test(props.message.servedBy || '');
+  const hasMemoryButton = hasMemoryToShow(memoryLine, madeOffThisComputer ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined);
+  const hasButtons = hasMemoryButton || hasSteps || hasTokens || hasThoughts || hasSources || hasWebNote || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
   // Nothing to say and nothing to offer: render nothing. (The empty bar
@@ -578,6 +584,21 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 <span class="hidden md:inline">Model</span>
               </LiquidMetalButton>
             )}
+            {hasMemoryButton && (
+              <span class="contents" data-testid="given-line" data-kind={memoryLine?.kind ?? 'sent-only'}>
+                <LiquidMetalButton
+                  onClick$={() => toggleSection$('given')}
+                  class="px-3 py-1 text-xs flex items-center"
+                  aria-expanded={openSection.value === 'given'}
+                  aria-label="What this AI was given from your memory"
+                  title="What this AI was given from your memory"
+                  testId="given-show"
+                >
+                  <LuBrain class="w-[1em] h-[1em] md:mr-1.5" />
+                  <span class="hidden md:inline">Memory</span>
+                </LiquidMetalButton>
+              </span>
+            )}
             {hasThoughts && (
               <LiquidMetalButton
                 onClick$={() => toggleSection$('thoughts')}
@@ -622,54 +643,38 @@ const ActionBar = component$<ActionBarProps>((props) => {
         )}
       </div>
 
-      {/* The line under a reply: what memory gave it, in one sentence,
-          with the passages one step away. */}
-      {/* Under a reply: nothing at rest. One short line, with one link,
-          only when memory gave the reply something, something was sent off
-          this computer, or memory could not look for a reason the person
-          can do something about. The rest is one press away, under Show. */}
-      {!props.message.isLoading && (() => {
+      {/* Under a reply: nothing about memory at rest. The Memory button
+          among the reply's buttons opens this: what was sent off this
+          computer, what the search gave, or why memory did not look. */}
+      {!props.message.isLoading && openSection.value === 'given' && (() => {
         // A reply made elsewhere: what memory sent with the question. A
         // reply made on this computer sent nothing, whatever was readied.
         const madeElsewhere = /^(online|external):/.test(props.message.servedBy || '');
         const sent = madeElsewhere ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined;
         const line = props.message.givenLine;
-        const ai = props.message.aiLabel || 'This AI';
-        const quiet = quietLine(line, sent, ai, props.message.servedBy || '');
-        if (!quiet) return null;
-        const open = openSection.value === 'given';
-        const w = line ? givenLineWords(line, ai) : null;
+        if (!hasMemoryToShow(line, sent)) return null;
+        const w = line ? givenLineWords(line, props.message.aiLabel || 'This AI') : null;
         const switchedOff = line?.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
         return (
-          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={line?.kind ?? 'sent-only'}>
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span data-testid="given-words">{quiet.text}</span>
-              {quiet.show && (
-                <button type="button" class="underline" data-testid="given-show" aria-expanded={open} onClick$={() => toggleSection$('given')}>
-                  {open ? 'Hide' : 'Show'}
-                </button>
+          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-opened" data-kind={line?.kind ?? 'sent-only'}>
+            <div class="mt-3 flex flex-col gap-1" data-testid="given-details">
+              {(sent || switchedOff) && (
+                <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
+              )}
+              {w && (
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>
+                    {w.label ? `${w.label}. ` : ''}
+                    {w.text}
+                  </span>
+                  {w.readRest && (
+                    <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
+                      Read the rest now
+                    </button>
+                  )}
+                </div>
               )}
             </div>
-            {open && (
-              <div class="mt-2 flex flex-col gap-1" data-testid="given-details">
-                {(sent || switchedOff) && (
-                  <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
-                )}
-                {w && (
-                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    <span>
-                      {w.label ? `${w.label}. ` : ''}
-                      {w.text}
-                    </span>
-                    {w.readRest && (
-                      <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
-                        Read the rest now
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
           </div>
         );
       })()}

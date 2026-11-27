@@ -6,7 +6,7 @@
 //
 // What is held: the first message to an online AI is sent with nothing to
 // answer first; what memory keeps about the person rides with it and the
-// line under the reply says so; with sharing turned off nothing from memory
+// Memory button on the reply says so; with sharing turned off nothing from memory
 // is in the next request; a message that looks like it holds a key is
 // asked about before anything is sent.
 import { createServer, type Server } from "node:http";
@@ -143,18 +143,19 @@ describe("memory and an AI that answers online", () => {
     console.log(`e2e: the request as it arrived (role:characters): ${sent.shape}`);
     // What the person keeps about themselves went with the question.
     expect(sent.all).toContain(KEPT);
-    // The reply is the service's, and the line under it says what was sent.
-    // At rest: one short line and one link.
-    const quiet = await textOf(under("given-line"));
-    console.log(`e2e: the line under the reply, at rest: ${JSON.stringify(quiet)}`);
-    // How many things depends on whether the index already holds the
+    // The reply is the service's. At rest nothing is said about memory:
+    // the Memory button among the reply's buttons is the way in.
+    const atRest = await textOf(under("given-line"));
+    console.log(`e2e: the Memory button, at rest: ${JSON.stringify(atRest)}`);
+    expect(atRest.replace(/\s+/g, " ").trim()).toMatch(/^(Memory)?$/);
+    expect(await (await $(under("given-opened"))).isExisting()).toBe(false);
+    // How many things went depends on whether the index already holds the
     // conversation above; the health exchange is never among what is sent.
-    expect(quiet.replace(/\s+/g, " ").trim()).toMatch(/^Sent to stand-in-model, online, with \d+ things? from your memory\.( \d+ more (was|were) found and kept on this computer, because (it is|they are) about your health\.)? Show$/);
     expect(sent.all).not.toContain(MEDICINE);
-    // Show: exactly what went, and the one-time line for an AI's first online reply.
+    // Pressed: exactly what went, and the one-time line for an AI's first online reply.
     await press(under("given-show"));
     const line = await textOf(under("given-sent"));
-    console.log(`e2e: under Show: ${JSON.stringify(line)}`);
+    console.log(`e2e: under the Memory button: ${JSON.stringify(line)}`);
     expect(line).toContain("Sent to");
     expect(line).toContain("1 thing you keep about yourself");
     const first = await textOf(under("sent-first"));
@@ -175,12 +176,14 @@ describe("memory and an AI that answers online", () => {
     const sent = lastUserText(chats[chats.length - 1]);
     console.log(`e2e: with sharing off, the request (role:characters): ${sent.shape}`);
     expect(sent.all).not.toContain(KEPT);
-    const line = await textOf(under("given-line"));
-    console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
-    expect(line.replace(/\s+/g, " ").trim()).toBe(`Memory is not shared with ${aiName}. Show`);
-    // Show says the rest; the one-time line does not come a second time.
+    // Nothing at rest; the Memory button says it, and the one-time line
+    // does not come a second time.
+    expect((await textOf(under("given-line"))).replace(/\s+/g, " ").trim()).toMatch(/^(Memory)?$/);
     await press(under("given-show"));
-    expect(await textOf(under("given-details"))).toContain("Your rules were still sent.");
+    const line = await textOf(under("given-details"));
+    console.log(`e2e: under the Memory button: ${JSON.stringify(line)}`);
+    expect(line).toContain(`Memory is not shared with ${aiName}.`);
+    expect(line).toContain("Your rules were still sent.");
     expect(await (await $(under("sent-first"))).isExisting()).toBe(false);
     // Where the AI is chosen, the Ask row says so too, with "Turn on".
     await (await $('[data-testid="memory-not-shared"]')).waitForExist({ timeout: 30_000 });
@@ -261,8 +264,9 @@ describe("memory and an AI that answers online", () => {
     await waitForReplyDone();
     expect(chats.length).toBeGreaterThan(before);
     for (const c of chats.slice(before)) expect(lastUserText(c).all).not.toContain(MEDICINE);
-    const line = await textOf(under("given-line"));
-    console.log(`e2e: the line under the reply: ${JSON.stringify(line)}`);
+    await press(under("given-show"));
+    const line = await textOf(under("given-details"));
+    console.log(`e2e: under the Memory button: ${JSON.stringify(line)}`);
     expect(line).toMatch(/more (was|were) found and kept on this computer, because (it is|they are) about your health\./);
     await shot("memory-online-health-held");
   });

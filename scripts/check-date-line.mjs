@@ -7,7 +7,7 @@ import ts from "typescript";
 
 const src = readFileSync(new URL("../src/utils/memoryDateLine.ts", import.meta.url), "utf8");
 const js = ts.transpileModule(src, { compilerOptions: { module: "ESNext", target: "ES2022" } }).outputText;
-const { onlyADateLine } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+const { onlyADateLine, opensWithADateLine, withAPlainCitation } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
 
 const given = [
   "[From memory. A search of all their conversations was run for this question. It returned the 2 dated exchange(s) below.",
@@ -38,4 +38,16 @@ for (const reply of [
 // Nothing was given: nothing to compare with.
 assert.equal(onlyADateLine("2026-03-08", null), false);
 assert.equal(onlyADateLine("2026-03-08", ""), false);
+// A reply that opens with the line and goes on: a copy of the passage is
+// asked again, the model's own words keep a plain citation.
+assert.equal(opensWithADateLine('2026-03-08, conversation "Pricing", with Atlas] They said: the site is on the small plan', given)?.kind, "copy");
+assert.equal(opensWithADateLine('[2026-04-02, conversation "Hosting notes 2", with Atlas]: AI: The medium plan starts on April 9.', given)?.kind, "copy");
+assert.equal(opensWithADateLine('2026-03-08, conversation "Pricing", with Atlas]\n\nYou are on the small plan.', given)?.kind, "lead");
+assert.equal(opensWithADateLine('[2026-03-08, conversation "Pricing", with Atlas]', given), null);
+assert.equal(opensWithADateLine('2025-01-01, conversation "Pricing", with Atlas] You are on the small plan.', given), null);
+assert.equal(opensWithADateLine("You are on the small plan.", given), null);
+assert.equal(withAPlainCitation('2026-03-08, conversation "Pricing", with Atlas]\n\nYou are on the small plan.', given), 'From "Pricing", 2026-03-08:\n\nYou are on the small plan.');
+assert.equal(withAPlainCitation('<think>look</think>[2026-03-08, conversation "Pricing", with Atlas]: You are on the small plan.', given), '<think>look</think>\nFrom "Pricing", 2026-03-08:\n\nYou are on the small plan.');
+assert.equal(withAPlainCitation("You are on the small plan.", given), "You are on the small plan.");
+assert.equal(withAPlainCitation('2026-03-08, conversation "Pricing", with Atlas] They said: the site is on the small plan', given), '2026-03-08, conversation "Pricing", with Atlas] They said: the site is on the small plan');
 console.log("check-date-line: ok");

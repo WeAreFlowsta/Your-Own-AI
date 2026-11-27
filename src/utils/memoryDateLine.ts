@@ -24,3 +24,40 @@ export function onlyADateLine(reply: string, given: string | null | undefined): 
   }
   return false;
 }
+
+/**
+ * What a reply that opens with the line above a passage goes on to do.
+ * "copy": it repeats the passage itself (the next words are the passage's
+ * own "They said:" or "AI:"), which answers nothing, so the turn asks once
+ * more. "lead": the model's own words follow, so the reply is an answer
+ * with a citation in front. Null when the reply does not open that way.
+ */
+export function opensWithADateLine(reply: string, given: string | null | undefined): { kind: "copy" | "lead"; date: string; title: string; rest: string } | null {
+  if (!given) return null;
+  const said = reply.replace(/^\s*\[?\s*/, "");
+  for (const line of given.match(ABOVE_A_PASSAGE) ?? []) {
+    const inner = line.slice(1, -1);
+    if (!said.startsWith(inner)) continue;
+    const rest = said.slice(inner.length).replace(/^\]?\s*:?\s*/, "");
+    if (!rest) return null;
+    const title = /conversation "([^"\n]*)"/.exec(inner)?.[1] ?? "";
+    return { kind: /^(They said|AI)\s*:/.test(rest) ? "copy" : "lead", date: inner.slice(0, 10), title, rest };
+  }
+  return null;
+}
+
+/**
+ * A reply whose own words follow the line above a passage: the line, which
+ * was written for the model, becomes a plain citation ("From "Pricing",
+ * 2026-03-08:") and the words stand as they are. Any other reply is
+ * returned unchanged. Thinking at the front of the text is left in place.
+ */
+export function withAPlainCitation(text: string, given: string | null | undefined): string {
+  const cut = text.lastIndexOf("</think>");
+  const head = cut < 0 ? "" : text.slice(0, cut + 8);
+  const body = cut < 0 ? text : text.slice(cut + 8);
+  const found = opensWithADateLine(body, given);
+  if (!found || found.kind !== "lead") return text;
+  const from = found.title ? `From "${found.title}", ${found.date}:` : `From ${found.date}:`;
+  return `${head}${head ? "\n" : ""}${from}\n\n${found.rest}`;
+}

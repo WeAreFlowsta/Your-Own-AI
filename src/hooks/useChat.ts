@@ -8,7 +8,8 @@
  * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
-import { onlyADateLine } from "../utils/memoryDateLine";
+import { personAsked } from "../utils/personAsking";
+import { onlyADateLine, opensWithADateLine, withAPlainCitation } from "../utils/memoryDateLine";
 import { hearInstruction } from "../utils/ruleOffers";
 import { whereWords } from "../utils/givenLine";
 import { invoke } from "@tauri-apps/api/core";
@@ -717,6 +718,8 @@ export function useChat(props: UseChatProps) {
       // freshness gate and memory retrieval both need the same vector, and
       // each used to compute it separately (two embed-server round trips).
       // Fails soft to null; both consumers degrade exactly as before.
+      // Background writing on the helper steps aside for this question.
+      personAsked();
       const queryVecPromise: Promise<number[] | null> = import(
         "../utils/embeddings"
       )
@@ -2052,12 +2055,16 @@ export function useChat(props: UseChatProps) {
         // A reply that is only the line above a passage memory gave (the
         // model began to cite and ended there) answers nothing either: the
         // same one more ask, and the first reply stands if that one fails.
+        // A reply that copies a passage out, line above it and all, answers
+        // nothing either, and is asked again the same way.
+        const saidFirst = extractThinkingFromContent(fullResponse).contentWithoutThinking;
         const dateLineOnly =
-          !!fullResponse.trim() && onlyADateLine(extractThinkingFromContent(fullResponse).contentWithoutThinking, foundMemory?.beforeQuestion);
+          !!fullResponse.trim() &&
+          (onlyADateLine(saidFirst, foundMemory?.beforeQuestion) || opensWithADateLine(saidFirst, foundMemory?.beforeQuestion)?.kind === "copy");
         const firstReply = fullResponse;
         if ((!fullResponse.trim() || dateLineOnly) && !controller.signal.aborted) {
-          console.warn(`[Chat] ${dateLineOnly ? "a date line alone" : "empty reply"} - one retry with a plain-words steer`);
-          uiLog(`[chat] ${dateLineOnly ? "a reply that was only the line above a passage" : `empty reply after ${updateCount} update(s)`} - one retry with a plain-words steer`);
+          console.warn(`[Chat] ${dateLineOnly ? "a date line alone or a copied passage" : "empty reply"} - one retry with a plain-words steer`);
+          uiLog(`[chat] ${dateLineOnly ? "a reply that was only the line above a passage, or a copy of one" : `empty reply after ${updateCount} update(s)`} - one retry with a plain-words steer`);
           if (dateLineOnly) fullResponse = "";
           state.messages = state.messages.map((m) =>
             m.id === assistantId
@@ -2067,7 +2074,7 @@ export function useChat(props: UseChatProps) {
           const steer =
             systemPrompt +
             (dateLineOnly
-              ? "\n\nAnswer the question in full sentences. A date or the name of a conversation alone is not an answer."
+              ? "\n\nAnswer the question in full sentences of your own. A date, the name of a conversation, or a passage copied out is not an answer."
               : "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.");
           // On this computer's engine the second ask may not end before it
           // has begun: its first visible character must be something other
@@ -2125,6 +2132,9 @@ export function useChat(props: UseChatProps) {
             retryDidNotRun = false;
           }
         }
+        // The line above a passage, when the model's own answer follows it,
+        // reads as a plain citation.
+        fullResponse = withAPlainCitation(fullResponse, foundMemory?.beforeQuestion);
 
         // Calculate tokens per second
         const streamEndTime = Date.now();

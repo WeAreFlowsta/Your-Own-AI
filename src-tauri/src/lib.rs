@@ -818,6 +818,7 @@ pub fn run() {
             llm::embed_texts,
             llm::stop_embedding_server,
             llm::utility_chat,
+            llm::helper_step_aside,
             llm::stop_utility_server,
             agent_bridge::start_build_agent,
             agent_bridge::send_agent_prompt,

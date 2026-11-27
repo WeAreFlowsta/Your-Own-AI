@@ -4524,7 +4524,46 @@ pub async fn embed_texts(
         })
         .collect();
 
-    match embed_request(&model, &texts).await {
+    // One text is a question someone is waiting on; several are passages
+    // or examples being prepared. The server answers in the order asked,
+    // so a question that arrived behind a batch of 24 on a processor-run
+    // model waited past its limit and the reply went without its search.
+    // A batch therefore goes a few texts at a time, and lets any waiting
+    // question in before each piece.
+    if texts.len() == 1 {
+        let _first = Inflight::new(&EMBED_ONE_WAITING);
+        return embed_batch(&state, &model, texts).await;
+    }
+    let kind = if texts[0].starts_with(crate::embedding_model::DOC_PREFIX) {
+        "passages"
+    } else if texts[0].starts_with(crate::embedding_model::SAID_PREFIX) {
+        "sayings"
+    } else if texts[0].starts_with(crate::embedding_model::QUERY_PREFIX) {
+        "questions"
+    } else {
+        "plain texts"
+    };
+    log::info!("[embed] the {} are {kind}; in pieces of {EMBED_PIECE}, a single question first", texts.len());
+    let mut out = Vec::with_capacity(texts.len());
+    for piece in texts.chunks(EMBED_PIECE) {
+        let asked = std::time::Instant::now();
+        while EMBED_ONE_WAITING.load(std::sync::atomic::Ordering::SeqCst) > 0 && asked.elapsed() < EMBED_GIVE_WAY {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        out.extend(embed_batch(&state, &model, piece.to_vec()).await?);
+    }
+    Ok(out)
+}
+
+/// How many texts of a batch go to the memory model at once (it has four
+/// places), and how long a batch gives way to single questions before it
+/// goes on regardless.
+const EMBED_PIECE: usize = 4;
+const EMBED_GIVE_WAY: std::time::Duration = std::time::Duration::from_secs(20);
+static EMBED_ONE_WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+async fn embed_batch(state: &State<'_, LLMState>, model: &str, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    match embed_request(model, &texts).await {
         Ok(v) => Ok(v),
         Err(EmbedError::TooLarge(_)) | Err(EmbedError::Server(_)) => {
             // One input over the model's 512-token window fails the WHOLE
@@ -4534,7 +4573,7 @@ pub async fn embed_texts(
             // until it fits. The opening of a passage carries its meaning.
             let mut out = Vec::with_capacity(texts.len());
             for t in texts {
-                out.push(embed_one_shrinking(&model, t).await?);
+                out.push(embed_one_shrinking(model, t).await?);
             }
             Ok(out)
         }
@@ -4545,7 +4584,7 @@ pub async fn embed_texts(
             // one instead of queueing behind a server that has stopped.
             if e.contains("timed out") || e.contains("timeout") {
                 log::warn!("[embed] {e} - stopping the embedding server; the next request restarts it");
-                stop_embedding_server_inner(&state).await;
+                stop_embedding_server_inner(state).await;
             }
             Err(e)
         }
@@ -4946,6 +4985,7 @@ pub async fn utility_chat(
     user: String,
     grammar: Option<String>,
     max_tokens: u32,
+    yields: Option<bool>,
 ) -> Result<String, String> {
     let _ = state;
     // A grammar means a fixed-form answer - the routing classifier's two
@@ -4954,7 +4994,26 @@ pub async fn utility_chat(
     // matrix read "debug my sourdough starter" as CODE, Linux as GENERAL).
     // Free prose (summaries, portraits) keeps its warmth.
     let temperature = if grammar.is_some() { 0.0 } else { 0.7 };
-    memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await
+    if yields != Some(true) {
+        return memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await;
+    }
+    // Work nobody waits on: dropped when the person asks something (the
+    // request to the helper closes, and the helper ends that task).
+    tokio::select! {
+        done = memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature) => done,
+        _ = STEP_ASIDE.notified() => Err("set aside for the person's question".to_string()),
+    }
+}
+
+/// Told when the person asks something: helper work that yields ends now.
+static STEP_ASIDE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// The person has just asked something: helper work marked as yielding
+/// (a document's card) is dropped, so their question's search and reply do
+/// not wait behind it.
+#[tauri::command]
+pub fn helper_step_aside() {
+    STEP_ASIDE.notify_waiters();
 }
 
 /// One memory-work completion through the memory slot (the memory design

@@ -28,6 +28,7 @@ async function utilityChat(
   user: string,
   grammar: string | undefined,
   maxTokens: number,
+  yields = false,
 ): Promise<string> {
   return await invoke<string>("utility_chat", {
     model: UTILITY_MODEL.filename,
@@ -35,6 +36,7 @@ async function utilityChat(
     user,
     grammar: grammar ?? null,
     maxTokens,
+    yields,
   });
 }
 
@@ -59,6 +61,9 @@ export async function runUtilityTask(
    *  for quality-sensitive prose tasks where a stronger LOADED local model
    *  beats Ministral. Callers must only set this with a loaded model. */
   preferFallback?: boolean,
+  /** Work nobody waits on (a document's card): it is dropped the moment
+   *  the person asks something, and the caller tries again later. */
+  yields = false,
 ): Promise<string> {
   const work = (async () => {
     // Use the dedicated utility server only when the utility model is installed
@@ -66,7 +71,7 @@ export async function runUtilityTask(
     // it (fallbackModel is the utility filename), reuse that warm — often GPU —
     // instance via the fallback path instead of loading a second CPU copy.
     if (!preferFallback && fallbackModel !== UTILITY_MODEL.filename && (await isUtilityModelReady())) {
-      return utilityChat(system, user, grammar, maxTokens);
+      return utilityChat(system, user, grammar, maxTokens, yields);
     }
     const msgs: ChatMessage[] = [{ role: "user", content: user } as ChatMessage];
     let out = "";

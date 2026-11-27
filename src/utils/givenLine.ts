@@ -108,7 +108,7 @@ export function firstSentWords(ai: string, servedBy: string, changed: boolean): 
   if (changed) {
     return `What ${ai} is sent from memory has changed. It is now what memory finds for each question you ask. The list of facts and the short description of you are no longer sent.`;
   }
-  return `${ai} runs online, so what memory found for your question was sent to ${whereWords(servedBy)} with your message. The line under each reply shows exactly what was sent.`;
+  return `${ai} runs online, so what memory found for your question was sent to ${whereWords(servedBy)} with your message. The Memory button on each reply shows exactly what was sent.`;
 }
 
 /** The sentence that says what memory sent with a message to a model that
@@ -140,32 +140,26 @@ export function dayWords(day: string, thisYear: number = new Date().getFullYear(
   return Number(m[1]) === thisYear ? text : `${text}, ${m[1]}`;
 }
 
-/** The one line a reply shows at rest, or nothing. Nothing when memory
- *  looked and found nothing: the reply stands by itself, and what the
- *  search did is still under the Model button. */
-export function quietLine(line: ReplyLine | undefined | null, sent: Sent | undefined, ai: string, servedBy: string): { text: string; show: boolean } | null {
-  // Made off this computer: what went with the question comes first.
-  if (sent && (sentAnything(sent) || sent.held)) {
-    const n = sent.passages + sent.lines + (sent.about ?? 0) + (sent.note ? 1 : 0);
-    const where = whereWords(servedBy);
-    if (n === 0) return { text: `Nothing from your memory was sent to ${where}.${heldWords(sent.held)}`, show: true };
-    return { text: `Sent to ${where}, with ${n} ${n === 1 ? "thing" : "things"} from your memory.${heldWords(sent.held)}`, show: true };
-  }
-  if (!line) return null;
+/** Whether a reply has something to say about memory, and so gets the
+ *  Memory button among its others. Nothing shows at rest: pressing the
+ *  button opens what was sent, what was given, or why memory did not
+ *  look. No button when memory looked and found nothing: the reply stands
+ *  by itself, and what the search did is still under the Model button. */
+export function hasMemoryToShow(line: ReplyLine | undefined | null, sent: Sent | undefined): boolean {
+  // Made off this computer: what went with the question, or was held back.
+  if (sent && (sentAnything(sent) || sent.held)) return true;
+  if (!line) return false;
   switch (line.kind) {
     case "given":
     case "quoted-none":
-      return { text: "From your memory", show: true };
-    case "did-not-fit":
-      return line.given > 0 ? { text: "From your memory", show: true } : null;
-    case "read-so-far":
-      return line.found > 0 ? { text: "From your memory", show: true } : null;
-    case "no-mention":
-      return null;
     case "withheld":
-      return { text: givenLineWords(line, ai).text, show: true };
     case "did-not-look":
-      if (line.why === "switched_off_for_this_ai") return { text: `Memory is not shared with ${ai}.`, show: true };
-      return { text: givenLineWords(line, ai).text, show: false };
+      return true;
+    case "did-not-fit":
+      return line.given > 0;
+    case "read-so-far":
+      return line.found > 0;
+    case "no-mention":
+      return false;
   }
 }
