@@ -18,6 +18,14 @@
    }
   },
   {
+   "file": "gemma-4-E4B_q4_0-it.gguf",
+   "questions": {
+    "set": 1,
+    "right": 35,
+    "of": 36
+   }
+  },
+  {
    "file": "LFM2.5-8B-A1B-Q4_K_M.gguf",
    "questions": {
     "set": 1,
