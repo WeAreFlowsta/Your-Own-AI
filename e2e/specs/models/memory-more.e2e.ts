@@ -11,7 +11,7 @@ const THEIRS = "Controls test: the delivery van is blue.";
 
 async function keep(text: string, c: number, why: string): Promise<Seen> {
   const kept = await invoke<{ item: Seen }>("memory_keep", {
-    input: { text, itemType: "detail", ptr: { c, s: 1, t: c, a: 0, b: 0 }, asOf: Math.round(c / 1000), kind: "exchange", why },
+    input: { text, itemType: "detail", ptr: { c, s: 1, t: c, a: 0, b: 0 }, asOf: Math.round(c / 1000), kind: "exchange", why, ...(why === "pressed" ? {} : { by: "ai:controls-test" }) },
   });
   return kept.item;
 }

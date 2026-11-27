@@ -31,11 +31,28 @@ export function hadOlderMemory(r: UpdateReport | null): boolean {
   return !!r && (r.keptByYou + r.setAside + r.projectLines > 0 || r.name || r.portraitRetired);
 }
 
-export function updateLineDismissed(): boolean {
+/** How long the line stays when nobody presses anything. */
+export const UPDATE_LINE_DAYS = 7;
+const FIRST_SHOWN_KEY = `${DISMISSED_KEY}-first-shown`;
+
+/** The line is over: dismissed, "See what changed" was opened, or it has
+ *  been showing for a week. `now` is given by tests. */
+export function updateLineDismissed(now: number = Date.now()): boolean {
   try {
-    return localStorage.getItem(DISMISSED_KEY) === "1";
+    if (localStorage.getItem(DISMISSED_KEY) === "1") return true;
+    const first = Number(localStorage.getItem(FIRST_SHOWN_KEY) ?? "");
+    return first > 0 && now - first > UPDATE_LINE_DAYS * 86_400_000;
   } catch {
     return false;
+  }
+}
+
+/** The line is on screen: the week it may stay starts the first time. */
+export function updateLineShown(now: number = Date.now()): void {
+  try {
+    if (!localStorage.getItem(FIRST_SHOWN_KEY)) localStorage.setItem(FIRST_SHOWN_KEY, String(now));
+  } catch {
+    /* it stays until dismissed */
   }
 }
 

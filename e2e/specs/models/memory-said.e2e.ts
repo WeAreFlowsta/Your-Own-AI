@@ -83,7 +83,7 @@ describe("controls said in the chat", () => {
     const s = turns?.assistant?.sequence ?? 1;
     if (!(c > 0)) this.skip();
     const kept = await invoke<{ item: Seen }>("memory_keep", {
-      input: { text: "Said-controls test: the first color named was a primary one.", itemType: "detail", ptr: { c, s, t: c, a: 0, b: 0 }, asOf: Math.round(c / 1000), kind: "exchange", why: "settled" },
+      input: { text: "Said-controls test: the first color named was a primary one.", itemType: "detail", ptr: { c, s, t: c, a: 0, b: 0 }, asOf: Math.round(c / 1000), kind: "exchange", why: "settled", by: "ai:said-controls-test" },
     });
     await ask("Yes, that's right.");
     await waitForReplyDone();
