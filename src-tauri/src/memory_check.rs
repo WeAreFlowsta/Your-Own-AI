@@ -398,10 +398,16 @@ pub async fn memory_check_status(app: tauri::AppHandle) -> Result<CheckStatus, S
 /// can be measured before it is made the app's. The form's `verdict`
 /// field is read as the shipped one is. Answers, per pair: its id, what
 /// was expected, what was said, and the reply.
-pub(crate) async fn judge_trial(state: &crate::llm::LLMState, system: &str, schema: serde_json::Value, seed: u64, max_tokens: u32) -> Result<Vec<serde_json::Value>, String> {
-    let set = shipped_set();
+pub(crate) async fn judge_trial(state: &crate::llm::LLMState, system: &str, schema: serde_json::Value, seed: u64, max_tokens: u32, pairs: Option<Vec<PairExample>>) -> Result<Vec<serde_json::Value>, String> {
+    // The shipped pairs, in the order a check with this seed asks them; or
+    // the caller's own pairs (a measuring run's, read from outside the
+    // repository), in the order given.
+    let asked_pairs: Vec<Asked> = match pairs {
+        Some(own) => own.iter().map(|p| Asked { id: p.id.clone(), part: Part::Judge, expected_yes: p.expect == "REPLACES", system: JUDGE_SYSTEM, user: judge_user(&p.earlier, &p.later) }).collect(),
+        None => asked(&shipped_set(), seed).into_iter().filter(|a| a.part == Part::Judge).collect(),
+    };
     let mut out = Vec::new();
-    for a in asked(&set, seed).into_iter().filter(|a| a.part == Part::Judge) {
+    for a in asked_pairs {
         let reply = crate::llm::fixed_form_once(state, system, &a.user, schema.clone(), 0.2, max_tokens, Some(seed)).await?;
         out.push(serde_json::json!({ "id": a.id, "expected_yes": a.expected_yes, "said_yes": read_answer(Part::Judge, &reply), "reply": reply }));
     }

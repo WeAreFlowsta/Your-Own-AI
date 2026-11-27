@@ -1098,7 +1098,15 @@ async fn memory_judge_trial_dev(State(app): State<AppHandle>, Json(body): Json<V
     let max_tokens = body["max_tokens"].as_u64().unwrap_or(300) as u32;
     let state = app.state::<crate::llm::LLMState>();
     let started = std::time::Instant::now();
-    match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens).await {
+    // The caller's own pairs in place of the shipped ones, when given.
+    let pairs = match body.get("pairs").filter(|p| p.is_array()) {
+        Some(p) => match serde_json::from_value(p.clone()) {
+            Ok(v) => Some(v),
+            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("pairs: {e}"), "bad_request"),
+        },
+        None => None,
+    };
+    match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens, pairs).await {
         Ok(said) => Json(json!({ "said": said, "seconds": started.elapsed().as_secs() })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }

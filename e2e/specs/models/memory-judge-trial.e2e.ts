@@ -12,6 +12,9 @@ import { waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const FILE = process.env.YOAI_E2E_JUDGE_FORMS ?? "";
 const OUT = process.env.YOAI_MEMORY_OUT ?? "";
+// Pairs of the run's own in place of the shipped ones (a file kept outside
+// the repository, in the shipped set's shape).
+const PAIRS_FILE = process.env.YOAI_E2E_JUDGE_PAIRS ?? "";
 const SEEDS = (process.env.YOAI_E2E_JUDGE_SEEDS ?? "1").split(",").map((s) => Number(s.trim())).filter((n) => n > 0);
 const BASE = "http://127.0.0.1:11435/internal";
 
@@ -45,6 +48,7 @@ describe("wordings of the replacement judgment", () => {
     if (!FILE) this.skip();
     this.timeout(6 * 3_600_000);
     const forms = JSON.parse(readFileSync(FILE, "utf8")) as Form[];
+    const pairs = PAIRS_FILE ? (JSON.parse(readFileSync(PAIRS_FILE, "utf8")) as { pairs: unknown[] }).pairs : undefined;
     await waitForChat();
     // A reply loads the model the forms are put to.
     await ask("Name one primary color and nothing else.");
@@ -52,7 +56,7 @@ describe("wordings of the replacement judgment", () => {
     const results: { form: string; seed: number; seconds: number; caught: number; ofYes: number; wrongYes: number; ofNo: number; noAnswer: number; said: Said[] }[] = [];
     for (const form of forms) {
       for (const seed of SEEDS) {
-        const body = await post({ system: form.system, schema: form.schema, seed, max_tokens: form.max_tokens ?? 300 });
+        const body = await post({ system: form.system, schema: form.schema, seed, max_tokens: form.max_tokens ?? 300, ...(pairs ? { pairs } : {}) });
         if (!body.said) {
           console.log(`e2e: JUDGE FORM ${form.name} seed ${seed}: did not run: ${body.error ?? "no answer"}`);
           continue;
