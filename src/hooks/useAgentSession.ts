@@ -591,9 +591,12 @@ export function useAgentSession(props: UseAgentSessionProps) {
     // person's prompt): recorded with the reply as pointers, and the
     // reply's quotations are checked against it for the line under it.
     let given: Record<string, unknown> | undefined;
+    // "Remember that", read from the person's words where the prompt was built.
+    let saidRemember: "before" | "this" | null = null;
     try {
-      const turn = await invoke<{ question: string; given: Record<string, unknown> | null; givenTexts: string[] } | null>("memory_session_given");
+      const turn = await invoke<{ question: string; given: Record<string, unknown> | null; givenTexts: string[]; remember?: "before" | "this" | null } | null>("memory_session_given");
       const typed = lastTyped.value.trim();
+      if (turn && typed && turn.question.trim().endsWith(typed)) saidRemember = turn.remember ?? null;
       if (!(turn?.given && typed && turn.question.trim().endsWith(typed))) {
         uiLog(`[memory] session reply has no record: turn ${turn ? "kept" : "none"}, given ${!!turn?.given}, typed ${typed.length} chars, question ends with it ${!!turn && !!typed && turn.question.trim().endsWith(typed)}`);
       }
@@ -660,6 +663,36 @@ export function useAgentSession(props: UseAgentSessionProps) {
       void import("../utils/memoryNotes")
         .then(({ noteAnswered }) => noteAnswered({ conversation: hash, agentKey, question: lastTyped.value.trim(), reply: bubble.content, given: bubble.library ?? [] }))
         .catch((e) => console.warn("[memory] keeping the note lines that answered failed:", e));
+    }
+    // What the person can say in place of a control works here as it does
+    // in a direct chat: "remember that", "that's done", "that's right",
+    // "forget that", "keep this conversation out of memory". Fixed words,
+    // read on the device; any other message changes nothing.
+    const typedNow = lastTyped.value.trim();
+    if (actionHash && typedNow) {
+      const msgs = props.chatState.messages;
+      const at = msgs.findIndex((m) => m.id === bubble.id);
+      const mine = at > 0 ? [...msgs.slice(0, at)].reverse().find((m) => m.role === "user") : undefined;
+      const mineAt = mine ? msgs.findIndex((m) => m.id === mine.id) : -1;
+      const before = mineAt > 0 ? [...msgs.slice(0, mineAt)].reverse().find((m) => m.role === "assistant" && !!m.content) : undefined;
+      if (mine) {
+        const target =
+          saidRemember === "this"
+            ? { messageId: mine.id, role: "user" as const, text: typedNow, seq: undefined }
+            : saidRemember === "before" && before
+              ? { messageId: before.id, role: "assistant" as const, text: before.content, seq: before.sequence }
+              : null;
+        const used = ((before?.given as { note_items?: string[] } | undefined)?.note_items ?? []).filter((id) => typeof id === "string");
+        void import("../utils/memoryKeep")
+          .then(async ({ keepSaid, doneSaid, saidControl }) => {
+            if (target) await keepSaid({ ...target, aiId: ai.id, conversation: hash });
+            if (typedNow.length <= 120) {
+              await doneSaid({ messageId: mine.id, aiId: ai.id, text: typedNow, conversation: hash });
+              await saidControl({ messageId: mine.id, aiId: ai.id, text: typedNow, conversation: hash, used });
+            }
+          })
+          .catch((e) => console.warn("[memory] what was said in place of a control failed:", e));
+      }
     }
     // recordMessage returns the entry's action hash, or null after logging
     // the failure - one line either way, so the console always answers
