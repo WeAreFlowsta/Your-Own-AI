@@ -81,6 +81,7 @@ mod reset;                 // factory reset (wipe local AIs/transcripts/memory, 
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
 mod model_caps;            // capability registry (benchmark-informed scores)
+mod local_results;         // what each local model did on our questions and the memory check, shipped with the release
 mod process_ext;           // sidecar spawn and stop (flowsta-hc-lines): hidden consoles, tied to the app
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod updater;               // the app's own updates: signed manifest, download, restart to update

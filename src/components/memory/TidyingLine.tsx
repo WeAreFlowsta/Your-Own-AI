@@ -5,9 +5,9 @@ interface Marks {
   part: 'judge' | 'gate' | 'done';
   examples: number;
   caught: number;
-  of_yes: number;
-  wrong_yes: number;
-  of_no: number;
+  ofYes: number;
+  wrongYes: number;
+  ofNo: number;
   right: number;
   passed: boolean;
 }
@@ -33,11 +33,11 @@ function marks(result: TidyStatus['result']): string {
     const all = (result?.runs ?? []).map((r) => r.parts?.find((p) => p.part === part)).filter((p): p is Marks => !!p);
     return all.length ? all.reduce((a, b) => (bad(b) > bad(a) ? b : a)) : null;
   };
-  const judge = worst('judge', (m) => m.wrong_yes * 100 - m.caught);
+  const judge = worst('judge', (m) => m.wrongYes * 100 - m.caught);
   const gate = worst('gate', (m) => -m.right);
   const said = [
     judge
-      ? `On "does this replace that" it caught ${judge.caught} of ${judge.of_yes} replacements and wrongly replaced ${judge.wrong_yes} of ${judge.of_no} that both stand. To pass it must catch 5 in 6 and may be wrong once.`
+      ? `On "does this replace that" it caught ${judge.caught} of ${judge.ofYes} replacements and wrongly replaced ${judge.wrongYes} of ${judge.ofNo} that both stand. To pass it must catch 5 in 6 and may be wrong once.`
       : '',
     gate ? `On "was something settled" it got ${gate.right} of ${gate.examples} right. To pass it needs 4 in 5.` : '',
   ].filter(Boolean);

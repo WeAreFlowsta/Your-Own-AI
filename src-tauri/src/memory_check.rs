@@ -211,8 +211,19 @@ pub(crate) fn still_good(s: &Stored, set: u32, sha256_now: Option<&str>) -> bool
 /// The result kept for a model, when it is for the shipped set and the
 /// file as it is now.
 pub(crate) fn stored(app: &tauri::AppHandle, model: &str) -> Option<Stored> {
-    let s = all_stored(app).remove(model)?;
-    still_good(&s, set_version(), crate::model_hash::get(app, model).as_deref()).then_some(s)
+    let hash = crate::model_hash::get(app, model);
+    if let Some(s) = all_stored(app).remove(model).filter(|s| still_good(s, set_version(), hash.as_deref())) {
+        return Some(s);
+    }
+    // A model we checked ourselves, in this exact file: its result came
+    // with the release, and the check does not run for it here.
+    shipped(model, hash.as_deref())
+}
+
+/// The result shipped with the release for this exact file, as a kept one.
+pub(crate) fn shipped(model: &str, sha256: Option<&str>) -> Option<Stored> {
+    let m = crate::local_results::memory_for(model, sha256, set_version())?;
+    Some(Stored { set: m.set, sha256: sha256.map(str::to_string), may_tidy: m.may_tidy, may_keep: m.may_keep, may_close: m.may_close, judge_right: m.judge_right, runs: Vec::new(), at: 0 })
 }
 
 /// Keep a model's result.
@@ -391,6 +402,42 @@ pub async fn memory_check_status(app: tauri::AppHandle) -> Result<CheckStatus, S
     };
     let (done, total) = read_progress(&app).filter(|p| p.model == m && p.set == set_version()).map_or((0, RUNS * per_run), |p| asked_so_far(&p, per_run));
     Ok(CheckStatus { model, result: stored(&app, &m), done, total })
+}
+
+/// One run of the check on a model served on a port of its own (the
+/// matrix's grading part, where no chat model is loaded): every example
+/// asked once, in the form and with the settings the standing job uses.
+pub(crate) async fn run_at(port: u16, dir: &std::path::Path, model: &str, seed: u64) -> Result<Verdict, String> {
+    let set = shipped_set();
+    let client = crate::llm::local_http();
+    let mut answers = Vec::new();
+    for a in asked(&set, seed) {
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": [{ "role": "system", "content": a.system }, { "role": "user", "content": a.user }],
+            "stream": false,
+            "max_tokens": 300,
+            "temperature": 0.2,
+            "top_p": 0.9,
+            "response_format": { "type": "json_schema", "json_schema": { "name": "v", "schema": schema(a.part) } },
+            "stop": crate::llm::chat_stop_strings(model),
+            "seed": seed,
+        });
+        crate::llm::apply_no_think(&mut body, dir, model);
+        let v: serde_json::Value = client
+            .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
+            .json(&body)
+            .timeout(std::time::Duration::from_secs(300))
+            .send()
+            .await
+            .map_err(|e| format!("the engine did not answer: {e}"))?
+            .json()
+            .await
+            .map_err(|e| format!("the engine's answer did not parse: {e}"))?;
+        let reply = crate::llm::completion_text(&v);
+        answers.push(Answered { part: a.part, expected_yes: a.expected_yes, said_yes: read_answer(a.part, &reply) });
+    }
+    Ok(verdict(set.v, &answers))
 }
 
 /// For the development route only: the replacement judgment of every pair of the

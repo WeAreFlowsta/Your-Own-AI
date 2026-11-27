@@ -837,7 +837,7 @@ export default component$(() => {
   const matrixLines = useSignal<string[]>([]);
   const matrixPath = useSignal("");
   const matrixError = useSignal("");
-  const runMatrix = $(async () => {
+  const runMatrix = $(async (legs?: string[]) => {
     matrixError.value = "";
     matrixPath.value = "";
     matrixLines.value = [];
@@ -853,7 +853,7 @@ export default component$(() => {
       });
       const now = new Date();
       const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-      matrixPath.value = await invoke<string>("matrix_run", { stamp });
+      matrixPath.value = await invoke<string>("matrix_run", legs?.length ? { stamp, legs } : { stamp });
     } catch (e) {
       matrixError.value = String(e);
     } finally {
@@ -1954,17 +1954,31 @@ export default component$(() => {
                   </span>{" "}
                   - tests how your models run on this computer. Sending us
                   the report helps us make the app better. It holds no
-                  private data. Takes 10-20 minutes.
+                  private data. Takes 10-20 minutes. Grading your offline
+                  models is a separate, longer run: about half an hour a
+                  model, and its results help the app pick the best model
+                  for everyone.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
                     variant="secondary"
-                    onClick$={runMatrix}
+                    onClick$={() => runMatrix()}
                     disabled={matrixBusy.value}
                     class="px-4 py-2 text-sm"
                   >
                     {matrixBusy.value ? "Running…" : "Run truth matrix"}
                   </LiquidMetalButton>
+                  {!matrixBusy.value && (
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={() => runMatrix(["grade"])}
+                      class="px-4 py-2 text-sm"
+                      testId="matrix-grade-models"
+                      title="Asks each offline model our harder questions and runs the memory check, one model at a time. About half an hour a model. Models already graded in this release are skipped."
+                    >
+                      Grade my models
+                    </LiquidMetalButton>
+                  )}
                   {matrixBusy.value && (
                     <LiquidMetalButton
                       variant="secondary"

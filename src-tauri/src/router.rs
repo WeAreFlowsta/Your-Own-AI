@@ -938,7 +938,11 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
     // score; the health task never learns.
     let adj = if task == "medical" { Adjustments::default() } else { learned_adjustments(app) };
     let cap = |f: &crate::fit::ModelFit| {
-        let task_cap = size_capped(crate::model_caps::caps_for(&f.name).by_task(task), f.params_b);
+        // A model we have put our own questions to is placed by what it did
+        // (for the kinds of question the set tests); any other by the
+        // capability table, bounded by its size, as before.
+        let task_cap = crate::local_results::measured_score(&f.name, task, crate::matrix::QUALITY_HARD_SET)
+            .unwrap_or_else(|| size_capped(crate::model_caps::caps_for(&f.name).by_task(task), f.params_b));
         if agent_only {
             agent_rank_cap(crate::model_caps::agent_caps(&f.name), task_cap)
         } else {
