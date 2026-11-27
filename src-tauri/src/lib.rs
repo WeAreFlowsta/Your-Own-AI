@@ -912,6 +912,7 @@ pub fn run() {
             memory_items::memory_changes,
             memory_items::memory_undo,
             memory_items::memory_not_replaced,
+            memory_items::memory_replaces,
             memory_session::memory_session_given,
             memory_use::memory_conversation_use,
             memory_use::memory_conversation_use_set,

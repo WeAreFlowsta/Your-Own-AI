@@ -1054,6 +1054,33 @@ pub async fn memory_not_replaced(app: tauri::AppHandle, id: String) -> Result<It
     Ok(saved)
 }
 
+/// "This replaces ...", by hand: the person says which earlier item a
+/// later one replaces. The earlier item stays as history, marked replaced
+/// by the person, and the change can be undone from Recent like any
+/// other. Answers the earlier item as it is now.
+#[tauri::command]
+pub async fn memory_replaces(app: tauri::AppHandle, newer: String, older: String) -> Result<ItemView, String> {
+    if newer == older {
+        return Err("an item cannot replace itself".into());
+    }
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let later = have.iter().find(|i| i.row.id == newer).ok_or("no such item")?;
+    let earlier = have.iter().find(|i| i.row.id == older).ok_or("no such item")?;
+    if !replaceable_by_hand(earlier, later) {
+        return Err("only something current can be replaced, by something current".into());
+    }
+    let (row, change) = replace(earlier, &later.row.id, None, "person", now_ms());
+    save(&app, &key, row, change).await
+}
+
+/// Both stand now: the earlier one is in use, and so is the one that
+/// takes its place.
+pub(crate) fn replaceable_by_hand(earlier: &Item, later: &Item) -> bool {
+    let stands = |i: &Item| matches!(i.meta.state, ItemState::Current | ItemState::Open);
+    earlier.row.id != later.row.id && stands(earlier) && stands(later)
+}
+
 /// A question as the page shows it: the item the person confirmed, the
 /// later item that seems to change it, and what would be true then.
 #[derive(Serialize)]
@@ -1268,6 +1295,22 @@ mod tests {
         for not in ["Do you remember that?", "remember that time we talked about ovens?", "I remember that well", "remember thatch roofs leak", "What should I remember?", "keep going", ""] {
             assert_eq!(said_remember(not), None, "{not}");
         }
+    }
+
+    #[test]
+    fn replaced_by_hand_is_history_and_can_be_undone() {
+        let (old, _) = kept(&[], "it-1", "The shop opens at nine.", 2, "person");
+        let (new, _) = kept(&[], "it-2", "The shop opens at eight.", 3, "person");
+        let (old, new) = (item_of(old), item_of(new));
+        assert!(replaceable_by_hand(&old, &new));
+        assert!(!replaceable_by_hand(&old, &old), "nothing replaces itself");
+        let (replaced, change) = replace(&old, &new.row.id, None, "person", NOW + 10);
+        let after = item_of(replaced);
+        assert_eq!((after.meta.state, after.meta.replaced_by.as_deref(), after.meta.state_by.as_str()), (ItemState::Replaced, Some("it-2"), "person"));
+        assert!(!replaceable_by_hand(&after, &new), "what is replaced already is not replaced again");
+        assert!(!replaceable_by_hand(&new, &after), "and replaces nothing itself");
+        let (back, _) = undo(&change, &after, NOW + 20).unwrap();
+        assert_eq!(item_of(back).meta.state, ItemState::Current);
     }
 
     #[test]

@@ -455,6 +455,8 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
   const sharing = useSignal('');
   /** The item Forget was pressed on: it says what forgetting does, once more. */
   const forgetting = useSignal('');
+  /** The item "This replaces" was pressed on: it lists what it could replace. */
+  const replacing = useSignal('');
   const draft = useSignal('');
   const busy = useSignal('');
   const problem = useSignal('');
@@ -510,6 +512,22 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
       moving.value = '';
       sharing.value = '';
       forgetting.value = '';
+      replacing.value = '';
+      window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
+    } catch (e) {
+      problem.value = `That could not be saved just now. ${String(e)}`;
+    }
+    busy.value = '';
+  });
+
+  // "This replaces": the earlier item stays as history and is no longer used.
+  const replaces = $(async (newer: string, older: string) => {
+    busy.value = newer;
+    problem.value = '';
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('memory_replaces', { newer, older });
+      replacing.value = '';
       window.dispatchEvent(new CustomEvent('yoai-memory-changed'));
     } catch (e) {
       problem.value = `That could not be saved just now. ${String(e)}`;
@@ -595,6 +613,18 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                     </button>
                   </div>
                 </div>
+              ) : replacing.value === i.id ? (
+                <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-replaces-list">
+                  <span class="text-xs text-[var(--text-secondary)]">Which one does this replace? The other stays as history and is no longer used. You can undo this from Recent.</span>
+                  {props.held.filter((o) => o.id !== i.id && o.item.source?.kind !== 'document' && (o.item.state === 'current' || o.item.state === 'open')).map((o) => (
+                    <button key={o.id} type="button" class={`${act} text-left`} data-testid="item-replaces-this" data-id={o.id} disabled={busy.value === i.id} onClick$={() => replaces(i.id, o.id)}>
+                      {o.text}
+                    </button>
+                  ))}
+                  <button type="button" class="text-xs text-[var(--text-muted)] hover:underline" onClick$={() => (replacing.value = '')}>
+                    Cancel
+                  </button>
+                </div>
               ) : moving.value === i.id ? (
                 <div class="mt-1.5 flex flex-col items-start gap-1" data-testid="item-move-list">
                   <span class="text-xs text-[var(--text-secondary)]">Move to</span>
@@ -628,6 +658,11 @@ const SubjectItems = component$<{ subject: MapSubject; subjects: MapSubject[]; a
                   {more.value && others.length > 0 && (
                     <button type="button" class={act} data-testid="item-move" onClick$={() => (moving.value = i.id)}>
                       Move
+                    </button>
+                  )}
+                  {more.value && props.held.length > 1 && (
+                    <button type="button" class={act} data-testid="item-replaces" onClick$={() => (replacing.value = i.id)}>
+                      This replaces
                     </button>
                   )}
                   {more.value && (
