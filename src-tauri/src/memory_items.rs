@@ -801,6 +801,164 @@ pub(crate) fn said_done(message: &str) -> bool {
     !rest.chars().next().is_some_and(|c| c.is_alphanumeric()) && (more.is_empty() || matches!(more, "now" | "thanks" | "thank you" | "already" | "today"))
 }
 
+/// Something the person can say in the chat in place of pressing a
+/// control: the words are read on the device by a fixed rule, like
+/// "remember that" and "that's done".
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SaidControl {
+    /// "That's right": what the AI just used or wrote is confirmed.
+    Right,
+    /// "Forget that": what was just kept or used is forgotten.
+    Forget,
+    /// "Keep this conversation out of memory."
+    KeepOut,
+}
+
+const SAID_RIGHT: [&str; 18] = [
+    "that's right", "that is right", "thats right", "that's correct", "that is correct", "thats correct", "that's true", "that is true", "thats true",
+    "that's still right", "that is still right", "that's still true", "that is still true", "that's still correct", "that is still correct",
+    "you have that right", "you've got that right", "you got that right",
+];
+const SAID_FORGET: [&str; 20] = [
+    "forget that", "forget this", "forget what i just said", "forget what i said", "forget i said that", "forget that i said that",
+    "don't remember that", "dont remember that", "do not remember that", "don't keep that", "dont keep that", "do not keep that",
+    "remove that from memory", "remove that from your memory", "delete that from memory", "delete that from your memory",
+    "take that out of memory", "take that out of your memory", "don't use that again", "do not use that again",
+];
+const SAID_KEEP_OUT: [&str; 26] = [
+    "keep this conversation out of memory", "keep this chat out of memory", "keep this out of memory", "keep this conversation out of your memory", "keep this chat out of your memory",
+    "leave this conversation out of memory", "leave this chat out of memory", "leave this out of memory",
+    "don't remember this conversation", "dont remember this conversation", "do not remember this conversation",
+    "don't remember this chat", "dont remember this chat", "do not remember this chat",
+    "don't use this conversation", "dont use this conversation", "do not use this conversation",
+    "this conversation is private", "this chat is private", "make this conversation private", "make this chat private",
+    "keep this conversation private", "keep this chat private", "this is off the record", "off the record", "this stays off the record",
+];
+
+/// Did the person say, in fixed words, one of the things above? No model
+/// reads it: the message begins with one of the phrases (after a "yes",
+/// "ok" or "please"), is not a question, and says little else. "That's
+/// right about the first part but ..." is an ordinary message.
+pub(crate) fn said_control(message: &str) -> Option<SaidControl> {
+    let said = message.trim().to_lowercase().replace('\u{2019}', "'");
+    if said.ends_with('?') || said.len() > 120 {
+        return None;
+    }
+    let mut said = said.as_str();
+    // "Yes, ok, that's right": the small words people begin with.
+    'opening: loop {
+        for p in ["please ", "ok ", "ok, ", "okay ", "okay, ", "yes ", "yes, ", "yep ", "yep, ", "yeah ", "yeah, ", "actually ", "actually, ", "and ", "so ", "hey ", "can you ", "could you "] {
+            if let Some(rest) = said.strip_prefix(p) {
+                said = rest.trim_start();
+                continue 'opening;
+            }
+        }
+        break;
+    }
+    let ends_it = |phrases: &[&str]| {
+        phrases.iter().any(|p| {
+            said.strip_prefix(p).is_some_and(|rest| {
+                let more = rest.trim_matches(|c: char| !c.is_alphanumeric());
+                !rest.chars().next().is_some_and(|c| c.is_alphanumeric()) && (more.is_empty() || matches!(more, "please" | "thanks" | "thank you" | "now" | "for me" | "yes" | "exactly"))
+            })
+        })
+    };
+    if ends_it(&SAID_KEEP_OUT) {
+        Some(SaidControl::KeepOut)
+    } else if ends_it(&SAID_FORGET) {
+        Some(SaidControl::Forget)
+    } else if ends_it(&SAID_RIGHT) {
+        Some(SaidControl::Right)
+    } else {
+        None
+    }
+}
+
+/// An AI wrote the item: it was settled in a conversation, a reply quoted
+/// it, an AI's tool kept it, or it came over from what AIs had learned.
+pub(crate) fn written_by_an_ai(item: &Item) -> bool {
+    let why = item.meta.source.why.as_str();
+    matches!(why, "settled" | "asked" | "tool") || why.starts_with("migrated")
+}
+
+/// What "that" can mean when the person says it at message `seq` of the
+/// conversation that began at `started_at`: an item the reply before was
+/// given in its note (`used`), or one kept from the exchange before. Only
+/// items that stand now.
+pub(crate) fn said_about<'a>(items: &'a [Item], started_at: i64, seq: u32, used: &[String]) -> Vec<&'a Item> {
+    items
+        .iter()
+        .filter(|i| matches!(i.meta.state, ItemState::Current | ItemState::Open))
+        .filter(|i| used.contains(&i.row.id) || i.meta.source.ptr.is_some_and(|p| p.c == started_at && p.s < seq && p.s + 2 >= seq))
+        .collect()
+}
+
+/// What the app did with something said in the chat, for the line under
+/// the message.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaidAnswer {
+    /// `confirmed` | `forgotten` | `kept_out` | `left_out`.
+    pub did: &'static str,
+    pub item: Option<ItemView>,
+    /// The change an undo names, for an item.
+    pub change: Option<String>,
+    /// The conversation, and the messages left out, for the other two.
+    pub started_at: i64,
+    pub seqs: Vec<u32>,
+}
+
+/// One of the controls above, said in the chat. `used`: the items the
+/// reply before this message was given in its note. "That" must mean one
+/// thing: with two candidates nothing is done, and the page shows nothing.
+/// "Forget that" with nothing kept leaves the exchange before out of
+/// memory from now on. Every outcome can be taken back.
+#[tauri::command]
+pub async fn memory_said(app: tauri::AppHandle, input: KeepMessageInput, used: Vec<String>) -> Result<Option<SaidAnswer>, String> {
+    let Some(what) = said_control(&input.text) else { return Ok(None) };
+    let ptr = place_of(&app, &input).await?;
+    if what == SaidControl::KeepOut {
+        crate::memory_use::memory_conversation_use_set(app.clone(), crate::memory_use::ConvChange { started_at: ptr.c, private: Some(true), ..Default::default() }).await?;
+        return Ok(Some(SaidAnswer { did: "kept_out", item: None, change: None, started_at: ptr.c, seqs: Vec::new() }));
+    }
+    let key = data_key(&app)?;
+    let have = held(&app, &key);
+    let mut about = said_about(&have, ptr.c, ptr.s, &used);
+    let now = now_ms();
+    if what == SaidControl::Right {
+        about.retain(|i| written_by_an_ai(i) && i.meta.confirmed.is_none());
+        let [item] = about[..] else { return Ok(None) };
+        let (row, change) = confirm(item, now);
+        let id = change.id.clone();
+        let item = save(&app, &key, row, change).await?;
+        return Ok(Some(SaidAnswer { did: "confirmed", item: Some(item), change: Some(id), started_at: ptr.c, seqs: Vec::new() }));
+    }
+    match about[..] {
+        [item] => {
+            let (row, change) = forget(item, now);
+            let id = change.id.clone();
+            let item = save(&app, &key, row, change).await?;
+            crate::memory_tidying::words_changed(&app);
+            Ok(Some(SaidAnswer { did: "forgotten", item: Some(item), change: Some(id), started_at: ptr.c, seqs: Vec::new() }))
+        }
+        [] => {
+            // Nothing was kept: the exchange before is what "that" means.
+            let k = crate::transcript_search::row_key(&app, &input.conversation)?;
+            let mut before: Vec<u32> = crate::transcript_search::cached_entries(&app, &k, 0)?.into_iter().filter(|e| e.seq < ptr.s && (e.role == "user" || e.role == "assistant")).map(|e| e.seq).collect();
+            let seqs: Vec<u32> = before.split_off(before.len().saturating_sub(2));
+            if seqs.is_empty() {
+                return Ok(None);
+            }
+            for seq in &seqs {
+                crate::memory_use::memory_conversation_use_set(app.clone(), crate::memory_use::ConvChange { started_at: ptr.c, exclude: Some(*seq), ..Default::default() }).await?;
+            }
+            Ok(Some(SaidAnswer { did: "left_out", item: None, change: None, started_at: ptr.c, seqs }))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The one thing a conversation left open (by the conversation's start).
 /// None when it left nothing open, or more than one: "that" must mean one
 /// thing for it to be closed without asking.
@@ -1295,6 +1453,58 @@ mod tests {
         for not in ["Do you remember that?", "remember that time we talked about ovens?", "I remember that well", "remember thatch roofs leak", "What should I remember?", "keep going", ""] {
             assert_eq!(said_remember(not), None, "{not}");
         }
+    }
+
+    #[test]
+    fn controls_said_in_the_chat_are_read_from_fixed_words() {
+        for (said, what) in [
+            ("That's right.", SaidControl::Right),
+            ("yes, that\u{2019}s correct", SaidControl::Right),
+            ("Yep that is still true, thanks", SaidControl::Right),
+            ("Forget that", SaidControl::Forget),
+            ("Please forget what I just said.", SaidControl::Forget),
+            ("ok, don't remember that", SaidControl::Forget),
+            ("Keep this conversation out of memory", SaidControl::KeepOut),
+            ("This is off the record.", SaidControl::KeepOut),
+            ("please make this chat private", SaidControl::KeepOut),
+            ("Can you keep this chat out of memory please", SaidControl::KeepOut),
+        ] {
+            assert_eq!(said_control(said), Some(what), "{said}");
+        }
+        for ordinary in [
+            "Is that right?",
+            "That's right about the price but the date is wrong",
+            "That's rightly a concern",
+            "Forget it",
+            "Never mind",
+            "Forget that idea, let's use the blue one instead",
+            "Forget thatch, use slate",
+            "Why is this conversation private?",
+            "How do I keep this out of memory on my laptop when it is full",
+            "Right",
+            "",
+        ] {
+            assert_eq!(said_control(ordinary), None, "{ordinary}");
+        }
+    }
+
+    #[test]
+    fn that_means_what_the_reply_before_used_or_what_the_exchange_before_kept() {
+        let at = |id: &str, c: i64, s: u32, why: &'static str| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text: &format!("Item {id}."), item_type: ItemType::Detail, ptr: Ptr { c, s, t: c, a: 0, b: 0 }, as_of: 1, by: "ai:uhCAkJuno", audience: None, kind: "exchange", why, quote: None, subject: None, now: 1 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let items = vec![at("here-before", 100, 3, "settled"), at("here-long-ago", 100, 0, "settled"), at("elsewhere", 200, 3, "settled"), at("used", 300, 9, "pressed")];
+        let ids = |v: Vec<&Item>| v.into_iter().map(|i| i.row.id.clone()).collect::<Vec<_>>();
+        // Said at message 5 of the conversation that began at 100.
+        assert_eq!(ids(said_about(&items, 100, 5, &[])), ["here-before"]);
+        assert_eq!(ids(said_about(&items, 100, 5, &["used".to_string()])), ["here-before", "used"], "two things: the caller does nothing");
+        assert!(said_about(&items, 100, 9, &[]).is_empty(), "an exchange long before is not \"that\"");
+        assert!(written_by_an_ai(&items[0]) && !written_by_an_ai(&items[3]));
+        // What is forgotten is no longer "that".
+        let (gone, _) = forget(&items[0], NOW);
+        let after = vec![Item { meta: meta_of(&gone).unwrap(), row: gone }];
+        assert!(said_about(&after, 100, 5, &[]).is_empty());
     }
 
     #[test]

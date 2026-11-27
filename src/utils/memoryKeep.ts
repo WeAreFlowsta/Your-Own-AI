@@ -29,6 +29,10 @@ export interface Kept {
   already: boolean;
   /** The item was open and is now marked done. */
   closed?: boolean;
+  /** Said in the chat in place of a control: what the app did. */
+  said?: "confirmed" | "forgotten" | "kept_out" | "left_out";
+  /** The conversation, and the messages left out, for the last two. */
+  conversation?: { startedAt: number; seqs: number[] };
 }
 
 export interface KeepRequest {
@@ -171,6 +175,51 @@ export async function doneSaid(req: { messageId: string; aiId: string; text: str
     }
   }
   return null;
+}
+
+/**
+ * A control said in the chat ("that's right", "forget that", "keep this
+ * conversation out of memory"): the words are read on the device by a
+ * fixed rule, and when it is clear what they are about the app does it
+ * and the line under the message says so, with Undo. Any other message,
+ * or "that" with two things it could mean, changes nothing. `used`: the
+ * items the reply before was given in its note. Asked once the turn is
+ * recorded.
+ */
+export async function saidControl(req: { messageId: string; aiId: string; text: string; conversation?: string; used: string[] }): Promise<Kept | null> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      const did = await invoke<{ did: Kept["said"]; item: KeptItem | null; change: string | null; startedAt: number; seqs: number[] } | null>("memory_said", {
+        input: { conversation: req.conversation ?? openConversation(), agentKey: (await keysOf(req.aiId)).agent || null, seq: null, role: "user", text: req.text },
+        used: req.used,
+      });
+      if (!did) return null;
+      const kept: Kept = {
+        item: did.item ?? { id: "", text: "", asOf: Date.now(), updatedAt: Date.now(), savedBy: "person", item: { state: "current" } },
+        change: did.change,
+        already: false,
+        said: did.did,
+        conversation: { startedAt: did.startedAt, seqs: did.seqs },
+      };
+      announceKept({ messageId: req.messageId, kept });
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
+      return kept;
+    } catch (e) {
+      if (!/still being saved|not saved yet|not in the list yet/.test(String((e as { message?: string })?.message ?? e))) throw e;
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+  }
+  return null;
+}
+
+/** Take back "keep this conversation out of memory" or a "forget that"
+ *  that left an exchange out. */
+export async function undoSaidAboutConversation(c: { startedAt: number; seqs: number[] }): Promise<void> {
+  if (c.seqs.length === 0) {
+    await invoke("memory_conversation_use_set", { change: { startedAt: c.startedAt, private: false } });
+    return;
+  }
+  for (const seq of c.seqs) await invoke("memory_conversation_use_set", { change: { startedAt: c.startedAt, include: seq } });
 }
 
 const SEEN_KEY = "yoai-memory-changes-seen-at";

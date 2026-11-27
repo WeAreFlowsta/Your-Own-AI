@@ -2442,6 +2442,18 @@ export function useChat(props: UseChatProps) {
                 .then(({ doneSaid }) => doneSaid({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined }))
                 .catch((e) => console.warn("[memory] closing what was said to be done failed:", e));
             }
+            // "That's right", "forget that", "keep this conversation out
+            // of memory", said in fixed words (a rule on the device reads
+            // them; any other message changes nothing). What the reply
+            // before was given in its note is what "that" may mean.
+            if (assistantMsgHash && userInput.trim().length <= 120) {
+              const at = state.messages.findIndex((m) => m.id === userMessage.id);
+              const before = at > 0 ? [...state.messages.slice(0, at)].reverse().find((m) => m.role === "assistant" && !!m.content) : undefined;
+              const used = ((before?.given as { note_items?: string[] } | undefined)?.note_items ?? []).filter((id) => typeof id === "string");
+              void import("../utils/memoryKeep")
+                .then(({ saidControl }) => saidControl({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined, used }))
+                .catch((e) => console.warn("[memory] a control said in the chat failed:", e));
+            }
             // Lines of the person's notes that answered are kept as rows
             // that point at the note (a rule on the device; no model).
             if (assistantMsgHash && libraryGiven.some((g) => g.idx?.length)) {

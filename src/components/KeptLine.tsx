@@ -3,7 +3,8 @@ import type { Kept } from '../utils/memoryKeep';
 
 /**
  * The line under a message once it is kept: "Kept", and Undo (or "Marked
- * done: ..." when the message closed something that was open). Who it is
+ * done: ..." when the message closed something that was open, or what a
+ * control said in the chat did: confirmed, forgotten, kept out of memory). Who it is
  * for and what it says are in Memory, where it can be changed. A second
  * press on Remember shows "Already kept on [day]." in its place. Setting
  * the signal to null takes the line away (after an undo).
@@ -15,12 +16,14 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
 
   const undo = $(async () => {
     const k = kept.value;
-    if (!k?.change || busy.value) return;
+    const about = k?.said === 'kept_out' || k?.said === 'left_out' ? k.conversation : undefined;
+    if (!k || (!k.change && !about) || busy.value) return;
     busy.value = true;
     failed.value = '';
     try {
-      const { undoKeep } = await import('../utils/memoryKeep');
-      await undoKeep(k.change);
+      const { undoKeep, undoSaidAboutConversation } = await import('../utils/memoryKeep');
+      if (about) await undoSaidAboutConversation(about);
+      else if (k.change) await undoKeep(k.change);
       kept.value = null;
     } catch {
       failed.value = 'Could not undo it just now.';
@@ -34,7 +37,14 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
 
   return (
     <div class="mt-1 text-[11px] leading-relaxed text-[var(--text-muted)]" data-testid="kept-line">
-      {k.closed ? (
+      {k.said ? (
+        <span class="text-[var(--text-secondary)]" data-testid="kept-said" data-said={k.said}>
+          {k.said === 'confirmed' && `Confirmed: ${k.item.text}`}
+          {k.said === 'forgotten' && `Forgotten: ${k.item.text}`}
+          {k.said === 'kept_out' && 'This conversation is kept out of memory.'}
+          {k.said === 'left_out' && 'Memory will not use what was just said.'}
+        </span>
+      ) : k.closed ? (
         <span class="text-[var(--text-secondary)]" data-testid="kept-closed">
           Marked done: {k.item.text}
         </span>
@@ -43,7 +53,7 @@ export const KeptLine = component$<{ kept: Signal<Kept | null> }>((props) => {
       ) : (
         <span class="text-[var(--text-secondary)]">Kept</span>
       )}
-      {!k.already && k.change && (
+      {!k.already && (k.change || k.said === 'kept_out' || k.said === 'left_out') && (
         <button type="button" class="ml-2 underline hover:text-[var(--text-primary)] disabled:opacity-50" disabled={busy.value} onClick$={undo} data-testid="kept-undo">
           Undo
         </button>

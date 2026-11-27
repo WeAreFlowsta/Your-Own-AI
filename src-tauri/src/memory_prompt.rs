@@ -556,6 +556,19 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
             })
         }
     };
+    // "Forget that" and "keep this conversation out of memory", said in
+    // fixed words: the app acts on them once the turn is recorded, so the
+    // model is told, and does not answer that it cannot.
+    let told = match crate::memory_items::said_control(&input.question) {
+        Some(crate::memory_items::SaidControl::KeepOut) => Some("[The person asked for this conversation to be kept out of memory. That is being done, and they are shown a line that says so.]"),
+        Some(crate::memory_items::SaidControl::Forget) if input.conversation.as_deref().is_some_and(|c| !c.is_empty()) => Some("[The person asked memory to forget what was just said. The app does that, and shows them a line that says what it did. Do not say that you cannot forget.]"),
+        _ => None,
+    };
+    let after_question = match (after_question, told) {
+        (Some(note), Some(told)) => Some(format!("{note}\n{told}")),
+        (None, Some(told)) => Some(told.to_string()),
+        (note, None) => note,
+    };
     TurnMemory {
         system_part: if about_you.is_empty() { format!("{text}\n{today}") } else { format!("{text}\n{}\n{today}", about_them_text(&about_you)) },
         before_question,
