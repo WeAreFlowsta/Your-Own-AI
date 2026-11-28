@@ -1,7 +1,6 @@
 /**
  * Per-AI authored knowledge ("packs/lore"): things the user gives a specific
- * AI to know — distinct from what it learns in chat (AiEpisodicMemory) and from
- * the shared profile (ProfileMemory). Entries are embedded and recalled when
+ * AI to know, distinct from what memory keeps from conversations. Entries are embedded and recalled when
  * relevant. A collection can be exported/imported as a JSON file — the
  * shareable "pack". Lives in the Remembers tab.
  */

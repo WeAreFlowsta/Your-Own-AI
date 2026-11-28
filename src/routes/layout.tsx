@@ -17,27 +17,19 @@ import { UpdateNotices } from "../components/UpdateNotices";
 import { useProvideTurns } from "../contexts/TurnsContext";
 import { FirstModelIndicator } from "../components/FirstModelIndicator";
 import { bumpLaunchCount } from "../utils/homeOffers";
-import { WorkspaceMemoryModal } from "../components/WorkspaceMemoryModal";
 import ConfirmModal from "../components/ConfirmModal";
 import LiquidMetalButton from "../components/LiquidMetalButton";
 import { Callout } from "../components/Callout";
 import { prefetchModels } from "../utils/modelCache";
 import { mirrorPausedModels } from "../utils/modelPrefs";
 import { runPartsJob } from "../utils/partsJob";
+import { runUpdateInBackground } from "../utils/memoryUpdate";
 
 export type AppTheme = "light" | "dark";
 
 export const ThemeContext = createContextId<{
   theme: Signal<AppTheme>;
 }>("app.theme");
-
-/** The project-memory modal's control: set a folder path to open it. The
- *  modal itself renders HERE at the layout root - every route wraps its
- *  content (and the header) in its own stacking contexts, so a modal
- *  rendered inside them can never layer above the page. */
-export const ProjectMemoryContext = createContextId<Signal<string | null>>(
-  "app.project-memory",
-);
 
 export default component$(() => {
   const theme = useSignal<AppTheme>("dark");
@@ -51,6 +43,8 @@ export default component$(() => {
   useVisibleTask$(() => {
     // Once per app start: the home offer slot keys off "not the first launch".
     bumpLaunchCount();
+    // The update from the older memory: one pass, in the background.
+    void runUpdateInBackground();
     (async () => {
       try {
         const { Store } = await import("@tauri-apps/plugin-store");
@@ -88,15 +82,6 @@ export default component$(() => {
         /* store unavailable - picks stay webview-only */
       }
     })();
-
-    // Resume an interrupted history-import distill (cursor survives
-    // restarts; no-op when nothing is pending). Delayed so it never
-    // competes with the busy startup window.
-    setTimeout(() => {
-      import("../utils/importDistiller")
-        .then((m) => m.resumeIfPending())
-        .catch(() => {});
-    }, 15_000);
 
     // Finish any adoption (imported archive -> AI's conversations) the
     // last run left mid-write. Waits for the records engine itself;
@@ -308,8 +293,6 @@ export default component$(() => {
   // for the whole app - the chat page attaches, the tray shows them.
   useProvideTurns();
 
-  const projectMemoryFolder = useSignal<string | null>(null);
-  useContextProvider(ProjectMemoryContext, projectMemoryFolder);
 
   // UI-stall watchdog. CSS spinners animate on the compositor thread, so
   // the app can look alive while the main thread - which handles every
@@ -351,7 +334,6 @@ export default component$(() => {
   // yourownai:// links ("Add to Your Own AI" on the site). The path maps
   // onto the app's own routes; a skills link carries the source to add.
   const nav = useNavigate();
-
   // The Vault moved to another Flowsta identity while the app runs: this
   // window still shows the previous identity's AIs; a restart opens the new
   // one's. Asked on mount too - the event may have fired before we listened.
@@ -466,7 +448,6 @@ export default component$(() => {
           <UpdateNotices />
           <FirstModelIndicator />
           {/* Root-level so no route stacking context can bury it. */}
-          <WorkspaceMemoryModal folderPath={projectMemoryFolder} />
           <ConfirmModal
             isOpen={identitySwitched.value && !identityCardDismissed.value}
             title="Your Flowsta Vault changed identity"

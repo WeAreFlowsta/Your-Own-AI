@@ -55,6 +55,16 @@ struct EntryText {
     role: String,
     at: i64,
     content: String,
+    /// The reply was given exchanges from memory's search: it reports
+    /// what was found, and is not found again as if it were a source.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    given: bool,
+    /// The person stopped the reply before its end.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    stopped: bool,
+    /// The turn was about the person's health.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    health: bool,
 }
 
 fn cache_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -296,13 +306,18 @@ async fn build(app: &AppHandle, agent_key: &str) -> Result<(), String> {
             source: c.source.clone(),
             started_at: c.started_at,
         };
-        store_conversation(app, &key, &c.hash, &meta, entries.iter().map(|e| (e.sequence, EntryText { role: e.role.clone(), at: e.timestamp, content: e.content.clone() })), touched)?;
+        store_conversation(app, &key, &c.hash, &meta, entries.iter().map(|e| (e.sequence, EntryText { role: e.role.clone(), at: e.timestamp, content: e.content.clone(), given: e.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), stopped: e.stopped == Some(true), health: crate::memory_health::marked(e.health, e.routing_reason.as_deref()) })), touched)?;
         done += 1;
         let _ = app.emit("transcript-search-progress", SearchProgress { done, total, finished: false, cancelled: false });
     }
     let gone = if cancelled { 0 } else { drop_missing(app, &key, &ais, &listed).unwrap_or(0) };
     log::info!("[search] read {read_count} of {total} conversations for search in {} ms{}{}", t0.elapsed().as_millis(), if cancelled { " - stopped" } else { "" }, if gone > 0 { format!(", {gone} no longer in the records dropped") } else { String::new() });
     let _ = app.emit("transcript-search-progress", SearchProgress { done, total, finished: true, cancelled });
+    // New text may hold new words: an old list of them is made again now,
+    // while nobody waits.
+    if read_count > 0 {
+        let _ = words(app, true);
+    }
     Ok(())
 }
 
@@ -327,6 +342,9 @@ pub(crate) struct CachedEntry {
     pub role: String,
     pub at: i64,
     pub content: String,
+    pub given: bool,
+    pub stopped: bool,
+    pub health: bool,
 }
 
 /// Every conversation the text cache holds.
@@ -359,7 +377,7 @@ pub(crate) fn cached_entries(app: &AppHandle, k: &str, from: i64) -> Result<Vec<
     let mut out = Vec::new();
     for (seq, blob) in rows.flatten() {
         let e: EntryText = serde_json::from_slice(&dec(&key, &blob)?).map_err(|e| e.to_string())?;
-        out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content });
+        out.push(CachedEntry { seq: seq as u32, role: e.role, at: e.at, content: e.content, given: e.given, stopped: e.stopped, health: e.health });
     }
     Ok(out)
 }
@@ -378,8 +396,59 @@ pub(crate) fn mentions(app: &AppHandle, phrase: &str) -> Result<bool, String> {
     Ok(found.is_some())
 }
 
+/// Every word in the keyword index, read once and kept for a while.
+/// Listing them walks the whole index (seconds on a long history), so it
+/// is never done while a person waits for a reply: the list is made in
+/// the background, and until there is one the question "is there a word
+/// spelled nearly like this" has no answer.
+static WORDS: Mutex<Option<(std::time::Instant, std::sync::Arc<Vec<String>>)>> = Mutex::new(None);
+static WORDS_BEING_READ: AtomicBool = AtomicBool::new(false);
+/// A list this old is read again after conversations are next read in
+/// (in the background; the old one serves meanwhile). A word first used
+/// since then is found by `mentions`.
+const WORDS_KEPT_FOR: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn read_words(app: &AppHandle) -> Result<Vec<String>, String> {
+    ensure_index(app)?;
+    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
+    idx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS temp.e_terms USING fts5vocab('main', 'e', 'row');").map_err(|e| e.to_string())?;
+    let mut st = idx.prepare("SELECT term FROM temp.e_terms WHERE length(term) >= 3").map_err(|e| e.to_string())?;
+    let terms = st.query_map([], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    Ok(terms.flatten().collect())
+}
+
+/// The list as it is now. It is made when there is none; an old one is
+/// made again only when `again_when_old` (asked for after conversations
+/// were read in, not when a person has just asked something: making it
+/// holds the index, and their search would wait).
+fn words(app: &AppHandle, again_when_old: bool) -> Option<std::sync::Arc<Vec<String>>> {
+    let held = WORDS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let fresh = held.as_ref().is_some_and(|(at, _)| !again_when_old || at.elapsed() < WORDS_KEPT_FOR);
+    if !fresh && !WORDS_BEING_READ.swap(true, Ordering::SeqCst) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let began = std::time::Instant::now();
+            if let Ok(all) = read_words(&app) {
+                log::info!("[search] {} words of the keyword index listed in {} ms", all.len(), began.elapsed().as_millis());
+                *WORDS.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), std::sync::Arc::new(all)));
+            }
+            WORDS_BEING_READ.store(false, Ordering::SeqCst);
+        });
+    }
+    held.map(|(_, w)| w)
+}
+
+/// Have the list of words made, if it is not there or is old, without
+/// waiting for it.
+pub(crate) fn words_soon(app: &AppHandle) {
+    let _ = words(app, false);
+}
+
 /// Does the cache hold a word spelled nearly like this one (one or two
 /// letters apart; one for a four-letter word; none for a shorter one)?
+/// An error while the list of words is still being made: nothing can be
+/// said yet.
 pub(crate) fn has_close_spelling(app: &AppHandle, word: &str) -> Result<bool, String> {
     let word = word.to_lowercase();
     let n = word.chars().count();
@@ -387,18 +456,11 @@ pub(crate) fn has_close_spelling(app: &AppHandle, word: &str) -> Result<bool, St
         return Ok(false);
     }
     let limit = if n == 4 { 1 } else { 2 };
-    ensure_index(app)?;
-    let guard = INDEX.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((_, idx)) = guard.as_ref() else { return Err("the keyword index is not loaded".into()) };
-    idx.execute_batch("CREATE VIRTUAL TABLE IF NOT EXISTS temp.e_terms USING fts5vocab('main', 'e', 'row');").map_err(|e| e.to_string())?;
-    let mut st = idx.prepare("SELECT term FROM temp.e_terms WHERE length(term) BETWEEN ?1 AND ?2").map_err(|e| e.to_string())?;
-    let terms = st.query_map(params![(n - limit) as i64, (n + limit) as i64], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    for term in terms.flatten() {
-        if term != word && crate::memory_block::edit_distance(&word, &term, limit) <= limit {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    let Some(all) = words(app, false) else { return Err("the words of the keyword index are still being listed".into()) };
+    Ok(all.iter().any(|term| {
+        let len = term.chars().count();
+        len + limit >= n && len <= n + limit && *term != word && crate::memory_block::edit_distance(&word, term, limit) <= limit
+    }))
 }
 
 /// The row key of a conversation, from its record id.
@@ -470,7 +532,8 @@ fn store_conversation(
 
 /// A turn just recorded: into the cache (when the conversation is known to
 /// it) and the loaded index, so search sees it without a rebuild.
-pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content: &str, at: i64) {
+#[allow(clippy::too_many_arguments)]
+pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content: &str, at: i64, given: bool, stopped: bool, health: bool) {
     if content.trim().is_empty() {
         return;
     }
@@ -485,7 +548,7 @@ pub fn note_recorded(app: &AppHandle, hash: &str, seq: u32, role: &str, content:
         .and_then(|b| dec(&key, &b).ok())
         .and_then(|p| serde_json::from_slice(&p).ok());
     let Some(meta) = meta else { return }; // not read yet: the next build takes it whole
-    let e = EntryText { role: role.to_string(), at, content: content.to_string() };
+    let e = EntryText { role: role.to_string(), at, content: content.to_string(), given, stopped, health };
     let Ok(plain) = serde_json::to_vec(&e) else { return };
     let Ok(blob) = enc(&key, &plain) else { return };
     let _ = cache.execute("INSERT OR REPLACE INTO entries (k, seq, blob_enc) VALUES (?1, ?2, ?3)", params![k, seq, blob]);
@@ -680,9 +743,9 @@ mod tests {
     fn the_index_finds_words_and_marks_them() {
         let idx = fresh_index().unwrap();
         let m = ConvMeta { hash: "h1".into(), agent_key: "a".into(), ai_id: "ai".into(), ai_name: "Reeves".into(), title: Some("Boat".into()), source: None, started_at: 1 };
-        index_insert(&idx, "h1", 1, &EntryText { role: "user".into(), at: 1, content: "The survey of the sloop Wren was done at Port Quillon.".into() }, &m).unwrap();
-        index_insert(&idx, "h1", 2, &EntryText { role: "assistant".into(), at: 2, content: "Two planks on the starboard side need refastening.".into() }, &m).unwrap();
-        index_insert(&idx, "h2", 1, &EntryText { role: "user".into(), at: 3, content: "what colour is the sky".into() }, &m).unwrap();
+        index_insert(&idx, "h1", 1, &EntryText { role: "user".into(), at: 1, content: "The survey of the sloop Wren was done at Port Quillon.".into(), given: false, stopped: false, health: false }, &m).unwrap();
+        index_insert(&idx, "h1", 2, &EntryText { role: "assistant".into(), at: 2, content: "Two planks on the starboard side need refastening.".into(), given: false, stopped: false, health: false }, &m).unwrap();
+        index_insert(&idx, "h2", 1, &EntryText { role: "user".into(), at: 3, content: "what colour is the sky".into(), given: false, stopped: false, health: false }, &m).unwrap();
         let q = fts_query("quill");
         let snip: String = idx
             .query_row("SELECT snippet(e, 0, char(1), char(2), ' … ', 18) FROM e WHERE e MATCH ?1 AND agent_key = 'a'", params![q], |r| r.get(0))

@@ -415,6 +415,15 @@
 /* Fallback variables — applied before JS adds .theme-light/dark.
    Uses the dark-theme palette so nothing is unstyled on first paint. */
 :root {
+  /* The Map: one color for subjects in no project, six for projects, one quiet color the rest share. */
+  --map-none: #38bdf8;
+  --map-quiet: #a1a1aa;
+  --map-project-1: #fbbf24;
+  --map-project-2: #34d399;
+  --map-project-3: #a78bfa;
+  --map-project-4: #fb7185;
+  --map-project-5: #22d3ee;
+  --map-project-6: #fb923c;
   --bg-main: #000000;
   --bg-header-footer: #000000;
   --bg-card: #27272a;
@@ -563,6 +572,15 @@
     --main-scrollbar-thumb-hover: #71717a;
     
     /* --- Light Theme Overrides — white bg, grey cards (inverse of dark) --- */
+    /* The Map's colors on a light ground. */
+    --map-none: #0284c7;
+    --map-quiet: #6b7280;
+    --map-project-1: #b45309;
+    --map-project-2: #047857;
+    --map-project-3: #6d28d9;
+    --map-project-4: #be123c;
+    --map-project-5: #0e7490;
+    --map-project-6: #c2410c;
     --bg-main: #fafafc;
     --bg-header-footer: #fafafc;
     --bg-card: #f0f0f4;

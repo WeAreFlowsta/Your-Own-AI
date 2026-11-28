@@ -61,11 +61,16 @@ pub struct MemoryRow {
 /// rule - the same answer on every device). Deleted ids are dropped; rows
 /// another row `replaces` are dropped too. Pinned rules first, then newest.
 pub fn reduce(rows: Vec<MemoryRow>) -> Vec<MemoryRow> {
+    reduce_at(rows, now_ms())
+}
+
+/// `reduce`, with this device's clock given (so it can be tested).
+pub(crate) fn reduce_at(rows: Vec<MemoryRow>, now: i64) -> Vec<MemoryRow> {
     use std::collections::HashMap;
     let mut newest: HashMap<String, MemoryRow> = HashMap::new();
     for r in rows {
         match newest.get(&r.id) {
-            Some(cur) if !newer(&r, cur) => {}
+            Some(cur) if !wins(&r, cur, now) => {}
             _ => {
                 newest.insert(r.id.clone(), r);
             }
@@ -83,6 +88,38 @@ pub fn reduce(rows: Vec<MemoryRow>) -> Vec<MemoryRow> {
             .then(a.id.cmp(&b.id))
     });
     live
+}
+
+/// A stamp further ahead of this device's clock than this is a clock that
+/// is wrong, not a revision from the future: it is ordered as "now".
+const AHEAD_AT_MOST_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Does revision `a` stand over revision `b` of the same row? The later
+/// one does (`newer`), with two rules on top. A stamp more than a day
+/// ahead of this device's clock counts as now, so a device with a wrong
+/// clock cannot win every merge. And among revisions of one memory item,
+/// what the person confirmed is not overridden by a later revision that
+/// tidying made without knowing of it (on a device the confirmation had
+/// not reached): the person's stands, and tidying's becomes a question.
+fn wins(a: &MemoryRow, b: &MemoryRow, now: i64) -> bool {
+    let clamp = |r: &MemoryRow| r.updated_at.min(now.saturating_add(AHEAD_AT_MOST_MS).max(now));
+    let ahead = |r: &MemoryRow| r.updated_at > now.saturating_add(AHEAD_AT_MOST_MS);
+    let later = if ahead(a) || ahead(b) {
+        let stamp = |r: &MemoryRow| if ahead(r) { now } else { clamp(r) };
+        (stamp(a), a.deleted, revision_print(a)) > (stamp(b), b.deleted, revision_print(b))
+    } else {
+        newer(a, b)
+    };
+    if a.scope == crate::memory_items::SCOPE && !a.deleted && !b.deleted {
+        let (late, early) = if later { (a, b) } else { (b, a) };
+        if let (Some(l), Some(e)) = (crate::memory_items::meta_of(late), crate::memory_items::meta_of(early)) {
+            if l.state_by == "tidy" && e.confirmed.is_some() && l.confirmed != e.confirmed {
+                // The earlier, confirmed one stands.
+                return !later;
+            }
+        }
+    }
+    later
 }
 
 /// The later revision: by `updated_at`, a deletion over an edit at the same
@@ -138,6 +175,7 @@ struct RowsInput {
 /// write a person- or project-scope row, since the anchor is the scope's.
 #[tauri::command]
 pub async fn save_memory_row(
+    app: tauri::AppHandle,
     agent_key: Option<String>,
     row: MemoryRow,
     hc_state: State<'_, Arc<HolochainState>>,
@@ -156,7 +194,43 @@ pub async fn save_memory_row(
     let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
     let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
     let anchor = scope_anchor(&row.scope, &key)?;
-    save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await
+    let hash = save_sealed(&manager, &agent_key, cipher, nonce.to_vec(), anchor).await?;
+    // The scope's copy on this device holds the row at once: a rule saved
+    // now is in the very next message, before any read of the records.
+    let mut saved = row;
+    saved.action_hash = Some(hash.clone());
+    update_cache(&app, &key, &saved.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != saved.id).collect();
+        after.push(saved.clone());
+        reduce(after)
+    });
+    Ok(hash)
+}
+
+/// Save one row through any provisioned agent and put it in the scope's
+/// cache at once, without a live read of the scope: for a caller that
+/// already holds the row it is changing. Returns the row as saved.
+pub(crate) async fn save_and_cache(app: &tauri::AppHandle, mut row: MemoryRow) -> Result<MemoryRow, String> {
+    if !KINDS.contains(&row.kind.as_str()) {
+        return Err(format!("unknown memory kind {}", row.kind));
+    }
+    let hc = app.state::<Arc<HolochainState>>();
+    let manager = hc.get()?;
+    let agent = any_agent(&manager).await.ok_or("no agent provisioned yet")?;
+    let key = manager.data_key()?;
+    let mut sealed = row.clone();
+    sealed.action_hash = None;
+    let plain = serde_json::to_vec(&sealed).map_err(|e| e.to_string())?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(&key, &plain)?;
+    let anchor = scope_anchor(&row.scope, &key)?;
+    let hash = save_sealed(&manager, &agent, cipher, nonce.to_vec(), anchor).await?;
+    row.action_hash = Some(hash);
+    update_cache(app, &key, &row.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != row.id).collect();
+        after.push(row.clone());
+        reduce(after)
+    });
+    Ok(row)
 }
 
 /// Save one sealed row: on the AI's 0.6 cell first while it has one (then
@@ -250,18 +324,109 @@ pub(crate) fn decode_sealed_rows(raw: &[u8], key: &[u8; 32]) -> Vec<MemoryRow> {
     serde_json::from_slice(&plain).unwrap_or_default()
 }
 
+/// Rows as a sealed rows file's bytes (what a cache file and a backup hold).
+pub(crate) fn seal_rows(key: &[u8; 32], rows: &[MemoryRow]) -> Option<Vec<u8>> {
+    let plain = serde_json::to_vec(rows).ok()?;
+    let (nonce, cipher) = crate::transcript_crypto::encrypt(key, &plain).ok()?;
+    serde_json::to_vec(&SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) }).ok()
+}
+
 fn write_sealed_rows(path: Option<std::path::PathBuf>, key: &[u8; 32], rows: &[MemoryRow]) {
     let Some(path) = path else { return };
-    let Ok(plain) = serde_json::to_vec(rows) else { return };
-    let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
-    let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
-    if let Ok(json) = serde_json::to_vec(&file) {
+    if let Some(json) = seal_rows(key, rows) {
         let _ = std::fs::write(&path, json);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
         }
+    }
+}
+
+/// The scopes a backup carries beside the person's and each AI's: memory's
+/// own, and the scope of every project this device knows (a project a
+/// kept item is for, and each folder that had a project memory).
+pub(crate) fn backup_scopes(app: &tauri::AppHandle) -> Vec<String> {
+    let folders: Vec<String> = crate::commands_holochain::project_memory_folders(app).iter().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))).collect();
+    let items = app
+        .try_state::<Arc<HolochainState>>()
+        .and_then(|hc| hc.get().and_then(|m| m.data_key()).ok())
+        .map(|key| crate::memory_items::items(&read_cache(app, &key, crate::memory_items::SCOPE)))
+        .unwrap_or_default();
+    scopes_for_backup(folders, &items)
+}
+
+/// Memory's own scope, then one scope for each project: the projects of
+/// this device's folders, and every project a kept item is for or a
+/// subject was made from.
+pub(crate) fn scopes_for_backup(folder_projects: Vec<String>, items: &[crate::memory_items::Item]) -> Vec<String> {
+    let mut scopes = vec![crate::memory_items::SCOPE.to_string()];
+    let mut projects = folder_projects;
+    for item in items {
+        if let crate::memory_items::Audience::Project { project } = &item.meta.audience {
+            projects.push(project.clone());
+        }
+    }
+    projects.sort();
+    projects.dedup();
+    scopes.extend(projects.into_iter().filter(|p| !p.is_empty()).map(|p| format!("project:{p}")));
+    scopes
+}
+
+/// Rows from a backup or another device's copy, folded into the rows this
+/// device already holds from such copies: the newest revision of each row
+/// stays. Returns the merged rows and how many of them were not held
+/// before, so folding the same copy a second time adds nothing.
+pub(crate) fn fold_rows(held: Vec<MemoryRow>, theirs: Vec<MemoryRow>) -> (Vec<MemoryRow>, usize) {
+    let before: std::collections::HashSet<(String, i64)> = held.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
+    let mut all = held;
+    all.extend(theirs);
+    let merged = reduce(all);
+    let adopted = merged.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+    (merged, adopted)
+}
+
+/// The rows a backup or another device's copy carries, scope by scope
+/// (the person's, each AI's by founding key, memory's own, each
+/// project's); an older copy carried the person's alone.
+pub(crate) fn rows_in_backup(key: &[u8; 32], manifest: &serde_json::Value) -> Vec<(String, Vec<MemoryRow>)> {
+    use base64::Engine;
+    let mut scoped: Vec<(String, String)> = Vec::new();
+    if let Some(obj) = manifest["memory_rows"]["scopes"].as_object() {
+        for (scope, v) in obj {
+            if let Some(b64) = v.as_str() {
+                scoped.push((scope.clone(), b64.to_string()));
+            }
+        }
+    } else if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
+        scoped.push(("person".to_string(), b64.to_string()));
+    }
+    scoped
+        .into_iter()
+        .filter_map(|(scope, b64)| {
+            let bytes = base64::engine::general_purpose::STANDARD.decode(&b64).ok()?;
+            let rows = decode_sealed_rows(&bytes, key);
+            (!rows.is_empty()).then_some((scope, rows))
+        })
+        .collect()
+}
+
+/// What a backup's rows hold, counted for the person: kept items (all but
+/// the forgotten) and rules (the person's, each AI's, each project's).
+pub(crate) fn counts_in_backup(key: &[u8; 32], manifest: &serde_json::Value) -> (usize, usize) {
+    rows_in_backup(key, manifest).into_iter().fold((0, 0), |(items, rules), (scope, rows)| {
+        let (i, r) = counts_of(&scope, &reduce(rows));
+        (items + i, rules + r)
+    })
+}
+
+/// Kept items (all but the forgotten) and rules among one scope's rows.
+pub(crate) fn counts_of(scope: &str, rows: &[MemoryRow]) -> (usize, usize) {
+    if scope == crate::memory_items::SCOPE {
+        let items = crate::memory_items::items(rows).iter().filter(|i| !matches!(i.meta.state, crate::memory_items::ItemState::Forgotten)).count();
+        (items, 0)
+    } else {
+        (0, rows.iter().filter(|r| !r.deleted && crate::memory_prompt::is_live_rule(r) && !r.text.trim().is_empty()).count())
     }
 }
 
@@ -291,33 +456,14 @@ pub(crate) fn fold_sibling_person_memory(app: &tauri::AppHandle, key: &[u8; 32],
         }
     }
     let mut rows_adopted = 0usize;
-    // Every scope the sibling carried (person + its AIs by founding key);
-    // older manifests carried the person's alone.
-    let mut scoped: Vec<(String, String)> = Vec::new();
-    if let Some(obj) = manifest["memory_rows"]["scopes"].as_object() {
-        for (scope, v) in obj {
-            if let Some(b64) = v.as_str() {
-                scoped.push((scope.clone(), b64.to_string()));
-            }
-        }
-    } else if let Some(b64) = manifest["memory_rows"]["person_raw_b64"].as_str() {
-        scoped.push(("person".to_string(), b64.to_string()));
-    }
-    for (scope, b64) in scoped {
-        let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&b64) else { continue };
-        let theirs = decode_sealed_rows(&bytes, key);
-        if theirs.is_empty() {
-            continue;
-        }
-        let mut siblings = read_sealed_rows(siblings_path(app, &scope), key);
-        let before: std::collections::HashSet<(String, i64)> = siblings.iter().map(|r| (r.id.clone(), r.updated_at)).collect();
-        siblings.extend(theirs);
-        let siblings = reduce(siblings);
-        rows_adopted += siblings.iter().filter(|r| !before.contains(&(r.id.clone(), r.updated_at))).count();
+    for (scope, theirs) in rows_in_backup(key, manifest) {
+        let (siblings, adopted) = fold_rows(read_sealed_rows(siblings_path(app, &scope), key), theirs);
+        rows_adopted += adopted;
         write_sealed_rows(siblings_path(app, &scope), key, &siblings);
-        let mut all = read_cache(app, key, &scope);
-        all.extend(siblings);
-        write_cache(app, key, &scope, &reduce(all));
+        update_cache(app, key, &scope, |mut all| {
+            all.extend(siblings);
+            reduce(all)
+        });
     }
     (facts_adopted, rows_adopted)
 }
@@ -369,13 +515,24 @@ pub(crate) fn write_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, r
     let Ok((nonce, cipher)) = crate::transcript_crypto::encrypt(key, &plain) else { return };
     let file = SealedFile { version: 1, nonce: hex::encode(nonce), cipher: hex::encode(cipher) };
     if let Ok(json) = serde_json::to_vec(&file) {
-        let _ = std::fs::write(&path, json);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        // Whole or not at all: a reader never sees a half-written copy
+        // (which reads as "no rows", and a save made then would write a
+        // copy holding its own row alone).
+        if let Err(e) = flowsta_hc_lines::files::write_atomic_private(&path, &json) {
+            log::warn!("[memory] this device's copy of a scope could not be written: {e}");
         }
     }
+}
+
+/// One change at a time to this device's copy of a scope: read it, change
+/// it, write it, with nothing else doing the same in between (two saves at
+/// once would otherwise each write a copy without the other's row).
+pub(crate) fn update_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str, change: impl FnOnce(Vec<MemoryRow>) -> Vec<MemoryRow>) -> Vec<MemoryRow> {
+    static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one = ONE.lock().unwrap_or_else(|p| p.into_inner());
+    let after = change(read_cache(app, key, scope));
+    write_cache(app, key, scope, &after);
+    after
 }
 
 pub(crate) fn read_cache(app: &tauri::AppHandle, key: &[u8; 32], scope: &str) -> Vec<MemoryRow> {
@@ -447,10 +604,146 @@ async fn raw_rows(manager: &crate::holochain::HolochainManager, agent: &str, anc
     Ok(rows)
 }
 
+/// A read of the records takes a moment, and a row may be saved on this
+/// device while it runs: the read's answer does not hold that row yet, and
+/// writing it over this device's copy would lose the row until the next
+/// read. So the rows the copy got since the read started are kept in.
+pub(crate) fn with_written_since(read: Vec<MemoryRow>, copy: Vec<MemoryRow>, started_ms: i64) -> Vec<MemoryRow> {
+    let mut all = read;
+    all.extend(copy.into_iter().filter(|r| r.updated_at >= started_ms));
+    all
+}
+
+/// The copies the record should no longer hold: for every id whose newest
+/// copy is the mark of a delete, every other copy of it (their hashes). The
+/// mark stays, so the delete reaches every device.
+pub(crate) fn copies_to_remove(raw: &[MemoryRow]) -> Vec<String> {
+    let mut newest: std::collections::HashMap<&str, &MemoryRow> = std::collections::HashMap::new();
+    for r in raw {
+        match newest.get(r.id.as_str()) {
+            Some(n) if !newer(r, n) => {}
+            _ => {
+                newest.insert(r.id.as_str(), r);
+            }
+        }
+    }
+    let mut out: Vec<String> = raw
+        .iter()
+        .filter(|r| newest.get(r.id.as_str()).is_some_and(|n| n.deleted && n.action_hash != r.action_hash))
+        .filter_map(|r| r.action_hash.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[derive(Serialize, Debug)]
+struct RemoveInput {
+    anchor: AnyLinkableHash,
+    hashes: Vec<holochain_types::prelude::ActionHash>,
+}
+
+fn action_hashes(hex_hashes: &[String]) -> Vec<holochain_types::prelude::ActionHash> {
+    hex_hashes.iter().filter_map(|h| hex::decode(h).ok().filter(|b| b.len() == 39).map(holochain_types::prelude::ActionHash::from_raw_39)).collect()
+}
+
+/// Hashes already asked for in this run of the app: a copy another device
+/// wrote stays until that device removes it, and is not asked for again.
+fn asked_to_remove() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static ASKED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> = std::sync::OnceLock::new();
+    ASKED.get_or_init(Default::default)
+}
+
+/// Take the earlier copies of deleted rows out of the record, in the
+/// background: each of this device's cells removes what it wrote, on the
+/// line the copies were read from, and the same on the 0.7 line when the
+/// read was of the 0.6 line (a copy there has its own hash). A cell that
+/// cannot do it yet leaves the copies for the next run of the app.
+fn remove_copies(app: &tauri::AppHandle, anchor: AnyLinkableHash, read_from: &str, raw: &[MemoryRow]) {
+    let (fresh, first_look): (Vec<String>, bool) = {
+        let mut asked = asked_to_remove().lock().unwrap_or_else(|p| p.into_inner());
+        let fresh = copies_to_remove(raw).into_iter().filter(|h| asked.insert(h.clone())).collect();
+        // Once a run, an anchor that holds a delete has its 0.7 copies looked at too.
+        let first_look = raw.iter().any(|r| r.deleted) && asked.insert(format!("anchor:{}", hex::encode(anchor.get_raw_39())));
+        (fresh, first_look)
+    };
+    if fresh.is_empty() && !first_look {
+        return;
+    }
+    let app = app.clone();
+    let read_from = read_from.to_string();
+    tauri::async_runtime::spawn(async move {
+        let hc = app.state::<Arc<HolochainState>>();
+        let Ok(manager) = hc.get() else { return };
+        let Ok(key) = manager.data_key() else { return };
+        let on_06 = manager.is_provisioned(&read_from).await;
+        let mut removed = 0u32;
+        if on_06 && !fresh.is_empty() {
+            let agents: Vec<String> = manager.agents.lock().await.keys().cloned().collect();
+            for agent in agents {
+                let Ok(payload) = ExternIO::encode(RemoveInput { anchor: anchor.clone(), hashes: action_hashes(&fresh) }) else { continue };
+                match manager.call_zome(&agent, "transcript", "remove_memory_rows", payload).await {
+                    Ok(out) => removed += ExternIO::decode::<u32>(&out).unwrap_or(0),
+                    Err(e) => log::info!("[memory] earlier copies of deleted rows not removed by one cell yet ({e})"),
+                }
+            }
+        }
+        // The 0.7 line: its own read when the first was of the 0.6 line.
+        if crate::conductor::ports(flowsta_hc_lines::Line::V07).is_some() {
+            let Ok(on_07) = crate::hc07::agents_with_apps().await else { return };
+            let mut on_07: Vec<String> = on_07.into_iter().collect();
+            on_07.sort();
+            let there: Vec<String> = if on_06 {
+                let Some(reader) = on_07.first() else { return };
+                // A row reaches the 0.7 line a moment after the 0.6 line: when
+                // copies were just removed there, the mark is waited for here.
+                let mut found: Vec<String> = Vec::new();
+                for wait in [0u64, 5, 15, 30] {
+                    tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                    let Ok(Ok(views)) = tokio::time::timeout(std::time::Duration::from_secs(60), crate::hc07::app_cells().memory_rows(reader, anchor.clone())).await else { break };
+                    let rows: Vec<MemoryRow> = views
+                        .iter()
+                        .filter_map(|view| {
+                            let ee = view.entry_as::<crate::commands_holochain::EncryptedEntryRaw>().ok()?;
+                            let plain = crate::transcript_crypto::decrypt(&key, &ee.nonce, &ee.cipher).ok()?;
+                            let mut row = serde_json::from_slice::<MemoryRow>(&plain).ok()?;
+                            row.action_hash = Some(hex::encode(&view.action_hash));
+                            Some(row)
+                        })
+                        .collect();
+                    let mut asked = asked_to_remove().lock().unwrap_or_else(|p| p.into_inner());
+                    found = copies_to_remove(&rows).into_iter().filter(|h| asked.insert(h.clone())).collect();
+                    if !found.is_empty() || fresh.is_empty() {
+                        break;
+                    }
+                }
+                found
+            } else {
+                fresh.clone()
+            };
+            if !there.is_empty() {
+                for agent in &on_07 {
+                    match crate::hc07::app_cells().write::<_, u32>(agent, "remove_memory_rows", &crate::hc07::RemoveMemoryRows { anchor: anchor.clone(), hashes: action_hashes(&there) }).await {
+                        Ok(n) => removed += n,
+                        Err(e) => log::info!("[memory] earlier copies of deleted rows not removed on the 0.7 line by one cell yet ({e})"),
+                    }
+                }
+            }
+        }
+        if removed > 0 {
+            log::info!("[memory] {removed} earlier copies of deleted rows removed from the record");
+        }
+    });
+}
+
 async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
     let key = manager.data_key()?;
+    // A little before now: a row stamped by the page a moment ago counts.
+    let started = now_ms() - 3_000;
     let anchor = scope_anchor(scope, &key)?;
-    let mut rows = raw_rows(manager, agent, anchor, &key).await?;
+    let mut rows = raw_rows(manager, agent, anchor.clone(), &key).await?;
+    // A deleted row's earlier copies leave the record too.
+    remove_copies(app, anchor, agent, &rows);
     // What an offline device's backup copy brought stays in the list.
     rows.extend(read_sealed_rows(siblings_path(app, scope), &key));
     // One memory for an AI and the twins folded into it (two starters that
@@ -469,9 +762,7 @@ async fn rows_at(app: &tauri::AppHandle, manager: &crate::holochain::HolochainMa
             rows.extend(read_sealed_rows(siblings_path(app, &twin_scope), &key));
         }
     }
-    let reduced = reduce(rows);
-    write_cache(app, &key, scope, &reduced);
-    Ok(reduced)
+    Ok(update_cache(app, &key, scope, |have| reduce(with_written_since(rows, have, started))))
 }
 
 async fn write_row(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
@@ -599,21 +890,33 @@ pub(crate) async fn upsert_row(app: &tauri::AppHandle, manager: &crate::holochai
     let anchor = scope_anchor(&row.scope, &key)?;
     let hash = save_sealed(manager, agent, cipher, nonce.to_vec(), anchor).await?;
     // The cache sees the change at once.
-    let mut after: Vec<MemoryRow> = live.into_iter().filter(|r| r.id != row.id).collect();
     row.action_hash = Some(hash.clone());
-    after.push(row.clone());
-    write_cache(app, &key, &row.scope, &reduce(after));
+    update_cache(app, &key, &row.scope, |have| {
+        let mut after: Vec<MemoryRow> = have.into_iter().filter(|r| r.id != row.id).collect();
+        after.push(row.clone());
+        reduce(after)
+    });
     Ok((hash, replaced))
 }
 
-/// Live rows of a scope through `agent` (refreshes the cache) - for dreaming.
-pub(crate) async fn rows_live(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
-    rows_at(app, manager, agent, scope).await
+/// After a delete: read the scope's records in the background, which takes
+/// the deleted rows' earlier copies out of the record.
+pub(crate) fn removal_after_delete(app: &tauri::AppHandle, scope: &str) {
+    let app = app.clone();
+    let scope = scope.to_string();
+    tauri::async_runtime::spawn(async move {
+        let hc = app.state::<Arc<HolochainState>>();
+        let Ok(manager) = hc.get() else { return };
+        let Some(agent) = any_agent(&manager).await else { return };
+        if let Err(e) = rows_at(&app, &manager, &agent, &scope).await {
+            log::info!("[memory] the records were not read after a delete ({e}); the earlier copies go at the next read");
+        }
+    });
 }
 
-/// Write one row through `agent` - for dreaming's revisions.
-pub(crate) async fn write_row_pub(manager: &crate::holochain::HolochainManager, agent: &str, row: &MemoryRow) -> Result<(), String> {
-    write_row(manager, agent, row).await
+/// Live rows of a scope through `agent` (refreshes the cache).
+pub(crate) async fn rows_live(app: &tauri::AppHandle, manager: &crate::holochain::HolochainManager, agent: &str, scope: &str) -> Result<Vec<MemoryRow>, String> {
+    rows_at(app, manager, agent, scope).await
 }
 
 /// For the permission card, before a `remember` runs: the text of the live
@@ -1080,6 +1383,138 @@ pub fn start_person_memory_sync(app: &tauri::AppHandle) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_deleted_rows_earlier_copies_are_the_ones_to_remove() {
+        let at = |id: &str, text: &str, t: i64, deleted: bool, hash: &str| {
+            let mut r = row(id, text, t);
+            r.deleted = deleted;
+            r.action_hash = Some(hash.to_string());
+            r
+        };
+        let raw = vec![at("a", "first", 10, false, "h1"), at("a", "second", 20, false, "h2"), at("a", "", 30, true, "h3"), at("b", "kept", 10, false, "h4"), at("b", "kept, changed", 20, false, "h5")];
+        assert_eq!(copies_to_remove(&raw), vec!["h1".to_string(), "h2".to_string()], "every copy of the deleted row but its mark; a live row keeps its history");
+        // Brought back after the delete (a newer live copy): nothing is removed.
+        let mut back = raw.clone();
+        back.push(at("a", "again", 40, false, "h6"));
+        assert!(copies_to_remove(&back).is_empty());
+    }
+
+    #[test]
+    fn a_row_saved_while_the_records_were_being_read_is_not_lost_from_this_devices_copy() {
+        let row = |id: &str, text: &str, at: i64| -> MemoryRow {
+            serde_json::from_value(serde_json::json!({ "id": id, "scope": "memory", "kind": "note", "text": text, "as_of": at, "saved_by": "person", "provenance": "authored", "pinned": false, "deleted": false, "updated_at": at })).expect("a row")
+        };
+        // The read started at 1,000 and answers with what the records held then.
+        let read = vec![row("a", "old", 100), row("b", "from another device", 900)];
+        // Meanwhile this device saved a new row, and a newer revision of an old one.
+        let copy = vec![row("a", "old", 100), row("c", "saved during the read", 1_200), row("a2", "older, not in the records' answer", 50)];
+        let merged = reduce(with_written_since(read, copy, 1_000));
+        let ids: Vec<&str> = merged.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"c"), "the row saved during the read stays: {ids:?}");
+        assert!(ids.contains(&"a") && ids.contains(&"b"), "what the records answered is all there: {ids:?}");
+        assert!(!ids.contains(&"a2"), "a row the copy held from before the read, which the records no longer answer with, is not kept alive: {ids:?}");
+    }
+
+
+    #[test]
+    fn a_backup_carries_memorys_scope_and_each_projects() {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{keep, meta_of, Audience, Item, ItemType, Keep};
+        let item = |id: &str, audience: Audience| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text: "Deploy with make ship.", item_type: ItemType::Detail, ptr: Ptr { c: 1, s: 1, t: 1, a: 0, b: 0 }, as_of: 1, by: "person", audience: Some(audience), kind: "exchange", why: "pressed", quote: None, subject: None, now: 1 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let items = vec![item("it-1", Audience::Project { project: "p-items".into() }), item("it-2", Audience::All), item("it-3", Audience::Project { project: "p-folder".into() })];
+        let scopes = scopes_for_backup(vec!["p-folder".into(), String::new()], &items);
+        assert_eq!(scopes, vec!["memory".to_string(), "project:p-folder".to_string(), "project:p-items".to_string()], "memory's rows first; a project once, whether a folder or an item names it");
+        assert_eq!(scopes_for_backup(Vec::new(), &[]), vec!["memory".to_string()], "what was kept is in the backup before any project exists");
+    }
+
+
+    /// A backup of a made-up memory: every kind of thing that must come
+    /// back, sealed scope by scope the way a backup holds it.
+    fn made_up_backup(key: &[u8; 32]) -> (serde_json::Value, Vec<MemoryRow>) {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{confirm, forget, keep, meta_of, replace, Audience, Item, ItemType, Keep};
+        use base64::Engine;
+        let item = |id: &str, text: &str, seq: u32, audience: Audience| {
+            let (row, _) = keep(&[], Keep { id: id.into(), text, item_type: ItemType::Detail, ptr: Ptr { c: 100, s: seq, t: 100, a: 0, b: 0 }, as_of: 10, by: "person", audience: Some(audience), kind: "exchange", why: "pressed", quote: None, subject: Some("sub-1".into()), now: 10 }).ok().unwrap();
+            Item { meta: meta_of(&row).unwrap(), row }
+        };
+        let older = item("it-old", "Free delivery starts at $40.", 1, Audience::All);
+        let newer = item("it-new", "Free delivery starts at $60.", 2, Audience::All);
+        let confirmed = item("it-sure", "The oven is serviced on Mondays.", 3, Audience::Ai { ai: "uhCAkAtlas".into() });
+        let gone = item("it-gone", "The old supplier's phone number.", 4, Audience::All);
+        let memory = vec![
+            replace(&older, "it-new", Some("Free delivery starts at $60."), "tidy", 20).0,
+            newer.row.clone(),
+            confirm(&confirmed, 30).0,
+            forget(&gone, 40).0,
+            crate::memory_subjects::subject_row(&crate::memory_subjects::Subject { id: "sub-1".into(), name: "Suppliers".into(), name_accepted: true, from: crate::memory_subjects::MadeFrom::ByHand, merged_into: None }, 50),
+            crate::memory_use::conv_row(&crate::memory_use::ConvUse { started_at: 700, audience: None, private: true, excluded: Vec::new() }, 60),
+            crate::memory_use::conv_row(&crate::memory_use::ConvUse { started_at: 800, audience: Some(Audience::Ai { ai: "uhCAkAtlas".into() }), private: false, excluded: vec![3] }, 61),
+            crate::memory_notes::doc_row(&crate::memory_notes::DocUse { reach: "note".into(), doc_id: Some("doc-1".into()), content_id: None, line: None, folder: None, name: "prices.md".into(), at: 70 }, 70, false),
+            crate::memory_tidy::tidy_off_row(true, 80),
+        ];
+        let rule = |id: &str, scope: &str, text: &str| MemoryRow { scope: scope.into(), kind: "rule".into(), ..row(id, text, 90) };
+        let person = vec![rule("r-1", "person", "Answer in short sentences."), row("n-1", "A note, not a rule.", 91)];
+        let project = vec![rule("r-2", "project:p-shop", "Deploy with make ship."), rule("r-3", "project:p-shop", "Never push on Fridays.")];
+        let sealed = |rows: &[MemoryRow]| base64::engine::general_purpose::STANDARD.encode(seal_rows(key, rows).unwrap());
+        let backup = serde_json::json!({ "memory_rows": { "scopes": { "memory": sealed(&memory), "person": sealed(&person), "project:p-shop": sealed(&project) } } });
+        (backup, memory)
+    }
+
+    #[test]
+    fn everything_in_memory_comes_back_from_a_backup() {
+        use crate::memory_items::{items, ItemState};
+        let key = [9u8; 32];
+        let (backup, memory) = made_up_backup(&key);
+        let back = rows_in_backup(&key, &backup);
+        assert_eq!(back.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>(), vec!["memory", "person", "project:p-shop"]);
+        // Onto a device that holds nothing: every row, exactly as it was.
+        let (rows, adopted) = fold_rows(Vec::new(), back[0].1.clone());
+        assert_eq!(adopted, memory.len());
+        for was in &memory {
+            assert_eq!(rows.iter().find(|r| r.id == was.id), Some(was), "{} comes back as it was", was.id);
+        }
+        let kept = items(&rows);
+        let of = |id: &str| kept.iter().find(|i| i.row.id == id).unwrap();
+        assert_eq!((of("it-old").meta.state, of("it-old").meta.replaced_by.as_deref(), of("it-old").meta.now.as_deref(), of("it-old").meta.state_by.as_str(), of("it-old").meta.state_at), (ItemState::Replaced, Some("it-new"), Some("Free delivery starts at $60."), "tidy", 20), "what replaced what, by what, and when");
+        assert_eq!(of("it-sure").meta.confirmed.as_ref().map(|c| (c.at, c.how.as_str())), Some((30, "pressed")), "what the person confirmed");
+        assert_eq!(of("it-sure").meta.audience, crate::memory_items::Audience::Ai { ai: "uhCAkAtlas".into() }, "who can use it");
+        assert_eq!(of("it-gone").meta.state, ItemState::Forgotten, "a forgotten item is still forgotten");
+        assert_eq!(of("it-new").meta.subject.as_deref(), Some("sub-1"));
+        let subjects = crate::memory_subjects::subjects(&rows);
+        assert_eq!(subjects.iter().map(|s| (s.name.as_str(), s.name_accepted)).collect::<Vec<_>>(), vec![("Suppliers", true)], "a subject and its accepted name");
+        let uses = crate::memory_use::conv_uses(&rows);
+        assert!(crate::memory_use::is_private(&uses, 700), "a private conversation is private again");
+        assert_eq!(uses.iter().find(|u| u.started_at == 800).map(|u| (u.audience.clone(), u.excluded.clone())), Some((Some(crate::memory_items::Audience::Ai { ai: "uhCAkAtlas".into() }), vec![3])), "a conversation for one AI, and a message not to be used");
+        assert_eq!(crate::memory_notes::doc_uses(&rows).iter().map(|(_, u)| u.name.as_str()).collect::<Vec<_>>(), vec!["prices.md"], "a note on the Not used list");
+        assert!(crate::memory_tidy::tidy_is_off(&rows), "tidying turned off stays off");
+        // What the person is told came back.
+        assert_eq!(counts_in_backup(&key, &backup), (3, 3), "three kept items (the forgotten one is not counted) and three rules, the project's among them");
+        assert_eq!(counts_of("person", &back[1].1), (0, 1), "a note in the person's scope is not a rule");
+    }
+
+    #[test]
+    fn a_second_restore_adds_nothing_and_a_row_that_already_arrived_is_not_doubled() {
+        let key = [9u8; 32];
+        let (backup, memory) = made_up_backup(&key);
+        let theirs = rows_in_backup(&key, &backup).remove(0).1;
+        let (once, first) = fold_rows(Vec::new(), theirs.clone());
+        let (twice, second) = fold_rows(once.clone(), theirs.clone());
+        assert_eq!((first, second), (memory.len(), 0));
+        assert_eq!(once.len(), twice.len(), "nothing is doubled");
+        // The same item confirmed on another device after the backup: its
+        // newer revision is the one that stays.
+        let later = MemoryRow { updated_at: 5_000, text: "Free delivery starts at $65.".into(), ..memory[1].clone() };
+        let (merged, adopted) = fold_rows(vec![later.clone()], theirs);
+        assert_eq!(merged.iter().filter(|r| r.id == "it-new").collect::<Vec<_>>(), vec![&later], "one row, the newer");
+        assert_eq!(adopted, memory.len() - 1, "the backup's older revision of it is not counted as restored");
+        // A backup read with another key gives nothing, and nothing is lost.
+        assert!(rows_in_backup(&[1u8; 32], &backup).is_empty());
+    }
+
     fn row(id: &str, text: &str, at: i64) -> MemoryRow {
         MemoryRow {
             id: id.into(), scope: "person".into(), kind: "note".into(), text: text.into(), structured: None,
@@ -1227,6 +1662,56 @@ mod tests {
         assert_eq!(b.value, "new words");
         assert!(b.embedding.is_none(), "the words changed: embed here");
         assert!(mine.iter().find(|f| f.id == "c").unwrap().embedding.is_none());
+    }
+
+    #[test]
+    fn a_person_revision_outranks_a_later_tidying_revision() {
+        use crate::memory_block::Ptr;
+        use crate::memory_items::{confirm, keep, meta_of, replace, Item, ItemState, ItemType, Keep};
+        let now = 1_772_000_000_000i64;
+        let (kept, _) = keep(&[], Keep { id: "it-1".into(), text: "Use the small plan.", item_type: ItemType::Decision, ptr: Ptr { c: 1, s: 0, t: 1, a: 0, b: 5 }, as_of: now - 9000, by: "ai:juno", audience: None, kind: "exchange", why: "settled", quote: None, subject: None, now: now - 5000 }).ok().unwrap();
+        let item = |row: &MemoryRow| Item { row: row.clone(), meta: meta_of(row).unwrap() };
+        // On the laptop the person confirms it; on the desktop, which has
+        // not seen that yet, tidying replaces it a moment later.
+        let (confirmed, _) = confirm(&item(&kept), now - 3000);
+        let (tidied, _) = replace(&item(&kept), "it-2", None, "tidy", now - 1000);
+        for order in [vec![kept.clone(), confirmed.clone(), tidied.clone()], vec![tidied.clone(), kept.clone(), confirmed.clone()], vec![confirmed.clone(), tidied.clone(), kept.clone()]] {
+            let reduced = reduce_at(order, now);
+            let m = meta_of(&reduced[0]).unwrap();
+            assert_eq!((reduced.len(), m.state, m.confirmed.is_some()), (1, ItemState::Current, true), "what the person confirmed stands");
+        }
+        // Tidying that knew of the confirmation (its revision carries it) is an ordinary later revision.
+        let (knowing, _) = replace(&item(&confirmed), "it-2", None, "tidy", now - 500);
+        assert_eq!(meta_of(&reduce_at(vec![confirmed.clone(), knowing], now)[0]).unwrap().state, ItemState::Replaced);
+        // An unconfirmed item is replaced by tidying as usual.
+        assert_eq!(meta_of(&reduce_at(vec![kept.clone(), tidied.clone()], now)[0]).unwrap().state, ItemState::Replaced);
+        // And the person's own later change always stands.
+        let (replaced_by_hand, _) = replace(&item(&confirmed), "it-2", None, "person", now - 100);
+        assert_eq!(meta_of(&reduce_at(vec![tidied, confirmed, replaced_by_hand], now)[0]).unwrap().state, ItemState::Replaced);
+        // Rows that are not items are untouched by the rule.
+        let (a, b) = (row("x", "old", now - 10), row("x", "new", now - 5));
+        assert_eq!(reduce_at(vec![a, b], now)[0].text, "new");
+    }
+
+    #[test]
+    fn a_future_stamp_does_not_win() {
+        let now = 1_772_000_000_000i64;
+        let day = 24 * 60 * 60 * 1000i64;
+        // A device whose clock is a year ahead wrote "wrong clock" last week
+        // (stamped next year); this device writes "right" today.
+        let ahead = row("x", "from the wrong clock", now + 365 * day);
+        let today = row("x", "right", now);
+        // The far stamp is ordered as this device's "now": anything written
+        // after now stands over it, in either order of arrival.
+        let later = row("x", "written after it", now + 2);
+        assert_eq!(reduce_at(vec![ahead.clone(), later.clone()], now + 1)[0].text, "written after it");
+        assert_eq!(reduce_at(vec![later, ahead.clone()], now + 1)[0].text, "written after it");
+        // Without the rule it would have won for a year.
+        assert_eq!(reduce_at(vec![ahead.clone(), today.clone()], now + 366 * day)[0].text, "from the wrong clock");
+        // Within a day ahead (ordinary clock drift) the stamp is believed.
+        let drift = row("x", "an hour ahead", now + 3_600_000);
+        assert_eq!(reduce_at(vec![today.clone(), drift], now)[0].text, "an hour ahead");
+        let _ = today;
     }
 
     #[test]

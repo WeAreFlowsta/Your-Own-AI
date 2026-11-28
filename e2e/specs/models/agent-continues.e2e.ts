@@ -83,6 +83,16 @@ describe("an agent turn keeps going when you leave the chat", () => {
     })), { timeout: 240_000, interval: 1000, timeoutMsg: "the agent never started working" });
     console.log(`e2e: turns while working ${JSON.stringify(await turns())}`);
     await shot("agent-continues-working");
+    // What the page reports as going wrong from here on, for a miss to be read.
+    await browser.execute(() => {
+      const w = window as any;
+      w.__e2eErrors = [];
+      const note = (s: unknown) => w.__e2eErrors.push(String(s).slice(0, 300));
+      window.addEventListener("error", (e) => note(`error: ${e.message} at ${e.filename}:${e.lineno}`));
+      window.addEventListener("unhandledrejection", (e) => note(`rejection: ${(e as PromiseRejectionEvent).reason?.stack ?? (e as PromiseRejectionEvent).reason}`));
+      const was = console.error.bind(console);
+      console.error = (...a: unknown[]) => { note(`console.error: ${a.map((x) => (x instanceof Error ? x.stack : String(x))).join(" ")}`); was(...a); };
+    });
 
     // Leave for Settings through the app's own menu.
     await (await $('button[title^="Menu"]')).click();
@@ -102,6 +112,10 @@ describe("an agent turn keeps going when you leave the chat", () => {
     await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/chat/", { timeout: 30_000, timeoutMsg: "the chat never reopened" });
     await new Promise((r) => setTimeout(r, 4000));
     console.log(`e2e: turns on return ${JSON.stringify(await turns())}`);
+    console.log(`e2e: the page on return: ${JSON.stringify(await browser.execute(() => ({
+      messages: [...document.querySelectorAll('[data-testid="chat-message"]')].map((m) => `${m.getAttribute("data-role")}:${m.getAttribute("data-state") ?? ""}:${(m as HTMLElement).innerText.length}`),
+      errors: (window as any).__e2eErrors ?? [],
+    })))}`);
     // The turn is on screen: the agent bubble, still working or done.
     await browser.waitUntil(async () => browser.execute(() => {
       const m = [...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined;
@@ -128,6 +142,14 @@ describe("an agent turn keeps going when you leave the chat", () => {
         const len = await browser.execute(() => ([...document.querySelectorAll('[data-testid="chat-message"][data-role="assistant"]')].pop() as HTMLElement | undefined)?.innerText.length ?? 0);
         const status = await invoke<{ running: boolean; sessionId: string | null }>("build_agent_status").catch(() => null);
         console.log(`e2e: waiting - turns ${JSON.stringify(ts)} bubble ${len} chars agent ${JSON.stringify(status)}`);
+      }
+      // A small local model may reach for a tool though it was asked not to
+      // (11-25: it asked to write a file, and the turn waited on the card
+      // for ten minutes). Decline, as a person who asked for words would.
+      const deny = await $('[data-testid="permission-deny"]');
+      if (await deny.isExisting().catch(() => false)) {
+        await deny.click().catch(() => {});
+        console.log("e2e: declined a tool request");
       }
       return ts.every((t) => t.kind === "chat" || (t.state !== "running" && t.state !== "waiting"));
     }, { timeout: 600_000, interval: 1000, timeoutMsg: "the agent turn never finished" });
@@ -203,13 +225,22 @@ describe("an agent turn keeps going when you leave the chat", () => {
     expect(rowText).toContain("needs you");
     expect(rowText).toContain("Allow");
     await shot("agent-ask-in-tray");
-    await browser.execute(() => {
-      const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
-      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
-      b?.click();
-    });
-    // The turn goes on and finishes; the file is there.
-    await browser.waitUntil(async () => (await turns()).every((t) => t.kind !== "project" || (t.state !== "waiting" && t.state !== "running")), { timeout: 600_000, interval: 1000, timeoutMsg: "the turn did not finish after Allow" });
+    const allowFromTray = () =>
+      browser.execute(() => {
+        const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
+        const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
+        b?.click();
+        return !!b;
+      });
+    expect(await allowFromTray()).toBe(true);
+    // The turn goes on and finishes; the file is there. A small model may
+    // ask a second time (a first call under the wrong name, then the real
+    // one): each ask is answered from the tray, as the person would.
+    let asks = 1;
+    await browser.waitUntil(async () => {
+      if ((await turns()).some((t) => t.kind === "project" && t.state === "waiting") && (await allowFromTray())) console.log(`e2e: allowed ask ${++asks} from the tray`);
+      return (await turns()).every((t) => t.kind !== "project" || (t.state !== "waiting" && t.state !== "running"));
+    }, { timeout: 600_000, interval: 1000, timeoutMsg: "the turn did not finish after Allow" });
     const written = existsSync(resolve(folder, "hello.txt"));
     console.log(`e2e: hello.txt written: ${written}`);
     expect(written).toBe(true);
@@ -344,12 +375,29 @@ describe("an agent turn keeps going when you leave the chat", () => {
     if (gatedRead) expect(gateLines().some((l) => l.includes("the person decides"))).toBe(true);
     else console.log("e2e: the model asked for another tool, not a page read; the card asked, the web gate was not the one asking");
     await shot("agent-gate-ask-in-tray");
-    await browser.execute(() => {
+    // The gated page read is allowed and seen through. Another tool the
+    // model reached for is declined: the person was asked, which is what is
+    // held here, and where that tool leads is not this step's matter
+    // (11-26: the model asked to open the page with a browser tool, it was
+    // allowed, and the turn ran past the time allowed).
+    await browser.execute((label: string) => {
       const r = document.querySelector('[data-testid="turn-row"][data-turn-state="waiting"]');
-      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === "Allow") as HTMLElement | undefined;
+      const b = [...(r?.querySelectorAll("button") ?? [])].find((x) => x.textContent?.trim() === label) as HTMLElement | undefined;
       b?.click();
-    });
-    await browser.waitUntil(async () => (await turns()).every((t) => t.kind !== "tools" || (t.state !== "waiting" && t.state !== "running")), { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished after Allow" });
+    }, gatedRead ? "Allow" : "Don't allow");
+    const answeredAt = Date.now();
+    await browser.waitUntil(async () => {
+      const ts = await turns();
+      const done = ts.every((t) => t.kind !== "tools" || (t.state !== "waiting" && t.state !== "running"));
+      // After a decline the model may go on asking: two minutes, then the turn is stopped.
+      if (!done && !gatedRead && Date.now() - answeredAt > 120_000) {
+        await browser.execute(() => {
+          const w = window as any;
+          for (const t of (w.__yoaiTurns?.() ?? []) as { id: string; state: string }[]) if (t.state === "running" || t.state === "waiting") w.__yoaiStopTurn?.(t.id);
+        });
+      }
+      return done;
+    }, { timeout: 600_000, interval: 1000, timeoutMsg: "the tools turn never finished after the answer" });
     const read = (() => { try { return readFileSync(appLog, "utf8").split("\n").filter((l) => /\[web\] .* reads https?:\/\//.test(l)); } catch { return []; } })();
     console.log(`e2e: pages read ${JSON.stringify(read.map((l) => l.replace(/^.*\[web\] /, "")).slice(-4))}`);
     // Two pages when the gated read was allowed; at least the person's own

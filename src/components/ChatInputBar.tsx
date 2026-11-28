@@ -3,6 +3,7 @@ import type { SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '.
 import { AiSelector } from './AiSelector';
 import { ContentEditor } from './ContentEditor';
 import { ModelChip } from './ModelChip';
+import { canAnswerOnline } from '../utils/memorySent';
 import { LiquidMetalBorder } from './LiquidMetalBorder';
 import { Callout } from './Callout';
 import { ONLINE_UNLOCK_TIP_ID, clearOnlineUnlockPending, onlineUnlockPending } from '../utils/entitlement';
@@ -17,8 +18,9 @@ export type ReplyOffer =
   | { messageId: string; kind: 'live-info'; plan: boolean }
   | { messageId: string; kind: 'dig-deeper'; pages: number }
   | { messageId: string; kind: 'build' }
+  | { messageId: string; kind: 'look-further'; say: string }
   | { messageId: string; kind: 'project-model'; text: string; bigger?: string; plan: boolean };
-export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
+export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper' | 'look-further';
 
 interface ChatInputBarProps {
   /** See ReplyOffer: at most one, for the last reply, gone on the next message. */
@@ -94,12 +96,28 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
   const showCarryChip = useSignal(true);
   // Background memory extraction after a turn: otherwise felt only as a
   // pause. A quiet hint in the Ask row while it runs.
-  const remembering = useSignal(false);
   // The moment a plan activates: entitlement.ts arms a pending unlock when
   // the account goes from not-entitled to entitled; the tip sits right above
   // the Ask row because the model chip there is the answer. Cleared when
   // dismissed (Got it) or when the pending window lapses.
   const onlineUnlocked = useSignal(false);
+  // Sharing turned off for the chosen AI, read where it is saved: the AI
+  // the page holds may be from before the switch was pressed.
+  const sharingOff = useSignal(false);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track, cleanup }) => {
+    const id = track(() => selectedAi.aiConfig?.id ?? '');
+    const read = async () => {
+      if (!id) return void (sharingOff.value = false);
+      const { getLocalCustomAis } = await import('../utils/localAiStorage');
+      const saved = (await getLocalCustomAis().catch(() => [])).find((a) => a.id === id);
+      sharingOff.value = (saved ?? selectedAi.aiConfig)?.memoryOnline === false;
+    };
+    void read();
+    const again = () => void read();
+    window.addEventListener('yoai-memory-shared', again);
+    cleanup(() => window.removeEventListener('yoai-memory-shared', again));
+  });
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     showModelChip.value = localStorage.getItem('showChatModelChip') !== 'false';
@@ -127,15 +145,10 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
         showCarryChip.value = !!detail.showChatCarryChip;
       }
     };
-    const onMemory = (e: Event) => {
-      remembering.value = !!(e as CustomEvent).detail?.busy;
-    };
     window.addEventListener('settingsChanged', onSettings);
-    window.addEventListener('memoryExtractionChanged', onMemory);
     cleanup(() => {
       if (shownHere) clearOnlineUnlockPending();
       window.removeEventListener('settingsChanged', onSettings);
-      window.removeEventListener('memoryExtractionChanged', onMemory);
       window.removeEventListener('entitlementChanged', checkUnlock);
       window.removeEventListener('helpTipsChanged', checkUnlock);
     });
@@ -167,7 +180,21 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           online model from the {showModelChip.value ? "list at the end of the Ask row" : "model list on each card in Your AIs"}.
         </Callout>
       )}
-      {offer && offerGo && (
+      {/* An open offer (utils/openOffer.ts): its words on a button, no
+          sentence; pressing sends them as the person's message. */}
+      {offer && offerGo && offer.kind === 'look-further' && (
+        <div class="mb-2 flex flex-wrap items-center gap-2 px-1" data-testid="open-offer" data-offer={offer.kind}>
+          <button
+            type="button"
+            class="px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+            data-testid="open-offer-take"
+            onClick$={() => offerGo(offer.messageId, 'look-further')}
+          >
+            {offer.say}
+          </button>
+        </div>
+      )}
+      {offer && offerGo && offer.kind !== 'look-further' && (
         <Callout intent={offer.kind === 'web-off' || offer.kind === 'live-info' ? 'warning' : 'info'} class="mb-2 !p-3">
           {offer.kind === 'web-off' && (
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="web-offer">
@@ -241,21 +268,30 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           <span class="ml-2 text-[var(--text-primary)] text-xs sm:text-base">
             {askBlurbText}
           </span>
-          {remembering.value && (
-            <span
-              class="ml-3 hidden sm:inline-flex items-center gap-1.5 text-[11px] text-[var(--text-muted)]"
-              title="Learning durable facts from what you just said - on your device"
-            >
-              <span class="inline-block h-3 w-3 rounded-full border-2 border-[var(--border-subtle)] border-t-[var(--text-secondary)] animate-spin" />
-              Remembering..
-            </span>
-          )}
           {/* Quiet model chip: makes the AI's standing model choice legible
               at the point of use, one tap to change. Hidden on the smallest
               screens - the Your AIs cards cover it there. The chat holds a
               snapshot of the selected AI, so patch it alongside the
               context-level save the chip performs. */}
           <span class="ml-auto pl-2 inline-flex min-w-0 items-center gap-3">
+            {/* Sharing turned off for an AI that may answer off this computer:
+                said where the AI is chosen, with the way back one press away. */}
+            {selectedAi.aiConfig && canAnswerOnline(selectedAi.aiConfig.model) && sharingOff.value && (
+              <span class="hidden sm:inline-flex items-center gap-2 text-xs text-[var(--text-muted)] whitespace-nowrap" data-testid="memory-not-shared">
+                Memory not shared
+                <button
+                  type="button"
+                  class="underline hover:text-[var(--text-primary)]"
+                  data-testid="memory-not-shared-on"
+                  onClick$={async () => {
+                    const { setMemoryShared } = await import('./memory/SentLine');
+                    await setMemoryShared(selectedAi.aiConfig.id, true);
+                  }}
+                >
+                  Turn on
+                </button>
+              </span>
+            )}
             {selectedAi.aiConfig?.model && showModelChip.value && (
               <span class="hidden sm:inline-flex min-w-0">
                 <ModelChip

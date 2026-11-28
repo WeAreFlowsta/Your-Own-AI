@@ -169,7 +169,9 @@ export const config: WebdriverIO.Config = {
   // A spec's own this.timeout() does not reach this runner: the limit is set
   // here. LONG_SPECS (above) need more than five minutes by their nature
   // (queue: a reply of thousands of words, then a model switch).
-  mochaOpts: { ui: "bdd", timeout: CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000 },
+  // YOAI_E2E_TIMEOUT_MS: a measuring run's own limit (reading a whole
+  // history into an index takes hours).
+  mochaOpts: { ui: "bdd", timeout: Number(process.env.YOAI_E2E_TIMEOUT_MS) || (CAPTURE || process.env.YOAI_E2E_LONG ? 2_400_000 : 300_000) },
   reporters: ["spec"],
   logLevel: "warn",
   waitforTimeout: 30_000,
@@ -177,7 +179,9 @@ export const config: WebdriverIO.Config = {
     if (screenLocked()) throw new SevereServiceError("e2e: the screen is locked - the app gets no frames while it is. Unlock it and run again.");
     holdIdleLock();
     reapSidecars();
-    rmSync(PROFILE, { recursive: true, force: true });
+    // YOAI_E2E_KEEP_PROFILE=1 starts from the scratch profile as the last
+    // run left it (a long history already loaded and read).
+    if (!process.env.YOAI_E2E_KEEP_PROFILE) rmSync(PROFILE, { recursive: true, force: true });
     rmSync(SHOTS, { recursive: true, force: true });
     mkdirSync(SHOTS, { recursive: true });
     seedWindowsProfile();

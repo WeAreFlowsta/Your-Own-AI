@@ -55,6 +55,13 @@ const perWriter = (rows: [string, string][]) =>
 const memory = (fresh = false) =>
   invoke<{ content: string; updatedAt: number; revisions: number }>("project_memory_get", { folder: FOLDER, fresh });
 
+type KeptItem = { text: string; savedBy: string; item: { state: string; audience?: { kind: string; project?: string } } };
+/** What memory holds now for a project: the kept items whose audience is that project. */
+async function keptFor(folder: string): Promise<KeptItem[]> {
+  const pid = await invoke<string>("project_identity_for", { folder });
+  return (await invoke<KeptItem[]>("memory_items")).filter((i) => i.item.state === "current" && i.item.audience?.kind === "project" && i.item.audience.project === pid);
+}
+
 /** The agent's own tools, called the way the agent calls them. */
 async function mcp(name: string, args: Record<string, unknown>, w: Writer) {
   const r = await fetch("http://127.0.0.1:11435/mcp", {
@@ -106,21 +113,19 @@ describe("projects: memory saves and reads in seconds, one memory conversation p
     expect(rows.length).toBe(1);
   });
 
-  it("takes the agent's note at once and the Remember button's, on the same conversation", async function () {
+  it("keeps the agent's note as a memory item for this project, at once", async function () {
     this.timeout(300_000);
+    const before = (await memory(true)).revisions;
     const answer = await timed("agent note: the tool answers", 2_000, () => mcp("remember_for_project", { note: "Tests run with `npm test`." }, a));
     expect(answer.isError).toBe(false);
-    await timed("agent note: in the memory", 20_000, () =>
-      waitFor("the agent's note never reached the memory", 20_000, async () => (await memory()).content.includes("npm test")),
+    await timed("agent note: in memory", 20_000, () =>
+      waitFor("the agent's note never reached memory", 20_000, async () => (await keptFor(FOLDER)).some((i) => i.text.includes("npm test"))),
     );
-    await timed("Remember button: note saved", 10_000, () =>
-      invoke("project_memory_note", { writerKey: a.key, writerLabel: a.name, folder: FOLDER, note: "The staging site is wetest." }),
-    );
-    const now = await memory();
-    expect(now.content).toContain("[saved by you] The staging site is wetest.");
-    expect(now.content).toContain(`[saved by ${a.name}] Tests run with`);
-    const read = await timed("agent read: read_project_memory", 2_000, () => mcp("read_project_memory", {}, a));
-    expect(read.text).toContain("wetest");
+    const item = (await keptFor(FOLDER)).find((i) => i.text.includes("npm test"))!;
+    console.log(`e2e: kept for the project: ${JSON.stringify(item)}`);
+    expect(item.savedBy.startsWith("ai:")).toBe(true);
+    // The older project text is not written any more.
+    expect((await memory(true)).revisions).toBe(before);
     expect((await indexed(FOLDER)).length).toBe(1);
   });
 
@@ -181,34 +186,68 @@ describe("projects: the agent in a project", () => {
     });
   }
 
-  it("opens the project and shows its memory in the dialog", async function () {
+  it("opens the project, and Project memory opens Memory on it", async function () {
     if (!haveHelper) this.skip();
     this.timeout(300_000);
     await openProject("first");
     await shot("projects-open");
     await (await $('[data-testid="project-pill"]')).click();
     await (await $('[data-testid="open-project-memory"]')).click();
-    const dialog = await $('[data-testid="project-memory-dialog"]');
-    await dialog.waitForDisplayed({ timeout: 5_000 });
-    await shot("projects-memory-dialog-opening");
-    await timed("dialog: notes and count shown", 10_000, () =>
-      waitFor("the project memory dialog never finished reading", 10_000, async () => (await dialog.getAttribute("data-loading")) === "0"),
+    // "Project memory" opens Memory on this project: its name at the top,
+    // the Map's sentence about it, and its own rules on the Rules board.
+    const leaf = FOLDER.split("/").filter(Boolean).pop()!;
+    const line = await $('[data-testid="memory-project-line"]');
+    await line.waitForDisplayed({ timeout: 30_000 });
+    expect(await line.getText()).toContain(leaf);
+    await waitFor("the Map's sentence never named the project", 30_000, async () =>
+      ((await browser.execute(() => (document.querySelector('[data-testid="map-sentence"]') as HTMLElement | null)?.innerText ?? "")) as string).includes(` in ${leaf}:`),
     );
-    const status = await (await $('[data-testid="project-memory-status"]')).getText();
-    console.log(`e2e: dialog status "${status}"`);
-    expect(status).toMatch(/revisions? in your records/);
-    await shot("projects-memory-dialog");
-    // The backdrop closes it.
-    await browser.execute(() => (document.querySelector('[data-testid="project-memory-dialog"] > div') as HTMLElement | null)?.click());
+    await shot("projects-memory-map");
+    // What an AI kept for this project sits in the project's subject, and
+    // one press makes it a rule of the project.
+    const pidHere = await invoke<string>("project_identity_for", { folder: FOLDER });
+    const mapHere = await invoke<{ subjects: { id: string; kind: string; project: string | null; items: number }[] }>("memory_map", { view: { ai: null, project: pidHere } });
+    const subjectHere = mapHere.subjects.find((s) => s.project === pidHere);
+    console.log(`e2e: the project's view: ${JSON.stringify(mapHere.subjects.map((s) => [s.kind, s.items]))}`);
+    expect(subjectHere?.items ?? 0).toBeGreaterThan(0);
+    await browser.execute((id) => (window as any).__yoaiMap.select(id), subjectHere!.id);
+    const makeRule = await $('[data-testid="item-make-rule"]');
+    await makeRule.waitForExist({ timeout: 30_000 });
+    const before = (await invoke<{ kind: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pidHere}` })).filter((r) => r.kind === "rule" && !r.deleted).length;
+    await browser.execute((e) => (e as HTMLElement).click(), makeRule);
+    await (await $('[data-testid="item-ruled"]')).waitForExist({ timeout: 60_000 });
+    const after = (await invoke<{ kind: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pidHere}` })).filter((r) => r.kind === "rule" && !r.deleted).length;
+    expect(after).toBe(before + 1);
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
+    const rules = await $('[data-testid="project-rules"]');
+    await rules.waitForDisplayed({ timeout: 30_000 });
+    expect(await rules.getText()).toContain(`Rules for ${leaf}`);
+    await shot("projects-memory-rules");
+    // "Show everywhere" leaves the project's view.
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-project-clear"]'));
+    await line.waitForExist({ reverse: true, timeout: 20_000 });
+    // Back to the chat, the project still open.
+    await browser.execute(() => history.back());
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
+    await (await $('[data-testid="project-pill"]')).waitForDisplayed({ timeout: 30_000, timeoutMsg: "back in the chat, the project was no longer open" });
   });
 
-  it("knows the project's memory in a new session", async function () {
+  it("is given the project's rules in a new session", async function () {
     if (!haveHelper) this.skip();
     this.timeout(900_000);
     // The run's 8 GB cap holds the chat model at an agent window, the app
     // and the window - not the helper model besides (three runs went over).
     // The reply does not need it; anything that does starts it again.
     await invoke("stop_utility_server").catch(() => {});
+    // A rule for this project is given with every message in it.
+    const pid = await invoke<string>("project_identity_for", { folder: FOLDER });
+    await invoke("save_memory_row", {
+      agentKey: null,
+      row: {
+        id: `deploy-${RUN}`, scope: `project:${pid}`, kind: "rule", text: `Deploys in this project run with \`${DEPLOY}\`.`, structured: null,
+        as_of: Date.now(), saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(), action_hash: null,
+      },
+    });
     await ask("Without using any tools: what command runs deploys in this project? Answer with the command only.");
     // A small local model may still reach for a tool (10-17: it asked to run
     // `find`, and the turn waited on the card). Decline, as a person who
@@ -228,36 +267,41 @@ describe("projects: the agent in a project", () => {
     if (declined) console.log(`e2e: declined ${declined} tool request(s)`);
     console.log(`e2e: reply "${reply.text.slice(0, 200)}"`);
     await shot("projects-agent-reply");
+    // What the session's last call carried: is the rule in it, and where.
+    const { agent: request } = (await (await fetch("http://127.0.0.1:11435/internal/last-chat-request")).json()) as { agent: { messages?: { role: string; content: unknown }[] } | null };
+    const text = (c: unknown) => (typeof c === "string" ? c : Array.isArray(c) ? c.map((p: { text?: string }) => p.text ?? "").join("\n") : "");
+    const shape = (request?.messages ?? []).map((m) => `${m.role}:${text(m.content).length}${text(m.content).includes(DEPLOY) ? "*" : ""}`);
+    console.log(`e2e: the session's last call (role:characters, * holds the rule): ${shape.join(" ")}`);
+    const person = [...(request?.messages ?? [])].reverse().find((m) => m.role === "user" && text(m.content).includes("<user_query>"));
+    console.log(`e2e: the person's prompt as sent: ${JSON.stringify(text(person?.content).slice(0, 1500))}`);
+    console.log(`e2e: the end of that prompt: ${JSON.stringify(text(person?.content).slice(-700))}`);
+    console.log(`e2e: each message of that call (role, has the project heading, has the other rule): ${JSON.stringify((request?.messages ?? []).map((m) => [m.role, text(m.content).includes("Rules for this project:"), text(m.content).includes("npm test")]))}`);
+    console.log(`e2e: the project's rules in the records now: ${JSON.stringify((await invoke<{ kind: string; text: string; deleted: boolean }[]>("list_memory_rows", { agentKey: null, scope: `project:${pid}` })).filter((r) => !r.deleted).map((r) => [r.kind, r.text.slice(0, 50)]))}; the session: ${JSON.stringify(await invoke("build_agent_status"))}`);
+    expect(shape.some((x) => x.endsWith("*"))).toBe(true);
+    // The rule rides beside the person's prompt too, under its heading.
+    expect(text(person?.content)).toContain("Rules for this project:");
+    expect(text(person?.content)).toContain(DEPLOY);
+    console.log(`e2e: the reply holds the project's command: ${reply.text.includes(DEPLOY)}`);
     expect(reply.text).toContain(DEPLOY);
   });
 
-  it("writes the session's summary on close without a second memory conversation or losing a note", async function () {
+  it("keeps a note made mid-session, and closing the project rewrites nothing", async function () {
     if (!haveHelper) this.skip();
     this.timeout(600_000);
-    // The agent saves a note mid-session; the summary must revise what the
-    // memory says now, not what it said when the session opened.
     const [w0] = await writers();
     const LINT = `pnpm lint-${RUN}`;
     const saved = await mcp("remember_for_project", { note: `Lint with \`${LINT}\`.` }, w0);
     expect(saved.isError).toBe(false);
-    await waitFor("the mid-session note never reached the memory", 20_000, async () => (await memory()).content.includes(LINT));
+    await waitFor("the mid-session note never reached memory", 20_000, async () => (await keptFor(FOLDER)).some((i) => i.text.includes(LINT)));
     const before = (await memory(true)).revisions;
     const rowsBefore = await indexed(FOLDER);
-    const t0 = Date.now();
     await browser.execute(async () => { await (window as any).__yoaiCloseFolder?.(); });
-    // The summary is a model call, then one save; a session with nothing
-    // durable to add may leave the memory as it was - both are fine, a
-    // second conversation for the same AI is not.
-    const wrote = await browser
-      .waitUntil(async () => (await memory(true)).revisions > before, { timeout: 240_000, interval: 3_000 })
-      .then(() => true, () => false);
-    const after = await memory(true);
-    if (wrote) timings["close: summary written"] = { ms: Date.now() - t0, budget: 240_000 };
-    console.log(`e2e: revisions ${before} -> ${after.revisions}${wrote ? ` in ${Date.now() - t0} ms` : " (nothing new to keep)"}`);
-    const rowsAfter = await indexed(FOLDER);
-    console.log(`e2e: index before ${JSON.stringify(perWriter(rowsBefore))} after ${JSON.stringify(perWriter(rowsAfter))}`);
-    for (const n of Object.values(perWriter(rowsAfter))) expect(n).toBe(1);
-    expect(after.content).toContain(LINT);
+    // No summary is written when a session ends: what it learned is kept
+    // as items, each with an undo. The older project text stays as it was.
+    await browser.pause(30_000);
+    expect((await memory(true)).revisions).toBe(before);
+    expect((await indexed(FOLDER)).length).toBe(rowsBefore.length);
+    expect((await keptFor(FOLDER)).some((i) => i.text.includes(LINT))).toBe(true);
   });
 });
 
@@ -310,7 +354,7 @@ describe(`projects at the size of a well-used AI (${BIG} conversations)`, () => 
     for (const m of many) expect(m.length).toBe(one.length);
   });
 
-  it("saves and reads a project note in seconds on that AI", async function () {
+  it("saves the project text and keeps a project note in seconds on that AI", async function () {
     this.timeout(600_000);
     // The first save for a folder the index has never seen reads the list once.
     await timed("big: first save (one list read)", 120_000, () =>
@@ -325,15 +369,13 @@ describe(`projects at the size of a well-used AI (${BIG} conversations)`, () => 
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "remember_for_project", arguments: { note: "Big-AI note." } } }),
     }).then((r) => r.json());
     expect(note?.result?.isError).toBe(false);
-    await timed("big: agent note in the memory", 10_000, () =>
-      waitFor("the note never reached the memory", 10_000, async () =>
-        (await invoke<{ content: string }>("project_memory_get", { folder, fresh: false })).content.includes("Big-AI note."),
-      ),
+    await timed("big: agent note in memory", 10_000, () =>
+      waitFor("the note never reached memory", 10_000, async () => (await keptFor(folder)).some((i) => i.text.includes("Big-AI note."))),
     );
     const fresh = await timed("big: read from the records", 10_000, () =>
       invoke<{ revisions: number }>("project_memory_get", { folder, fresh: true }),
     );
-    expect(fresh.revisions).toBe(3);
+    expect(fresh.revisions).toBe(2);
     expect((await indexed(folder)).length).toBe(1);
   });
 });

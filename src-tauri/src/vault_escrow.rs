@@ -2511,6 +2511,10 @@ fn attach_extras(
             // Every scope this device knows: the person's, and each AI's by
             // its founding key (the same address on every device).
             let mut scopes: Vec<String> = vec!["person".to_string()];
+            // Memory's own scope (what is kept, its states, subjects, the
+            // person's switches) and each project's rules, so a restore
+            // brings them back.
+            scopes.extend(crate::memory_rows::backup_scopes(app));
             if let Some(ais) = payload["ai_configs"]["data"]["custom-ais"].as_array() {
                 for a in ais {
                     if let Some(f) = a["foundingKey"].as_str().or_else(|| a["agentPubKey"].as_str()).filter(|f| !f.is_empty()) {
@@ -2535,6 +2539,14 @@ fn attach_extras(
             }
             if block["scopes"].as_object().map(|o| !o.is_empty()).unwrap_or(false) {
                 payload["memory_rows"] = block;
+            }
+            // The log of what memory changed (what Recently lists and an
+            // undo reads), sealed under the data key.
+            if let Some(raw) = crate::memory_items::changes_for_backup(app) {
+                payload["memory_changes"] = serde_json::json!({
+                    "_readme": "The log of changes to memory (kept, replaced, closed, undone), as this device holds it - encrypted, readable with app_keys.",
+                    "raw_b64": base64::engine::general_purpose::STANDARD.encode(&raw),
+                });
             }
         }
     }

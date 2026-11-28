@@ -160,6 +160,17 @@ pub struct RecallHit {
     pub text: String,
     pub score: f32,
     pub mine: bool,
+    /// The date the passage speaks from, in seconds: when its file last
+    /// changed; for a document with no file on this device, when it was
+    /// last read again, else when it was added.
+    pub as_of: i64,
+}
+
+/// The date a document's passages speak from (seconds): the file's own
+/// modified time when it is known, else the last time it was read again,
+/// else the day it was added.
+pub(crate) fn hit_date(mtime: Option<i64>, reread_at: Option<i64>, added_at: i64) -> i64 {
+    mtime.filter(|t| *t > 0).or(reread_at.filter(|t| *t > 0)).unwrap_or(added_at)
 }
 
 // ---------------------------------------------------------------- epub + metadata
@@ -1031,6 +1042,14 @@ pub(crate) fn begin_job(what: &'static str) -> Result<JobGuard, String> {
     *slot = Some(what);
     Ok(JobGuard)
 }
+/// The job the library is doing now, when it is doing one. Work nobody
+/// waits on (a card for each new document) holds off while this answers:
+/// reading a folder and writing cards would share the same processor.
+#[tauri::command]
+pub fn corpus_busy() -> Option<&'static str> {
+    *LIBRARY_JOB.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// One relink pass at a time (the restore starts one, the notice may too).
 
 #[derive(Serialize, Clone)]
@@ -1764,6 +1783,24 @@ pub fn corpus_recall(
         .collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let above = scored.len();
+    // What the person chose not to have used (a line, a note, a folder)
+    // is passed over, and the next best takes its place.
+    let not_used: Vec<crate::memory_notes::DocUse> =
+        crate::memory_notes::doc_uses(&crate::memory_rows::read_cache(&app, &key, crate::memory_items::SCOPE)).into_iter().map(|(_, u)| u).collect();
+    if !not_used.is_empty() {
+        let mut kept = Vec::with_capacity(max_passages);
+        for (score, c) in scored {
+            if kept.len() >= max_passages {
+                break;
+            }
+            let Some(doc) = note_doc_in(&conn, &key, &c.doc_id)? else { continue };
+            let text = note_passage_in(&conn, &key, &c.doc_id, c.idx)?.unwrap_or_default();
+            if !crate::memory_notes::not_used(&not_used, &c.doc_id, doc.content_id.as_deref(), doc.path.as_deref(), &text) {
+                kept.push((score, c));
+            }
+        }
+        scored = kept;
+    }
     scored.truncate(max_passages);
     // Counts and scores only - never a filename or a passage in the log.
     let docs: std::collections::HashSet<&str> = scored.iter().map(|(_, c)| c.doc_id.as_str()).collect();
@@ -1787,11 +1824,12 @@ pub fn corpus_recall(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let meta_blob: Vec<u8> = conn
-            .query_row("SELECT meta_enc FROM documents WHERE doc_id = ?1", params![c.doc_id], |r| r.get(0))
+        let (meta_blob, mtime, reread_at, added_at): (Vec<u8>, Option<i64>, Option<i64>, i64) = conn
+            .query_row("SELECT meta_enc, mtime, reread_at, added_at FROM documents WHERE doc_id = ?1", params![c.doc_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .map_err(|e| e.to_string())?;
         let meta: DocMeta = serde_json::from_slice(&dec(&key, &meta_blob)?).map_err(|e| e.to_string())?;
         out.push(RecallHit {
+            as_of: hit_date(mtime, reread_at, added_at),
             doc_id: c.doc_id.clone(),
             filename: meta.filename,
             idx: c.idx,
@@ -1803,6 +1841,60 @@ pub fn corpus_recall(
         });
     }
     Ok(out)
+}
+
+/// A document as memory's notes follow it.
+pub(crate) struct NoteDoc {
+    pub name: String,
+    pub path: Option<String>,
+    pub content_id: Option<String>,
+    /// When its file last changed (seconds).
+    pub changed: i64,
+    /// Its file cannot be found right now.
+    pub offline: bool,
+}
+
+fn note_doc_in(conn: &Connection, key: &[u8; 32], doc_id: &str) -> Result<Option<NoteDoc>, String> {
+    use rusqlite::OptionalExtension;
+    let row: Option<(Vec<u8>, Option<i64>, Option<i64>, i64, Option<i64>)> = conn
+        .query_row("SELECT meta_enc, mtime, reread_at, added_at, offline_since FROM documents WHERE doc_id = ?1", params![doc_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((meta_blob, mtime, reread_at, added_at, offline_since)) = row else { return Ok(None) };
+    let meta: DocMeta = serde_json::from_slice(&dec(key, &meta_blob)?).map_err(|e| e.to_string())?;
+    Ok(Some(NoteDoc { name: meta.filename, path: meta.path, content_id: meta.content_id, changed: hit_date(mtime, reread_at, added_at), offline: offline_since.is_some() }))
+}
+
+fn note_passage_in(conn: &Connection, key: &[u8; 32], doc_id: &str, idx: u32) -> Result<Option<String>, String> {
+    use rusqlite::OptionalExtension;
+    let blob: Option<Vec<u8>> = conn
+        .query_row("SELECT text_enc FROM passages WHERE doc_id = ?1 AND idx = ?2", params![doc_id, idx as i64], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    blob.map(|b| dec(key, &b).map(|t| String::from_utf8_lossy(&t).into_owned())).transpose()
+}
+
+/// A document by its id, or `None` when the library no longer holds it.
+pub(crate) fn note_doc(app: &AppHandle, key: &[u8; 32], doc_id: &str) -> Result<Option<NoteDoc>, String> {
+    note_doc_in(&open(app)?, key, doc_id)
+}
+
+/// One passage of a document, as it reads in the library.
+pub(crate) fn note_passage(app: &AppHandle, key: &[u8; 32], doc_id: &str, idx: u32) -> Result<Option<String>, String> {
+    note_passage_in(&open(app)?, key, doc_id, idx)
+}
+
+/// Every passage of a document, in order.
+pub(crate) fn note_text(app: &AppHandle, key: &[u8; 32], doc_id: &str) -> Result<String, String> {
+    let conn = open(app)?;
+    let mut stmt = conn.prepare("SELECT text_enc FROM passages WHERE doc_id = ?1 ORDER BY idx").map_err(|e| e.to_string())?;
+    let mut passages: Vec<String> = Vec::new();
+    for row in stmt.query_map(params![doc_id], |r| r.get::<_, Vec<u8>>(0)).map_err(|e| e.to_string())? {
+        passages.push(String::from_utf8_lossy(&dec(key, &row.map_err(|e| e.to_string())?)?).into_owned());
+    }
+    Ok(passages.join("\n"))
 }
 
 #[derive(Serialize)]
@@ -2078,6 +2170,17 @@ mod strip_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_hit_carries_the_files_date() {
+        // The file's own modified time when it is known...
+        assert_eq!(hit_date(Some(1_777_000_000), Some(1_778_000_000), 1_700_000_000), 1_777_000_000);
+        // ...else when the document was last read again...
+        assert_eq!(hit_date(None, Some(1_778_000_000), 1_700_000_000), 1_778_000_000);
+        assert_eq!(hit_date(Some(0), Some(1_778_000_000), 1_700_000_000), 1_778_000_000);
+        // ...else the day it was added.
+        assert_eq!(hit_date(None, None, 1_700_000_000), 1_700_000_000);
+    }
+
     #[test]
     fn xml_tag_text_reads_prefixed_tags() {
         let xml = r#"<?xml version="1.0"?><cp:coreProperties xmlns:dc="x"><dc:title>A &amp; B</dc:title><dc:creator>Ada Lovelace</dc:creator><dc:description/></cp:coreProperties>"#;

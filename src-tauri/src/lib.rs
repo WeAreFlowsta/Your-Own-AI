@@ -7,7 +7,8 @@ mod memory_rows;          // typed, dated, sealed memory rows at scope anchors (
 #[cfg(test)]
 mod spawn_guard;          // no program start without the no-window flag (Windows consoles)
 mod project_identity;     // a folder's project id: git root commit / id file / path hash
-mod dreaming;             // memory consolidation when idle (the memory design §6)
+mod memory_delete;        // what goes with a conversation, an AI, and all of memory
+mod memory_health;        // health turns are never given to an AI that answers off this computer
 mod machine;              // the whole-machine check every background job asks
 mod memory_slot;          // which local model does the memory work (the memory design §7)
 mod conversation_cache;   // last-known-good conversation lists (encrypted)
@@ -15,6 +16,7 @@ mod ports;                 // every fixed local port, shifted together by YOAI_P
 mod embedding_model;       // THE embedding model: file, prefixes, pooling, index marker
 mod corpus;               // the person's document library (SQLite, row-encrypted; per-AI grants)
 mod model_hash;
+mod read_speed;           // how fast each local model reads here, and what memory may give for it
 mod model_stats;         // per-machine measured tok/s + load time, shared by router + UI           // sha256 per model artifact (provenance for records)
 mod conversation_import;  // bring-your-history: parse + archive exported chats
 mod memory_fixture;       // dev builds: a file of made-up conversations written as ordinary records
@@ -24,6 +26,20 @@ mod memory_index;         // memory's search index: vectors and pointers for eve
 mod memory_reading;       // the background job that keeps the index level with the conversations
 mod memory_block;         // the search results placed ahead of the question: exchanges, the report, the rule
 mod memory_quotes;        // the quote check, and which line shows under a reply
+mod memory_items;         // the memory item: what was kept, its state, who may use it, and the log of changes
+mod memory_tidy;          // tidying's rules: which pairs are judged, what a verdict changes, undo, the pause
+mod memory_keeping;       // keeping without being asked: what an exchange settled, looked at in idle time
+mod memory_session;       // memory in a project or tools session: found once per turn, given on each of its steps
+mod memory_state;         // what memory holds to be true now beside a question: the note, and what is left out as replaced
+mod memory_tidying;       // the tidying job: judges queued pairs in idle time, on a model that passed the check
+mod memory_subjects;      // subjects: where a kept item belongs, names, merge offers
+mod memory_migrate;       // the update path: what the older stores become
+mod memory_rule_offers;   // when a rule is offered: the second time an instruction is given, and never after an answer
+mod memory_use;
+mod memory_notes;         // notes in memory: the line that answered, following the file, "Do not use this" and its reach
+mod memory_rules;         // when an instruction becomes an offer to keep it as a rule
+mod memory_check;         // the built-in check's marks: may this model do memory's judging
+mod memory_reply_check;   // a made-up history and questions: does a model answer from what memory gives it
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)
@@ -67,6 +83,7 @@ mod reset;                 // factory reset (wipe local AIs/transcripts/memory, 
 mod vault_escrow;          // transcript-key escrow in the user's Flowsta Vault
 mod vault_restore;         // replay conversations from the Vault backup onto this device
 mod model_caps;            // capability registry (benchmark-informed scores)
+mod local_results;         // what each local model did on our questions and the memory check, shipped with the release
 mod process_ext;           // sidecar spawn and stop (flowsta-hc-lines): hidden consoles, tied to the app
 mod instance_guard;        // single-instance port lock + orphan-process sweep
 mod updater;               // the app's own updates: signed manifest, download, restart to update
@@ -710,7 +727,6 @@ pub fn run() {
             memory_rows::list_memory_rows_cached,
             memory_rows::list_memory_revisions,
             memory_rows::memory_would_replace,
-            dreaming::dream_now,
             machine::machine_status,
             machine::machine_may_run,
             machine::machine_done,
@@ -805,6 +821,7 @@ pub fn run() {
             llm::embed_texts,
             llm::stop_embedding_server,
             llm::utility_chat,
+            llm::helper_step_aside,
             llm::stop_utility_server,
             agent_bridge::start_build_agent,
             agent_bridge::send_agent_prompt,
@@ -881,10 +898,61 @@ pub fn run() {
             memory_quotes::memory_check_quotes,
             memory_quotes::memory_reply_checked,
             memory_reading::memory_given_texts,
+            memory_reading::memory_conversation_at,
+            memory_delete::memory_delete_preview,
+            memory_delete::memory_conversation_deleted,
+            memory_delete::memory_ai_delete_preview,
+            memory_delete::memory_ai_deleted,
+            memory_delete::memory_delete_all_preview,
+            memory_delete::memory_delete_all,
+            memory_delete::memory_deleted_all_at,
+            memory_items::memory_items,
+            memory_items::memory_keep,
+            memory_items::memory_item_change,
+            memory_items::memory_keep_words,
+            memory_subjects::memory_map,
+            memory_subjects::memory_subject_rename,
+            memory_items::memory_changes,
+            memory_items::memory_undo,
+            memory_items::memory_not_replaced,
+            memory_items::memory_replaces,
+            memory_items::memory_said,
+            memory_prompt::memory_in_replies,
+            memory_prompt::memory_in_replies_set,
+            memory_session::memory_session_given,
+            memory_use::memory_conversation_use,
+            memory_use::memory_conversation_use_set,
+            memory_use::memory_conversations_not_used,
+            memory_notes::memory_note_answered,
+            memory_notes::memory_notes_follow,
+            vault_restore::memory_restore_note,
+            vault_restore::memory_restore_note_seen,
+            memory_notes::memory_note_do_not_use,
+            memory_notes::memory_notes_not_used,
+            memory_notes::memory_note_use_again,
+            memory_rule_offers::memory_rule_heard,
+            memory_rule_offers::memory_rule_offer_answered,
+            memory_rule_offers::memory_rule_offers_declined,
+            memory_rule_offers::memory_rule_offer_forget,
+            memory_migrate::memory_update_run,
+            memory_migrate::memory_update_report,
+            memory_items::memory_set_aside_remove_all,
+            memory_items::memory_questions,
+            memory_items::memory_question_answer,
+            memory_items::memory_keep_quoted,
+            memory_items::memory_keep_message,
+            memory_items::memory_done_said,
+            memory_check::memory_check_status,
+            memory_tidying::memory_tidy_status,
+            memory_tidying::memory_may_be_done,
+            memory_tidying::memory_still_waiting,
+            memory_tidying::memory_tidy_set,
+            memory_tidying::memory_tidy_start_again,
             memory::save_memory_facts,
             transcript_memory::get_transcript_embeddings,
             corpus::corpus_import,
             corpus::corpus_cancel,
+            corpus::corpus_busy,
             corpus::corpus_reread,
             corpus::corpus_relink,
             corpus::corpus_import_prepared,
@@ -1142,8 +1210,13 @@ pub fn run() {
                 memory_rows::start_person_memory_sync(&link_app_handle);
                 machine::start(&link_app_handle);
                 llm::start_idle_unload(&link_app_handle);
-                dreaming::start_dreaming(&link_app_handle);
+                // The older idle tidy-up (merging rows by word overlap) is not
+                // started any more: a merge it made came back after an undo.
+                // Memory's own tidying takes its place.
                 memory_reading::start(&link_app_handle);
+                memory_tidying::start(&link_app_handle);
+                memory_keeping::start(&link_app_handle);
+                memory_check::start(&link_app_handle);
                 corpus::sync::start_folder_sync(&link_app_handle);
                 tuning::refresh_gpu_choices(&link_app_handle);
                 llm::start_memory_pressure_watch(&link_app_handle);

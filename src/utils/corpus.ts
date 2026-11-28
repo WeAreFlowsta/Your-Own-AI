@@ -56,6 +56,8 @@ export interface RecallHit {
   text: string;
   score: number;
   mine: boolean;
+  /** The date the passage speaks from (seconds): its file's last change. */
+  as_of: number;
 }
 
 /** Files and folders in; progress on `corpus-progress`; cancel with corpusCancel(). */

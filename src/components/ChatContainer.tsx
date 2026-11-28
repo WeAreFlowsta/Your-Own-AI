@@ -6,6 +6,7 @@ import InitialView from './InitialView';
 import ConversationView from './ConversationView';
 import SelectionRemember from './SelectionRemember';
 import { ChatInputBar, type ReplyOffer } from './ChatInputBar';
+import { LOOK_FURTHER } from '../utils/openOffer';
 import { lastKnownEntitled } from '../utils/entitlement';
 import { Message, SelectedAiModel, ChatAction, AttachedFile, AttachedImage } from '../types';
 
@@ -14,7 +15,7 @@ type SidePanelContent = { messageId: string; codeString: string; language: strin
 interface ChatContainerProps {
   messages: Message[];
   messagesEndRef: Signal<HTMLDivElement | undefined>;
-  retry$: QRL<(id: string, target?: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper') => void>;
+  retry$: QRL<(id: string, target?: 'online' | 'device' | 'alt' | 'tools' | 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper' | 'look-further') => void>;
   canRouteOnline: boolean;
   canUseTools?: boolean;
   onGround$?: QRL<(id: string) => void>;
@@ -179,7 +180,9 @@ export default component$<ChatContainerProps>((props) => {
             ? { messageId: lastReply.id, kind: 'dig-deeper', pages: lastReply.sources?.length ?? 0 }
             : lastReply.buildOffer
               ? { messageId: lastReply.id, kind: 'build' }
-              : null
+              : lastReply.lookFurther
+                ? { messageId: lastReply.id, kind: 'look-further', say: LOOK_FURTHER.say }
+                : null
       : null;
 
   // Show InitialView when there are no messages

@@ -69,6 +69,8 @@ struct ResolvedAi {
     model: String,
     /// This AI's web switch (Edit AI > Web access): on unless turned off.
     web_access: bool,
+    /// "Share memory with this AI", for an online AI: on unless turned off.
+    memory_online: bool,
     system_prompt: String,
     use_emojis: bool,
     /// Holochain agent pub key (hex), set on first provisioning. Empty if the
@@ -315,9 +317,16 @@ pub fn spawn(app: AppHandle, pre_bound: Option<std::net::TcpListener>) {
         .route("/internal/memory-fixture-load", post(memory_fixture_load_dev))
         .route("/internal/memory-stores", post(memory_stores_dev))
         .route("/internal/memory-search", get(memory_search_dev))
+        .route("/internal/memory-search-until", post(memory_search_until_dev))
         .route("/internal/memory-assemble", post(memory_assemble_dev))
         .route("/internal/memory-ask", post(memory_ask_dev))
         .route("/internal/last-chat-request", get(last_chat_request_dev))
+        .route("/internal/memory-check", post(memory_check_dev))
+        .route("/internal/memory-judge-trial", post(memory_judge_trial_dev))
+        .route("/internal/memory-tidy", post(memory_tidy_dev))
+        .route("/internal/memory-keeping", post(memory_keeping_dev))
+        .route("/internal/memory-update-forget", post(memory_update_forget_dev))
+        .route("/internal/memory-items-near", get(memory_items_near_dev))
             .layer(axum::middleware::from_fn_with_state(app.clone(), lan_guard))
             .with_state(app);
 
@@ -414,6 +423,7 @@ fn resolve_ai(app: &AppHandle, model: &str) -> Option<ResolvedAi> {
         name: pick.get("name").and_then(Value::as_str).unwrap_or("AI").to_string(),
         model: pick.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
         web_access: pick.get("webAccess").and_then(Value::as_bool).unwrap_or(true),
+        memory_online: pick.get("memoryOnline").and_then(Value::as_bool).unwrap_or(true),
         system_prompt: pick
             .get("systemPrompt")
             .and_then(Value::as_str)
@@ -450,9 +460,18 @@ fn build_persona_prompt(ai: &ResolvedAi, user_memory: &str) -> String {
 
 /// What memory adds to a turn through this port, for an AI.
 async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_prompt::Surface, project: Option<String>, query: &str) -> crate::memory_prompt::TurnMemory {
+    turn_memory_as(app, ai, surface, project, query, false, false).await
+}
+
+/// The same, for a session: `beside` puts what is found beside the
+/// question, and `system_only` builds the system part with no search.
+async fn turn_memory_as(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_prompt::Surface, project: Option<String>, query: &str, beside: bool, system_only: bool) -> crate::memory_prompt::TurnMemory {
     let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
     let online = ai.model.starts_with("online:");
     let window = if online { None } else { crate::llm::window_if_loaded(app, &ai.model).await.map(|(w, _)| w.min(u64::from(u32::MAX)) as u32) };
+    // For what memory may give, an AI whose reply may be made off this
+    // computer is treated as one that is: its switch holds for every turn.
+    let online = crate::memory_prompt::may_answer_elsewhere(&ai.model);
     crate::memory_prompt::for_turn(app, crate::memory_prompt::TurnInput {
         ai_id: Some(ai.id.clone()),
         founding_key: founding,
@@ -465,9 +484,13 @@ async fn turn_memory(app: &AppHandle, ai: &ResolvedAi, surface: crate::memory_pr
         window_tokens: window,
         online,
         room_tokens: None,
+        model: Some(ai.model.clone()),
+        further: false,
         previous_question: None,
         on_wire_from: None,
-        skip_search: false,
+        skip_search: system_only,
+        beside,
+        memory_shared: Some(ai.memory_online),
     })
     .await
 }
@@ -560,6 +583,7 @@ impl From<bool> for AgentCaller {
 async fn agent_memory_message(app: &AppHandle, ai: &ResolvedAi, caller: AgentCaller, query: &str) -> Option<Value> {
     static KEPT: crate::memory_prompt::KeptPart = crate::memory_prompt::KeptPart::new(120);
     let tools = app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await;
+    let own = matches!(caller, AgentCaller::OwnSession | AgentCaller::InProject(_));
     let (surface, project) = match caller {
         AgentCaller::OwnSession if tools => (crate::memory_prompt::Surface::ToolsSession, None),
         AgentCaller::OwnSession => (crate::memory_prompt::Surface::Session, session_project(app, true).await),
@@ -567,11 +591,16 @@ async fn agent_memory_message(app: &AppHandle, ai: &ResolvedAi, caller: AgentCal
         AgentCaller::InProject(p) => (crate::memory_prompt::Surface::Session, p),
     };
     let founding = (!ai.agent_pub_key.is_empty()).then(|| crate::commands_holochain::founding_key_for(app, &ai.agent_pub_key));
-    let key = crate::memory_prompt::KeptPart::key(&ai.id, project.as_deref(), &crate::memory_prompt::rules_revision(app, founding.as_deref(), project.as_deref()));
+    // The person's switch for this AI is part of the key: turned off, the
+    // very next step is given the part built without what memory holds.
+    let revision = format!("{}|shared:{}", crate::memory_prompt::rules_revision(app, founding.as_deref(), project.as_deref()), ai.memory_online);
+    let key = crate::memory_prompt::KeptPart::key(&ai.id, project.as_deref(), &revision);
     let part = match KEPT.get(&key) {
         Some(part) => part,
         None => {
-            let part = turn_memory(app, ai, surface, project, query).await.system_part;
+            // The app's own sessions get what is found beside the person's
+            // prompt (`session_block`): their kept system part has no search.
+            let part = turn_memory_as(app, ai, surface, project, query, own, own).await.system_part;
             KEPT.put(&key, &part);
             part
         }
@@ -605,6 +634,49 @@ async fn agent_messages(app: &AppHandle, ai: &ResolvedAi, incoming: &[Value], qu
         }
     }
     with_agent_floor(msgs)
+}
+
+/// A session's turn: what memory found for the person's prompt, searched
+/// once per turn and put around that prompt on every step of the turn.
+/// Earlier prompts carry nothing: the session program never saw a block.
+async fn session_block(app: &AppHandle, ai: &ResolvedAi, msgs: &mut [Value], headers: &HeaderMap, caller: AgentCaller) {
+    let Some(at) = crate::memory_session::prompt_at(msgs) else { return };
+    let prompt = content_text(&msgs[at]["content"]);
+    let key = crate::memory_session::turn_key(header_str(headers, "x-grok-session-id").as_deref(), header_str(headers, "x-grok-turn-idx").as_deref(), &prompt);
+    let turn = match crate::memory_session::kept(&key) {
+        Some(turn) => turn,
+        None => {
+            let tools = app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await;
+            let (surface, project) = match caller {
+                AgentCaller::InProject(p) => (crate::memory_prompt::Surface::Session, p),
+                _ if tools => (crate::memory_prompt::Surface::ToolsSession, None),
+                _ => (crate::memory_prompt::Surface::Session, session_project(app, true).await),
+            };
+            let question = crate::memory_session::question_of(&prompt, crate::memory_session::typed().as_deref());
+            // The project's rules ride beside the prompt as well as in the
+            // system message, after what memory holds on the matter.
+            let rules = crate::memory_prompt::project_rules_beside(app, project.as_deref());
+            let m = turn_memory_as(app, ai, surface, project, &question, true, false).await;
+            let after = match (m.after_question, rules) {
+                (Some(note), Some(rules)) => Some(format!("{note}\n\n{rules}")),
+                (note, rules) => note.or(rules),
+            };
+            let turn = crate::memory_session::Turn {
+                key: key.clone(),
+                question,
+                before: m.before_question,
+                after,
+                given: m.given,
+                given_texts: m.given_texts,
+                remember: m.remember,
+                steps: 1,
+            };
+            log::info!("[memory] session turn {key}: searched once, {} exchange(s) given", turn.given.as_ref().map_or(0, |g| g.exchanges.len()));
+            crate::memory_session::keep(turn.clone());
+            turn
+        }
+    };
+    crate::memory_session::wrap(msgs, at, turn.before.as_deref(), turn.after.as_deref());
 }
 
 /// The supplementary system message that carries memory in agent mode.
@@ -919,6 +991,17 @@ async fn memory_search_dev(
     Json(answer).into_response()
 }
 
+/// Dev builds only: search nothing begun after `at` (microseconds; absent =
+/// no ceiling), so a measured run does not find its own questions.
+async fn memory_search_until_dev(Json(body): Json<Value>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let at = body["at"].as_i64().unwrap_or(i64::MAX);
+    crate::memory_reading::SEARCH_UNTIL.store(at, std::sync::atomic::Ordering::Relaxed);
+    Json(json!({ "until": at })).into_response()
+}
+
 /// What the memory routes below are asked: an AI, a question, and the
 /// conversation so far (`messages`, optional, without the question).
 fn memory_turn_of(app: &AppHandle, body: &Value) -> Result<(ResolvedAi, String, Vec<Value>), String> {
@@ -956,9 +1039,13 @@ async fn memory_assemble_dev(State(app): State<AppHandle>, Json(body): Json<Valu
             window_tokens: body["windowTokens"].as_u64().map(|w| w as u32),
             online: body["online"].as_bool().unwrap_or(false),
             room_tokens: body["roomTokens"].as_u64().map(|w| w as u32),
+            model: body["model"].as_str().map(str::to_string),
+            further: body["further"].as_bool().unwrap_or(false),
             previous_question: body["previousQuestion"].as_str().map(str::to_string),
             on_wire_from: body["onWireFrom"].as_u64().map(|w| w as u32),
             skip_search: false,
+            beside: false,
+            memory_shared: body["memoryShared"].as_bool(),
         })
         .await;
         return Json(json!({ "ai": ai.name, "path": "chat", "memory": memory })).into_response();
@@ -988,12 +1075,157 @@ async fn memory_ask_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -
         Err(e) => return Json(json!({ "error": e })).into_response(),
     };
     let with_memory = body["memory"].as_bool().unwrap_or(true);
-    let messages = fold_same_roles(coalesce_system(persona_messages(&app, &ai, &incoming, &question, with_memory).await));
     let state = app.state::<crate::llm::LLMState>();
+    // The reply is made by the loaded model: as on the port itself, where
+    // an automatic AI is resolved to a model before memory is assembled,
+    // the block is sized for that model's window.
+    let mut ai = ai;
+    if let Some(loaded) = state.current_model.lock().await.clone() {
+        ai.model = loaded;
+    }
+    let messages = fold_same_roles(coalesce_system(persona_messages(&app, &ai, &incoming, &question, with_memory).await));
     match crate::llm::chat_turn_once(&state, messages).await {
         Ok((request, reply)) => Json(json!({ "ai": ai.name, "path": "port", "question": question, "request": request, "reply": reply })).into_response(),
         Err(e) => Json(json!({ "error": e })).into_response(),
     }
+}
+
+/// Dev builds only: the shipped pairs judged once with the wording and
+/// form in the body (`system`, `schema`, optional `seed` and
+/// `max_tokens`), for measuring a wording before it is the app's.
+async fn memory_judge_trial_dev(State(app): State<AppHandle>, Json(body): Json<Value>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let Some(system) = body["system"].as_str() else { return err(StatusCode::BAD_REQUEST, "system is missing", "bad_request") };
+    let seed = body["seed"].as_u64().unwrap_or(1);
+    let max_tokens = body["max_tokens"].as_u64().unwrap_or(300) as u32;
+    let state = app.state::<crate::llm::LLMState>();
+    let started = std::time::Instant::now();
+    // The caller's own pairs in place of the shipped ones, when given.
+    let pairs = match body.get("pairs").filter(|p| p.is_array()) {
+        Some(p) => match serde_json::from_value(p.clone()) {
+            Ok(v) => Some(v),
+            Err(e) => return err(StatusCode::BAD_REQUEST, &format!("pairs: {e}"), "bad_request"),
+        },
+        None => None,
+    };
+    match crate::memory_check::judge_trial(&state, system, body["schema"].clone(), seed, max_tokens, pairs).await {
+        Ok(said) => Json(json!({ "said": said, "seconds": started.elapsed().as_secs() })).into_response(),
+        Err(e) => Json(json!({ "error": e })).into_response(),
+    }
+}
+
+/// Dev builds only: run the built-in check on the loaded model, `runs`
+/// times (3 unless given), the examples shuffled each time. Answers with
+/// each run's marks and answers, and whether the verdict held steady.
+async fn memory_check_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let runs = q.get("runs").and_then(|r| r.parse::<u64>().ok()).unwrap_or(3).clamp(1, 9);
+    // `seed`: one run with that shuffle (a caller that asks run by run).
+    let seeds: Vec<u64> = match q.get("seed").and_then(|s| s.parse::<u64>().ok()) {
+        Some(seed) => vec![seed],
+        None => (1..=runs).collect(),
+    };
+    let state = app.state::<crate::llm::LLMState>();
+    let model = state.current_model.lock().await.clone();
+    let mut verdicts = Vec::new();
+    let mut detail = Vec::new();
+    let started = std::time::Instant::now();
+    for seed in seeds {
+        match crate::memory_check::run(&state, seed).await {
+            Ok((v, said)) => {
+                detail.push(json!({ "seed": seed, "verdict": v, "said": said }));
+                verdicts.push(v);
+            }
+            Err(e) => return Json(json!({ "error": e, "runs_done": detail })).into_response(),
+        }
+    }
+    // A whole check (three runs or more) is kept as this model's result,
+    // as the app's own check keeps it.
+    let kept = match (&model, verdicts.len() >= 3) {
+        (Some(m), true) => {
+            let at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+            let result = crate::memory_check::settled(&verdicts, crate::model_hash::get(&app, m), at);
+            if let Some(r) = &result {
+                crate::memory_check::store(&app, m, r.clone());
+            }
+            result
+        }
+        _ => None,
+    };
+    Json(json!({ "model": model, "steady": crate::memory_check::steady(&verdicts), "seconds": started.elapsed().as_secs(), "runs": detail, "kept": kept })).into_response()
+}
+
+/// Dev builds only: how alike each kept item is to a question (`q`), the
+/// closest first: what the note after a question is chosen by.
+async fn memory_items_near_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let question = q.get("q").cloned().unwrap_or_default();
+    let Ok(v) = crate::inference_memory::embed_for_search(&app, &question).await else {
+        return Json(json!({ "error": "the question could not be embedded (is the memory model installed and running?)" })).into_response();
+    };
+    let mut near: Vec<(String, f32)> = crate::memory_reading::item_vectors(&app).into_iter().map(|(id, (_, vector))| (id, crate::memory_index::likeness(&v, &vector))).collect();
+    near.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    Json(json!({ "near": near.into_iter().map(|(id, score)| json!({ "id": id, "score": score })).collect::<Vec<_>>(), "floor": crate::memory_block::NOTE_FLOOR })).into_response()
+}
+
+/// Dev builds only: one pass of the tidying job, now. `force=1` runs it
+/// whatever the computer is doing and whatever the loaded model's check
+/// result (a test's way to see a judgment applied); `queue=<item id>`
+/// has that item wait for the pass, as a newly kept one does.
+async fn memory_tidy_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let force = q.get("force").is_some_and(|f| f == "1");
+    // For a measurement: the floor for pairs with an open item in them.
+    if let Some(floor) = q.get("open_floor").and_then(|f| f.parse::<f32>().ok()).filter(|f| (0.0..=1.0).contains(f)) {
+        crate::memory_tidying::OPEN_PAIR_FLOOR.store(floor.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(on) = q.get("open_same_conversation") {
+        crate::memory_tidying::OPEN_SAME_CONVERSATION.store(on == "1", std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(id) = q.get("queue").filter(|id| !id.is_empty()) {
+        crate::memory_tidying::kept(&app, id);
+    }
+    Json(json!({ "report": crate::memory_tidying::pass(&app, force).await })).into_response()
+}
+
+/// Dev builds only: the profile is as it was before the update's pass
+/// ran, so a test can make older stores and then run the pass.
+async fn memory_update_forget_dev(State(app): State<AppHandle>) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    crate::memory_migrate::forget_report(&app);
+    Json(json!({ "forgotten": true })).into_response()
+}
+
+/// Dev builds only: one pass of the keeping job now (`force=1`: on
+/// whatever model is loaded, without waiting for idle time).
+async fn memory_keeping_dev(
+    State(app): State<AppHandle>,
+    axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    if !cfg!(debug_assertions) {
+        return err(StatusCode::NOT_FOUND, "not found", "not_found");
+    }
+    let force = q.get("force").is_some_and(|f| f == "1");
+    Json(json!({ "report": crate::memory_keeping::pass(&app, force).await })).into_response()
 }
 
 /// Dev builds only: the last request the chat page sent to a model, as it
@@ -1002,7 +1234,7 @@ async fn last_chat_request_dev() -> Response {
     if !cfg!(debug_assertions) {
         return err(StatusCode::NOT_FOUND, "not found", "not_found");
     }
-    Json(json!({ "request": crate::llm::last_chat_request() })).into_response()
+    Json(json!({ "request": crate::llm::last_chat_request(), "agent": crate::llm::last_agent_request() })).into_response()
 }
 
 /// Dev builds only: conversations whose chain record was written at or
@@ -1255,7 +1487,7 @@ async fn chat_completions(
     headers: HeaderMap,
     Json(mut body): Json<Value>,
 ) -> Response {
-    crate::dreaming::note_activity();
+    crate::machine::note_activity();
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -1284,12 +1516,18 @@ async fn chat_completions(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let query = incoming
-        .iter()
-        .rev()
-        .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
-        .map(|m| content_text(&m["content"]))
-        .unwrap_or_default();
+    // A session program marks the person's prompt and also sends its own
+    // reminders in their role: the marked prompt is the question.
+    let session_prompt = crate::memory_session::prompt_at(&incoming).map(|at| content_text(&incoming[at]["content"]));
+    let query = match &session_prompt {
+        Some(prompt) => crate::memory_session::question_of(prompt, crate::memory_session::typed().as_deref()),
+        None => incoming
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+            .map(|m| content_text(&m["content"]))
+            .unwrap_or_default(),
+    };
 
     // Auto modes: resolve "auto:*" to a concrete model for this question, so the
     // online/offline logic below runs on the resolved value.
@@ -1770,13 +2008,22 @@ async fn chat_completions(
     let record_exchange = record_exchange && !own_harness;
 
     let messages = if agent_mode {
-        agent_messages(&app, &ai, &incoming, &query, with_memory, AgentCaller::from(own_harness)).await
+        let mut msgs = agent_messages(&app, &ai, &incoming, &query, with_memory, AgentCaller::from(own_harness)).await;
+        // The app's own session: what memory found rides beside the
+        // person's prompt of this turn. A plan or summary call is not a turn.
+        if own_harness && with_memory && !crate::memory_session::is_helper_call(&model) {
+            session_block(&app, &ai, &mut msgs, &headers, AgentCaller::OwnSession).await;
+        }
+        msgs
     } else {
         persona_messages(&app, &ai, &incoming, &query, with_memory).await
     };
     // Some chat templates (Mistral/Ministral) accept only ONE system message —
     // coalesce any system messages into a single leading one (order-preserving).
     body["messages"] = Value::Array(fold_same_roles(coalesce_system(messages)));
+    if agent_mode && own_harness && !crate::memory_session::is_helper_call(&model) {
+        crate::llm::note_agent_request(&body);
+    }
     // A model without a projector must not receive image parts: llama-server
     // refuses the whole request ("image input is not supported") and the
     // agent's turn dies with it. Replace each image with a note the model can
@@ -3368,6 +3615,19 @@ async fn mcp_post(
                 let a = &req["params"]["arguments"];
                 let (text, kind, scope) = (a["text"].as_str().unwrap_or(""), a["kind"].as_str().unwrap_or("note"), a["scope"].as_str().unwrap_or("person"));
                 let project_id = if folder.is_empty() { None } else { Some(crate::project_identity::project_identity(std::path::Path::new(&folder))) };
+                // A command or a place stays a row of its scope, given every
+                // time. Anything else the AI asks to keep is a memory item:
+                // marked as kept by this AI, not confirmed, with an undo.
+                if !matches!(kind, "command" | "location") && !agent_key.is_empty() {
+                    let for_project = if scope == "project" { project_id.clone() } else { None };
+                    return match crate::memory_keeping::keep_by_tool(&app, &agent_key, text, for_project.as_deref()).await {
+                        Ok(line) => {
+                            log::info!("[mcp] {} kept an item ({})", agent_label, scope);
+                            mcp_tool_text(&id, line, false)
+                        }
+                        Err(e) => mcp_tool_text(&id, format!("Could not remember that: {e}"), true),
+                    };
+                }
                 return match crate::memory_rows::remember_tool(&app, &agent_key, scope, kind, text, project_id.as_deref()).await {
                     Ok(line) => {
                         log::info!("[mcp] {} remembered a {} ({})", agent_label, kind, scope);
@@ -3408,25 +3668,21 @@ async fn mcp_post(
                     if note.trim().is_empty() {
                         return mcp_tool_text(&id, "Nothing to remember - the note was empty.".to_string(), true);
                     }
-                    // The save writes to the chain (seconds; it once walked
-                    // every AI's records and took minutes), and the agent's
-                    // turn must not wait on it. Answer now, write in the
-                    // background, one write at a time so two notes can
-                    // never race for the same memory conversation. A
-                    // failure is logged app-side; the note is not lost
-                    // silently, it is lost loudly.
+                    // The save writes to the records (seconds), and the
+                    // agent's turn must not wait on it: answer now, write
+                    // in the background, one write at a time. The note
+                    // becomes an item of this project, marked as kept by
+                    // this AI and not confirmed, with an undo; nothing is
+                    // written to the older project memory text.
                     let (app2, key, label, folder2) =
                         (app.clone(), agent_key.clone(), agent_label.clone(), folder.clone());
                     tauri::async_runtime::spawn(async move {
                         let _one_at_a_time = PROJECT_MEMORY_WRITE_LOCK.lock().await;
                         let started = std::time::Instant::now();
-                        match crate::commands_holochain::project_memory_append_note(
-                            &app2, &key, &label, &label, &folder2, &note,
-                        )
-                        .await
-                        {
-                            Ok(()) => log::info!(
-                                "[mcp] {} remembered a note for {} ({} ms, background)",
+                        let project = crate::project_identity::project_identity(std::path::Path::new(&folder2));
+                        match crate::memory_keeping::keep_by_tool(&app2, &key, &note, Some(&project)).await {
+                            Ok(line) => log::info!(
+                                "[mcp] {} kept a note for {} ({} ms, background): {line}",
                                 label, folder2, started.elapsed().as_millis()
                             ),
                             Err(e) => log::warn!(
@@ -3965,6 +4221,7 @@ mod memory_stays_home_tests {
             name: "Reeves".into(),
             model: "auto:offline".into(),
             web_access: true,
+            memory_online: true,
             system_prompt: "CORE. You are {{aiName}}. {{userNameInfo}}".into(),
             use_emojis: false,
             agent_pub_key: String::new(),

@@ -549,6 +549,11 @@ async fn fetch_data_backup(port: u16, device: Option<&str>) -> Result<serde_json
     }
 }
 
+/// Is a listed conversation only another device's copy, held in the Vault?
+fn is_copy(source: Option<&str>) -> bool {
+    source.is_some_and(|s| s.starts_with("copy:"))
+}
+
 /// Everything already on this device, decrypted just enough to dedup:
 /// the set of local conversation started_at values, and a per-agent
 /// conversation count (drives the replace-a-fresh-default rule).
@@ -568,7 +573,10 @@ async fn local_conversation_index(
         // on the dev laptop, 09-07). A stale or missing cache reads live,
         // with the backup's long timeout.
         if crate::conversation_cache::fresh_within(app, &agent, 30 * 24 * 3600) {
-            let cached = crate::conversation_cache::read_cache(app, &agent).unwrap_or_default();
+            // A conversation listed from another device's backup, readable
+            // here only as that copy, is not in this device's records: the
+            // restore is what writes it.
+            let cached: Vec<_> = crate::conversation_cache::read_cache(app, &agent).unwrap_or_default().into_iter().filter(|c| !is_copy(c.source.as_deref())).collect();
             if !cached.is_empty() {
                 counts.insert(agent.clone(), cached.len() as u64);
                 for c in &cached {
@@ -1048,6 +1056,30 @@ async fn restore_backup(
     };
     let key = manager.data_key()?;
 
+    // Memory rows the backup carries (what was kept, its states, subjects,
+    // rules, the person's switches, what is private or not to be used):
+    // folded in beside what the records hold, newest revision of each row
+    // winning. First of all, before any conversation is written back: a
+    // conversation marked private before the backup has its mark again
+    // before it can be read into the search.
+    let (_, memory_rows_restored) = crate::memory_rows::fold_sibling_person_memory(&app, &key, &backup);
+    if memory_rows_restored > 0 {
+        log::info!("[restore] {memory_rows_restored} memory row(s) restored");
+        crate::memory_tidying::words_changed(&app);
+    }
+    let memory_changes_restored = backup["memory_changes"]["raw_b64"]
+        .as_str()
+        .and_then(|b| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.decode(b).ok()
+        })
+        .map(|raw| crate::memory_items::fold_changes(&app, &key, &raw, None))
+        .unwrap_or(0);
+    if memory_changes_restored > 0 {
+        log::info!("[restore] {memory_changes_restored} memory change(s) restored to the log");
+    }
+    let (memory_items_in_backup, memory_rules_in_backup) = crate::memory_rows::counts_in_backup(&key, &backup);
+
     let (mut existing_started, conv_counts) = local_conversation_index(&app, manager, &key).await?;
     // Two more local indexes beside the list cache: what this device has
     // uploaded (the backup sync state) and what it deleted on purpose. A
@@ -1248,6 +1280,21 @@ async fn restore_backup(
         vault_escrow::schedule_full_backup(&app);
     }
 
+    // The note at the top of Memory: when the backup holds memory and this
+    // restore brought something back (rows of memory, or conversations
+    // written here). The rows may have arrived a moment earlier, read from
+    // the same backup while it was still another device's; a restore that
+    // finds everything already here says nothing.
+    let brought_back = memory_rows_restored > 0 || conversations_restored + conversations_preserved > 0;
+    if island.is_none() && brought_back && memory_items_in_backup + memory_rules_in_backup > 0 {
+        write_memory_note(&app, &MemoryBack {
+            at: crate::memory_items::now_ms(),
+            backup_of: backup["exported_at_iso"].as_str().unwrap_or_default().to_string(),
+            items: memory_items_in_backup,
+            rules: memory_rules_in_backup,
+        });
+    }
+
     if let Some(src) = &island {
         log::info!("[restore] island merged ({}): {} conversation(s) joined the identity", src, conversations_restored + conversations_preserved);
     }
@@ -1265,10 +1312,54 @@ async fn restore_backup(
         "missing_objects": missing_objects,
         "missing_records": missing_records,
         "memory_facts_restored": memory_facts_restored,
+        "memory_rows_restored": memory_rows_restored,
+        "memory_changes_restored": memory_changes_restored,
+        "memory_items_in_backup": memory_items_in_backup,
+        "memory_rules_in_backup": memory_rules_in_backup,
         "thumbnails_restored": thumbnails_restored,
         "knowledge_restored": knowledge_restored,
         "documents_restored": corpus_restored,
     }))
+}
+
+/// What a restore brought back to memory, kept until the person has seen
+/// it: when, the day the backup was made, and what it held. Counts and
+/// dates only.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryBack {
+    /// When the restore ran (ms).
+    pub at: i64,
+    /// When the backup was made, as the backup says it.
+    pub backup_of: String,
+    pub items: usize,
+    pub rules: usize,
+}
+
+const MEMORY_BACK_FILE: &str = "memory-restored.json";
+
+fn memory_note_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    crate::profile::root(app).ok().map(|r| r.join(MEMORY_BACK_FILE))
+}
+
+fn write_memory_note(app: &tauri::AppHandle, note: &MemoryBack) {
+    if let (Some(path), Ok(json)) = (memory_note_path(app), serde_json::to_vec(note)) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+/// The note a restore left about memory, until it is marked seen.
+#[tauri::command]
+pub fn memory_restore_note(app: tauri::AppHandle) -> Option<MemoryBack> {
+    serde_json::from_slice(&std::fs::read(memory_note_path(&app)?).ok()?).ok()
+}
+
+/// The person has seen the note: it is not shown again.
+#[tauri::command]
+pub fn memory_restore_note_seen(app: tauri::AppHandle) {
+    if let Some(path) = memory_note_path(&app) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// Whether the per-AI memory index needs a rebuild (marker left by a

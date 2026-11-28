@@ -344,6 +344,9 @@ export interface TurnMemory {
   /** The passages given, as text (one per exchange of `given`, then any
    *  dated lines). In memory only, for the quote check and the panel. */
   givenTexts: string[];
+  /** The person said, in fixed words, to keep something: the exchange
+   *  before, or this message. Kept once the turn is recorded. */
+  remember?: "before" | "this" | null;
 }
 
 export type { WhyNot, ReplyLine } from "./givenLine";
@@ -354,9 +357,17 @@ export interface TurnRoom {
   windowTokens?: number | null;
   /** Tokens left after the system prompt, the history and the reply. */
   roomTokens?: number | null;
+  /** The local model file the reply will come from: what is found is
+   *  sized to how fast it reads on this computer. */
+  model?: string | null;
+  /** The person asked memory to look further: everything found is given,
+   *  whatever the wait. */
+  further?: boolean;
   online: boolean;
   /** The person's question before this one in the open conversation. */
   previousQuestion?: string | null;
+  /** "Share memory with this AI" (an online AI's switch). Absent: shared. */
+  memoryShared?: boolean;
 }
 
 /**
@@ -378,6 +389,11 @@ export async function memoryForTurn(
      *  this room. Absent: only the system part is built (the early call of
      *  a turn, before the model is chosen; the warm-up). */
     room?: TurnRoom;
+    /** For the early call, which has no room yet: may this turn be answered
+     *  off this computer, and has the person left sharing on for this AI.
+     *  With sharing off for an AI that may answer elsewhere, nothing memory
+     *  holds is in the system part (their rules still are). */
+    sharing?: { online: boolean; memoryShared: boolean };
   },
 ): Promise<TurnMemory> {
   // Bound on the query embedding so a cold/slow/stuck embed server can
@@ -401,8 +417,11 @@ export async function memoryForTurn(
       skipSearch: !opts?.room,
       windowTokens: opts?.room?.windowTokens || null,
       roomTokens: opts?.room?.roomTokens ?? null,
-      online: opts?.room?.online ?? false,
+      model: opts?.room?.model ?? null,
+      further: opts?.room?.further ?? false,
+      online: opts?.room?.online ?? opts?.sharing?.online ?? false,
       previousQuestion: opts?.room?.previousQuestion ?? null,
+      memoryShared: opts?.room?.memoryShared ?? opts?.sharing?.memoryShared ?? null,
       // The open conversation is sent whole with the turn.
       onWireFrom: 0,
     },
@@ -416,21 +435,13 @@ export async function memoryForTurn(
 
 const PAUSED_KEY = "yoai-memory-paused";
 
-/** Is remembering paused? (extraction skips while paused; injection still uses
- *  what's already there). */
+/** The switch of releases before memory was rebuilt, as this device left
+ *  it: read once by the update, which carries it over as "tidying off". */
 export function isMemoryPaused(): boolean {
   try {
     return localStorage.getItem(PAUSED_KEY) === "1";
   } catch {
     return false;
-  }
-}
-
-export function setMemoryPaused(paused: boolean): void {
-  try {
-    localStorage.setItem(PAUSED_KEY, paused ? "1" : "0");
-  } catch {
-    /* ignore */
   }
 }
 
@@ -444,7 +455,7 @@ export function setMemoryPaused(paused: boolean): void {
  * (many live at once by design; they are never superseded).
  */
 function restoreOrphanedPredecessors(facts: Fact[]): boolean {
-  const key = (f: Fact) => `${f.subject} ${f.predicate}`;
+  const key = (f: Fact) => `${f.subject}\u0000${f.predicate}`;
   const live = new Set(facts.filter((f) => f.valid_to == null).map(key));
   const newestOrphan = new Map<string, Fact>();
   for (const f of facts) {
@@ -600,6 +611,77 @@ export function keepNearBest<T extends { score: number }>(
   return hits.filter((h) => h.score >= best - margin);
 }
 
+/** A note changed more recently than everything chosen keeps a place. An
+ *  older note that discusses a subject at length scores far above the
+ *  current note that states today's value in one row, and by scores alone
+ *  the older one would be the only voice. Looked for among the first
+ *  NEWER_AMONG found, no further than NEWER_WITHIN below the best match,
+ *  and at most NEWER_AT_MOST of them, one passage a document. Only into
+ *  room the chosen passages left: where a library is large the scores lie
+ *  close together and the places are full, and there the scores decide (a
+ *  note edited today would otherwise ride along with every question). */
+export const NEWER_AMONG = 12;
+export const NEWER_WITHIN = 0.25;
+export const NEWER_AT_MOST = 2;
+
+/** `chosen` with the newer notes' passages added (`found` is everything the
+ *  search returned, best first), up to `room` passages in all. */
+export function withNewerNotes<T extends { score: number; as_of: number; doc_id: string }>(
+  chosen: T[],
+  found: T[],
+  room: number,
+): T[] {
+  if (chosen.length === 0 || room <= 0) return chosen;
+  const day = (h: T) => Math.floor(h.as_of / 86_400);
+  const newest = Math.max(...chosen.map(day));
+  const best = Math.max(...chosen.map((h) => h.score));
+  const added: T[] = [];
+  for (const h of found.slice(0, NEWER_AMONG)) {
+    if (added.length >= Math.min(NEWER_AT_MOST, room - chosen.length)) break;
+    if (chosen.includes(h) || h.score < best - NEWER_WITHIN || day(h) <= newest) continue;
+    if (added.some((a) => a.doc_id === h.doc_id)) continue;
+    added.push(h);
+  }
+  return added.length === 0 ? chosen : [...chosen, ...added];
+}
+
+/** The question's own words count beside its meaning. A search by
+ *  meaning alone ranks a long discussion of a subject above the one row
+ *  that holds the figure asked for; a passage that also carries the
+ *  question's rarer words is the likelier answer. The first WORDS_AMONG
+ *  found are put in a new order: the meaning score plus up to WORDS_WEIGHT
+ *  for the question's words a passage holds, a word counting for more the
+ *  fewer of these passages hold it. A question with no telling words (or in
+ *  a script these rules do not split) leaves the order as it was. */
+export const WORDS_AMONG = 60;
+export const WORDS_WEIGHT = 0.2;
+
+const QUESTION_STOP = new Set(
+  "a an the is are was were be do does did how what when where which who why many much of on in at to for from by with and or our we us it its that this have has had can one there their they them as so than then into over under about per not".split(" "),
+);
+
+function tellingWords(text: string): Set<string> {
+  return new Set((text.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}_.-]*/gu) ?? []).map((w) => w.replace(/[.\-_]+$/, "")).filter((w) => w.length > 1 && !QUESTION_STOP.has(w)));
+}
+
+/** `found` (best meaning first) in the order of meaning and words
+ *  together; each with the score it was ordered by. */
+export function byMeaningAndWords<T extends { score: number; text: string }>(found: T[], question: string): { hit: T; score: number }[] {
+  const pool = found.slice(0, WORDS_AMONG);
+  const asked = tellingWords(question);
+  const held = pool.map((h) => tellingWords(h.text));
+  const weight = new Map<string, number>();
+  for (const w of asked) {
+    const n = held.filter((h) => h.has(w)).length;
+    weight.set(w, Math.log(1 + (pool.length - n + 0.5) / (n + 0.5)));
+  }
+  const match = held.map((h) => [...asked].reduce((sum, w) => sum + (h.has(w) ? weight.get(w) ?? 0 : 0), 0));
+  const most = Math.max(0, ...match);
+  return pool
+    .map((hit, i) => ({ hit, score: hit.score + (most > 0 ? (WORDS_WEIGHT * match[i]) / most : 0) }))
+    .sort((a, b) => b.score - a.score);
+}
+
 /**
  * The text to ALSO search by when a message leans on the conversation: a
  * follow-up ("and the updated quote?", "what about the second one?") names
@@ -626,6 +708,13 @@ export async function loadDocumentContext(
   return (await loadDocumentContextUsed(aiId, queryVec, roomTokens, maxPassages, followUpVec)).text;
 }
 
+/** The day a document's file last changed, as YYYY-MM-DD (from seconds); empty when unknown. */
+export function documentDay(seconds: number | undefined): string {
+  if (!seconds || seconds <= 0) return "";
+  const d = new Date(seconds * 1000);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 /** The same block, WITH which documents' passages went into it - so the
  *  reply's Sources can say what the AI was given. Only documents with a
  *  matched passage are listed (every granted document is also named to the
@@ -637,14 +726,25 @@ export async function loadDocumentContextUsed(
   maxPassages = 8,
   followUpVec: number[] | null = null,
   bestAtLeast: number = RECALL_BEST_AT_LEAST,
+  /** The question as typed: its words count beside its meaning. */
+  question = "",
 ): Promise<{ text: string; used: import("../types").LibraryDocGiven[] }> {
   const none = { text: "", used: [] };
   if (!aiId || roomTokens <= 0) return none;
   try {
     const { corpusRecall, corpusDocuments } = await import("./corpus");
-    const docs = (await corpusDocuments(aiId)).slice(0, 40);
-    if (docs.length === 0) return none;
+    const all = await corpusDocuments(aiId);
+    if (all.length === 0) return none;
+    // A small library is listed by name, so the AI knows what it holds. A
+    // large one is not: forty names out of hundreds say nothing true about
+    // the rest and take room from the passages. Its count is given, and the
+    // cards of the documents whose passages matched.
+    const LISTED = 40;
+    const large = all.length > LISTED;
+    const docs = large ? [] : all;
     const used: import("../types").LibraryDocGiven[] = [];
+    let differentDays = false;
+    let newest = "";
     const tokens = (t: string) => Math.ceil(t.length / 4);
     const label = (d: (typeof docs)[number]) =>
       `"${d.meta.title || d.meta.filename}"${d.meta.mine ? " (written by you)" : ""}`;
@@ -666,17 +766,22 @@ export async function loadDocumentContextUsed(
         break;
       }
     }
-    let block = `[From your documents]\nThis AI has ${docs.length === 1 ? "one document" : `${docs.length} documents`} from your library:\n${cards}\n`;
+    let block = large
+      ? `[From your documents]\nThis AI has ${all.length} documents from your library.\n`
+      : `[From your documents]\nThis AI has ${docs.length === 1 ? "one document" : `${docs.length} documents`} from your library:\n${cards}\n`;
 
     const room = Number.isFinite(roomTokens) ? roomTokens - tokens(cards) : Number.POSITIVE_INFINITY;
     const passages = Number.isFinite(room) ? Math.max(0, Math.min(maxPassages, Math.floor(room / 300))) : maxPassages;
     if (queryVec && passages > 0) {
-      let hits = await corpusRecall(aiId, queryVec, passages);
+      // More is asked for than is given: the rest is where a newer note is
+      // looked for (withNewerNotes).
+      const asked = Math.max(passages, NEWER_AMONG, question ? WORDS_AMONG : 0);
+      let hits = await corpusRecall(aiId, queryVec, asked);
       if (followUpVec) {
         // The message alone AND the message in its conversation: a question
         // that stands by itself still wins on its own words; a follow-up is
         // found through what it follows.
-        const more = await corpusRecall(aiId, followUpVec, passages);
+        const more = await corpusRecall(aiId, followUpVec, asked);
         const seen = new Set<string>();
         hits = [...hits, ...more]
           .sort((a, b) => b.score - a.score)
@@ -686,8 +791,11 @@ export async function loadDocumentContextUsed(
             seen.add(k);
             return true;
           })
-          .slice(0, passages);
+          .slice(0, asked);
       }
+      const everyFound = hits;
+      const bestMeaning = hits.length ? hits[0].score : 0;
+      hits = hits.slice(0, passages);
       // Only what is CLOSE to the best match. The floor alone lets almost
       // anything through (unrelated text scores 0.45-0.6 with this embedding
       // model; one question had 176 passages above it), and recall fills every
@@ -695,7 +803,14 @@ export async function loadDocumentContextUsed(
       // unrelated one. A passage has to be within RECALL_MARGIN of the top.
       const found = hits.length;
       const top = found ? Math.max(...hits.map((h) => h.score)) : 0;
-      hits = keepNearBest(hits, RECALL_MARGIN, bestAtLeast);
+      if (question && bestMeaning >= bestAtLeast) {
+        // Meaning and the question's words together choose the passages;
+        // the bar on the best match stays on meaning alone.
+        const ranked = byMeaningAndWords(everyFound, question).slice(0, passages);
+        hits = withNewerNotes(keepNearBest(ranked, RECALL_MARGIN, 0).map((r) => r.hit), everyFound, passages);
+      } else {
+        hits = withNewerNotes(keepNearBest(hits, RECALL_MARGIN, bestAtLeast), everyFound, passages);
+      }
       // Scores only, never a name or a passage - for tuning the two numbers.
       console.log(
         `[Memory] documents: best match ${top.toFixed(2)} (bar ${bestAtLeast}) - ${hits.length} of ${found} passages given`,
@@ -704,23 +819,37 @@ export async function loadDocumentContextUsed(
         uiLog(`documents: best match ${top.toFixed(2)}, bar ${bestAtLeast} - ${hits.length} of ${found} passages given`),
       ).catch(() => {});
       if (hits.length > 0) {
-        const byDoc = new Map<string, { name: string; texts: string[]; best: number }>();
+        const byDoc = new Map<string, { name: string; texts: string[]; idx: number[]; best: number; asOf: number; summary?: string }>();
         for (const h of hits) {
           // One name per document, the one its card uses (title, else file name).
-          const known = docs.find((x) => x.doc_id === h.doc_id);
+          const known = all.find((x) => x.doc_id === h.doc_id);
           const name = known?.meta.title || known?.meta.filename || h.filename;
-          const d = byDoc.get(h.doc_id) ?? { name, texts: [], best: 0 };
+          const d = byDoc.get(h.doc_id) ?? { name, texts: [], idx: [], best: 0, asOf: 0, summary: known?.meta.summary };
           d.texts.push(h.text);
+          d.idx.push(h.idx);
           d.best = Math.max(d.best, h.score);
+          d.asOf = Math.max(d.asOf, h.as_of ?? 0);
           byDoc.set(h.doc_id, d);
         }
         for (const [doc_id, d] of byDoc) {
-          used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts });
+          used.push({ doc_id, name: d.name, passages: d.texts.length, best: Math.round(d.best * 100) / 100, texts: d.texts, idx: d.idx, asOf: d.asOf || undefined });
         }
         block += "\nPassages that match this question:\n";
+        // When the days differ, the newest is said in words: a model given
+        // only dates has called the older of two the more recent.
+        const days = [...byDoc.values()].map((d) => documentDay(d.asOf)).filter(Boolean);
+        const newestDay = new Set(days).size > 1 ? [...days].sort().slice(-1)[0] : "";
+        const newestDocs = newestDay ? [...byDoc.values()].filter((d) => documentDay(d.asOf) === newestDay) : [];
+        if (newestDocs.length === 1) newest = newestDocs[0].name;
         for (const d of byDoc.values()) {
-          block += `Document "${d.name}":\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
+          // A document is a source with a date, like a conversation: the day
+          // its file last changed.
+          const day = documentDay(d.asOf);
+          const what = large && d.summary ? ` (${d.summary.match(/^[^.!?]*[.!?]/)?.[0] ?? d.summary.slice(0, 160)})` : "";
+          const mark = newestDocs.length === 1 && d === newestDocs[0] ? ", the most recently changed of these" : "";
+          block += `Document "${d.name}"${day ? `, last changed ${day}${mark}` : ""}${what}:\n` + d.texts.map((t) => `- ${t}`).join("\n") + "\n";
         }
+        if (new Set([...byDoc.values()].map((d) => documentDay(d.asOf)).filter(Boolean)).size > 1) differentDays = true;
       }
     }
     // The closing instruction depends on what the block holds. With matched
@@ -729,8 +858,10 @@ export async function loadDocumentContextUsed(
     // model told "use these" worked a document into an answer about the sky
     // (2026-10-12). The quality matrix leg checks both shapes.
     block += used.length > 0
-      ? "\nUse these passages when they answer the question, and say which document they came from."
-      : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
+      ? `\nUse these passages when they answer the question, and say which document they came from.${differentDays ? ` Where two documents disagree, the one changed more recently is the current one${newest ? `: of these, that is "${newest}"` : ""}.` : ""}`
+      : large
+        ? "\nNo passage of them matched this question. Do not mention the documents unless the question is about them."
+        : "\nThese are only the names of the documents this AI holds. Do not mention or use them unless the question is about one of them or about the documents themselves.";
     return { text: block, used };
   } catch (e) {
     console.warn("[Memory] document context skipped:", e);

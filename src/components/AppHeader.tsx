@@ -29,7 +29,7 @@ import {
   LuPuzzle,
 } from "@qwikest/icons/lucide";
 
-import { ThemeContext, ProjectMemoryContext, type AppTheme } from "../routes/layout";
+import { ThemeContext, type AppTheme } from "../routes/layout";
 import {
   fetchUsage,
   formatUsage,
@@ -156,6 +156,19 @@ export default component$<AppHeaderProps>(
 
     // Controls visibility of the custom dropdown menu
     const menuOpen = useSignal(false);
+    /** Changes memory made by itself since the person last looked at them. */
+    const memoryUnseen = useSignal(0);
+    // eslint-disable-next-line qwik/no-use-visible-task
+    useVisibleTask$(async ({ track }) => {
+      track(() => menuOpen.value);
+      if (!menuOpen.value) return;
+      try {
+        const { unseenChanges } = await import("../utils/memoryKeep");
+        memoryUnseen.value = await unseenChanges();
+      } catch {
+        memoryUnseen.value = 0;
+      }
+    });
     // The workspace slot's recents menu.
     const folderMenuOpen = useSignal(false);
     const workspaceMenuOpen = useSignal(false);
@@ -178,7 +191,6 @@ export default component$<AppHeaderProps>(
     });
     // The project-memory modal lives at the layout root (route stacking
     // contexts would bury it here) - this signal opens it.
-    const memoryFolder = useContext(ProjectMemoryContext);
 
     // Optional online-usage ticker (Settings -> Your Flowsta Account, OFF by
     // default). Polls only while enabled; hides itself signed-out or on free.
@@ -540,7 +552,11 @@ export default component$<AppHeaderProps>(
                           data-testid="open-project-memory"
                           onClick$={() => {
                             workspaceMenuOpen.value = false;
-                            memoryFolder.value = folderPath;
+                            // Memory opens on this project.
+                            void import("../utils/memoryProject").then(async ({ openProjectMemory }) => {
+                              await openProjectMemory(folderPath);
+                              await nav("/your-memory/");
+                            });
                           }}
                           class={`flex flex-col items-center justify-center gap-1.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] px-3 py-3.5 text-xs text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] active:scale-[0.98] cursor-pointer ${onCloseFolder$ ? '' : 'col-span-2'}`}
                         >
@@ -930,6 +946,11 @@ export default component$<AppHeaderProps>(
                   >
                     <LuBrain class="mr-2 h-5 w-5" aria-hidden="true" />
                     Your Memory
+                    {memoryUnseen.value > 0 && (
+                      <span class="ml-auto rounded-full bg-[var(--bg-dropdown-hover)] px-2 py-0.5 text-xs text-[var(--text-dropdown)]" data-testid="menu-memory-unseen" title="Changes memory made by itself that you have not looked at">
+                        {memoryUnseen.value}
+                      </span>
+                    )}
                   </button>
                 </div>
                 <div class="py-1">

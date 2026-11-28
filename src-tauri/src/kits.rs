@@ -24,7 +24,7 @@ pub const KIT_06: KitDescriptor = KitDescriptor {
         KitFile { name: "yourown_ai_transcript_v1_happ.happ", sha256: "d430328dbdaf5578e8d849a3a4e61808ecc9a68e88f98485b1cf17013b33436f" },
         // The coordinator the v1 cells run (dna.rs COORDINATOR_VERSION): a
         // new one changes this hash, and the test below says so.
-        KitFile { name: "transcript_coordinator.wasm", sha256: "ccb3dba9710ee68807d70eb222b024b5ab3bec3828162989f9a20ffdd7057857" },
+        KitFile { name: "transcript_coordinator.wasm", sha256: "90ba8a069d0f471a964b1f0af395bfecf40433af9ccfe007e31691e2528f4655" },
     ],
 };
 
@@ -33,7 +33,11 @@ pub const KIT_07: KitDescriptor = KitDescriptor {
     line: Line::V07,
     conductor: KitBinary { sidecar: "yourowai-holochain-07", version: "0.7.1", accepted: &[] },
     lair: KitBinary { sidecar: "yourowai-lair-keystore-07", version: "0.7.1", accepted: &[] },
-    files: &[KitFile { name: crate::hc07::HAPP_FILENAME, sha256: crate::hc07::HAPP_SHA256 }],
+    files: &[
+        KitFile { name: crate::hc07::HAPP_FILENAME, sha256: crate::hc07::HAPP_SHA256 },
+        // The coordinator the v2 cells are brought to at each start.
+        KitFile { name: crate::hc07::COORDINATOR_FILENAME, sha256: crate::hc07::COORDINATOR_SHA256 },
+    ],
 };
 
 /// Where the Holochain sidecars are: next to the app, or `src-tauri/binaries`

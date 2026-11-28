@@ -34,6 +34,11 @@ export interface UserDefinedAI {
   /** May this AI reach the web (read pages on this computer; search on a plan with online models)?
    *  On unless turned off - "offline only" is about which models answer, not about the web. */
   webAccess?: boolean;
+  /** "Share memory with this AI", for an AI that runs online: what memory finds for a question
+   *  goes with the message unless this is turned off. On unless turned off. */
+  memoryOnline?: boolean;
+  /** The one line about memory and an online AI has been shown for this AI. */
+  memoryOnlineLineSeen?: boolean;
   agentPubKey?: string;  // Holochain agent public key (set on first provisioning)
   /** The AI's address on the person's network: the first agent key it ever had. Every device of the
    *  person lists this AI's conversations at this key; each device's own agent (agentPubKey) writes
@@ -195,6 +200,10 @@ export interface Message {
   buildOffer?: boolean;
   /** Pages were read by the chat itself and the Build helper is installed: "Dig deeper" hands the question to the agent. */
   digDeeper?: boolean;
+  /** Memory gave this reply only the closest of what it found and the
+   *  reply used none of it: "Look further" asks the question (kept here)
+   *  again with everything found. */
+  lookFurther?: { question: string };
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a
@@ -545,4 +554,8 @@ export interface LibraryDocGiven {
   best: number;
   /** In memory only (never recorded): the passages as the model saw them. */
   texts?: string[];
+  /** Which passages of the document were given, by their number in it. */
+  idx?: number[];
+  /** The day the document's file last changed (seconds). */
+  asOf?: number;
 }

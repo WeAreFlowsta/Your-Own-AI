@@ -11,7 +11,8 @@ export type WhyNot =
   | "timed_out"
   | "vault_locked"
   | "index_rebuilding"
-  | "switched_off_for_this_ai";
+  | "switched_off_for_this_ai"
+  | "off_on_this_computer";
 
 export type ReplyLine =
   | { kind: "given"; passages: number }
@@ -35,6 +36,7 @@ export function whyNotWords(why: WhyNot): string {
     case "vault_locked": return "your Vault is locked";
     case "index_rebuilding": return "the search index is being rebuilt";
     case "switched_off_for_this_ai": return "memory is switched off for this AI";
+    case "off_on_this_computer": return "memory is turned off on this computer";
   }
 }
 
@@ -65,10 +67,73 @@ export function givenLineWords(line: ReplyLine, ai: string): LineWords {
       return { label: searched, text: `No conversation ${ai} can use mentions ${list}.`, show: true, readRest: false };
     }
     case "did-not-look":
+      if (line.why === "switched_off_for_this_ai") {
+        return { label: null, text: `Memory is not shared with ${ai}. ${ai} answered from this conversation only, without looking at your earlier conversations. Your rules were still sent.`, show: false, readRest: false };
+      }
+      if (line.why === "off_on_this_computer") {
+        return { label: null, text: `Memory is turned off on this computer, so ${ai} answered without looking at your earlier conversations. Your conversations are still kept, and your rules were still sent.`, show: false, readRest: false };
+      }
       return { label: null, text: `${ai} answered without looking at your earlier conversations: ${whyNotWords(line.why)}.`, show: false, readRest: false };
     case "withheld":
       return { label: searched, text: `${ai} cannot use ${line.conversations} ${line.conversations === 1 ? "conversation" : "conversations"} you had with another AI that ${line.conversations === 1 ? "mentions" : "mention"} this.`, show: true, readRest: false };
   }
+}
+
+/** What went with a message that left this computer, as its reply's record holds it. */
+export interface Sent {
+  passages: number;
+  lines: number;
+  note: boolean;
+  /** Lines the person keeps about themselves, sent with every message. */
+  about?: number;
+  /** Found messages kept on this computer because they are about the person's health. */
+  held?: number;
+}
+
+/** "2 more were found and kept on this computer, because they are about your health." */
+export function heldWords(held: number | undefined): string {
+  if (!held) return "";
+  return held === 1
+    ? " 1 more was found and kept on this computer, because it is about your health."
+    : ` ${held} more were found and kept on this computer, because they are about your health.`;
+}
+
+/** Did anything from memory go with the message? */
+export const sentAnything = (sent: Sent) => sent.passages + sent.lines + (sent.about ?? 0) > 0 || sent.note;
+
+/** Where a reply was made, from its recorded model. */
+export function whereWords(servedBy: string): string {
+  return servedBy.startsWith("external:") ? `your server (${servedBy.slice(9)})` : servedBy.startsWith("online:") ? `${servedBy.slice(7)}, online` : "an online model";
+}
+
+/** The line shown once, under the first reply for which memory went with
+ *  a message to an AI that answers elsewhere. `changed`: the AI was here
+ *  before memory was rebuilt, so what it is sent is different now. */
+export function firstSentWords(ai: string, servedBy: string, changed: boolean): string {
+  if (changed) {
+    return `What ${ai} is sent from memory has changed. It is now what memory finds for each question you ask. The list of facts and the short description of you are no longer sent.`;
+  }
+  return `${ai} runs online, so what memory found for your question was sent to ${whereWords(servedBy)} with your message. The Memory button on each reply shows exactly what was sent.`;
+}
+
+/** The sentence that says what memory sent with a message to a model that
+ *  runs elsewhere. `servedBy` is the reply's model as recorded
+ *  ("online:<name>" or "external:<name>"). */
+export function sentWords(sent: Sent, servedBy: string): string {
+  const where = whereWords(servedBy);
+  const n = sent.passages + sent.lines;
+  const about = sent.about ?? 0;
+  if (!sentAnything(sent)) {
+    if (sent.held) return `Nothing from memory was sent. Only this conversation and your rules went to ${where}.${heldWords(sent.held)}`;
+    return `Nothing from memory was sent. Memory found nothing for this question. Only this conversation and your rules went to ${where}.`;
+  }
+  const parts = [
+    n > 0 ? `${passages(n)} from your conversations` : "",
+    sent.note ? "what memory holds now" : "",
+    about > 0 ? `${about} ${about === 1 ? "thing" : "things"} you keep about yourself` : "",
+  ].filter(Boolean);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+  return `Sent to ${where}. With your question: ${what}.${heldWords(sent.held)}`;
 }
 
 /** "March 3" from "2026-03-03" (the year too when it is not this one). */
@@ -78,4 +143,28 @@ export function dayWords(day: string, thisYear: number = new Date().getFullYear(
   const months = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const text = `${months[Number(m[2]) - 1] ?? m[2]} ${Number(m[3])}`;
   return Number(m[1]) === thisYear ? text : `${text}, ${m[1]}`;
+}
+
+/** Whether a reply has something to say about memory, and so gets the
+ *  Memory button among its others. Nothing shows at rest: pressing the
+ *  button opens what was sent, what was given, or why memory did not
+ *  look. No button when memory looked and found nothing: the reply stands
+ *  by itself, and what the search did is still under the Model button. */
+export function hasMemoryToShow(line: ReplyLine | undefined | null, sent: Sent | undefined): boolean {
+  // Made off this computer: what went with the question, or was held back.
+  if (sent && (sentAnything(sent) || sent.held)) return true;
+  if (!line) return false;
+  switch (line.kind) {
+    case "given":
+    case "quoted-none":
+    case "withheld":
+    case "did-not-look":
+      return true;
+    case "did-not-fit":
+      return line.given > 0;
+    case "read-so-far":
+      return line.found > 0;
+    case "no-mention":
+      return false;
+  }
 }

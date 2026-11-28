@@ -14,6 +14,7 @@
  *
  * One run at a time; safe to trigger from any surface.
  */
+import { whileAsking } from "./personAsking";
 import { invoke } from "@tauri-apps/api/core";
 import { runUtilityTask, isUtilityModelReady } from "./utilityModel";
 import { corpusDocuments, corpusDocumentText, corpusSetSummary, type DocRecord } from "./corpus";
@@ -89,15 +90,39 @@ function notifyCardProgress(done: number, total: number, file: string, partDone?
 }
 
 /** The model that writes on this device, or null when there is none. */
+/**
+ * Which model writes a card. The chat model that is loaded, when it has
+ * passed the memory check on this computer: it is already in memory (often
+ * on the graphics card) and writes a better card than the helper. Else the
+ * helper model. Else whatever local model is loaded. Never an online one.
+ */
 async function localWriter(): Promise<{ model?: string; preferLoaded: boolean } | null> {
-  if (await isUtilityModelReady()) return { preferLoaded: false };
+  let loaded: string | null = null;
   try {
-    const loaded = await invoke<string | null>("get_current_model");
-    if (loaded && loaded.endsWith(".gguf")) return { model: loaded, preferLoaded: true };
+    loaded = await invoke<string | null>("get_current_model");
   } catch {
     /* unknown loaded state */
   }
-  return null;
+  const local = loaded && loaded.endsWith(".gguf") ? loaded : null;
+  if (local) {
+    const passed = await invoke<{ model: string | null; result: { may_keep: boolean } | null }>("memory_check_status").then(
+      (s) => s.model === local && !!s.result?.may_keep,
+      () => false,
+    );
+    if (passed) return { model: local, preferLoaded: true };
+  }
+  if (await isUtilityModelReady()) return { preferLoaded: false };
+  return local ? { model: local, preferLoaded: true } : null;
+}
+
+/** Cards wait while the library is doing a job of its own (a folder being
+ *  read, documents being added): both would want the same processor. */
+async function waitForLibrary(): Promise<void> {
+  for (;;) {
+    const busy = await invoke<string | null>("corpus_busy").catch(() => null);
+    if (!busy) return;
+    await new Promise((r) => setTimeout(r, 20_000));
+  }
 }
 
 function usable(text: string): string {
@@ -141,7 +166,7 @@ async function writeCard(
   const { text } = await corpusDocumentText(doc.doc_id, FETCH_CHARS);
   const head = `Document: "${doc.meta.title || doc.meta.filename}"${doc.meta.author ? ` by ${doc.meta.author}` : ""}`;
   const run = (system: string, user: string, maxTokens: number) =>
-    runUtilityTask(system, user, undefined, maxTokens, writer.model, 120_000, writer.preferLoaded);
+    runUtilityTask(system, user, undefined, maxTokens, writer.model, 120_000, writer.preferLoaded, true);
   // A note of a line or two is its own card: asked to describe almost
   // nothing, a model invents (a 34-byte note came back as "practical video
   // creation tips tailored for self-taught AI developers"). Show its words.
@@ -156,6 +181,13 @@ async function writeCard(
   // The reduce pass counts as one more step, so the bar reaches the end
   // only when the card itself is written.
   for (const [i, part] of parts.entries()) {
+    // A long document's card is many steps: between them the computer is
+    // asked again, so a card under way steps aside when the person comes
+    // back (their question's search shares this processor).
+    if (i > 0) {
+      await whileAsking();
+      await waitForCalm(CARDS_JOB);
+    }
     onPart?.(i, parts.length + 1);
     const note = (await run(PART_SYSTEM, `${head} (part ${i + 1})\n\n${part}`, 120)).trim();
     if (note) notes.push(`Part ${i + 1}: ${note}`);
@@ -181,6 +213,8 @@ export function summarizePendingDocuments(): Promise<void> {
         const at = index++;
         // A card is model work nobody waits on: only while the computer is
         // idle (machine.ts); the Activity tray says it waits.
+        await waitForLibrary();
+        await whileAsking();
         await waitForCalm(CARDS_JOB);
         notifyCardProgress(at, pending.length, doc.meta.filename);
         try {

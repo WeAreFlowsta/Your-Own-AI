@@ -1,3 +1,4 @@
+import { moreMemoryControls, setMoreMemoryControls } from "../../utils/memoryMore";
 import { loadedModelNow } from "../../utils/loadedModel";
 import { getAgentView, setAgentView } from "../../utils/agentView";
 import {
@@ -24,13 +25,6 @@ import ExternalAccess from "../../components/ExternalAccess";
 import ConfirmModal from "../../components/ConfirmModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
 import { helpTipsEnabled, setHelpTipsEnabled, resetHelpDismissals } from "../../utils/helpPrefs";
-import {
-  getRememberScope,
-  setRememberScope,
-  type RememberScope,
-  type RememberSurface,
-} from "../../utils/rememberText";
-import { isMemoryPaused, setMemoryPaused } from "../../utils/memory";
 import { downloadUpdateNow, setAutoUpdates, updateStatus, type WaitingUpdate } from "../../utils/updates";
 import {
   ensureMedicalModel,
@@ -219,60 +213,6 @@ const SettingToggle = component$<{
   );
 });
 
-/** Where one "Remember this" surface saves to: that AI only, or the shared
- *  notes every AI can draw on. Same two-option grid as the Routing pickers. */
-const RememberDestinationPicker = component$<{
-  title: string;
-  hint: string;
-  surface: RememberSurface;
-  scope: Signal<RememberScope>;
-}>((props) => {
-  const options: { id: RememberScope; label: string; hint: string }[] = [
-    {
-      id: "per-ai",
-      label: "That AI only",
-      hint: "Stays with the AI you were talking to - never surfaces anywhere else",
-    },
-    {
-      id: "global",
-      label: "All your AIs",
-      hint: "Saved to your shared notes - any AI can draw on it",
-    },
-  ];
-  return (
-    <div>
-      <h4 class="text-base font-semibold text-[var(--text-primary)]">{props.title}</h4>
-      <p class="text-sm text-[var(--text-secondary)] mt-1 mb-3">{props.hint}</p>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {options.map((opt) => (
-          <button
-            key={opt.id}
-            onClick$={() => {
-              props.scope.value = opt.id;
-              setRememberScope(props.surface, opt.id);
-            }}
-            class={`text-left rounded-xl p-3 border transition-colors ${
-              props.scope.value === opt.id
-                ? "bg-[var(--bg-button-primary)] text-[var(--text-button-primary)] border-[var(--border-subtle)]"
-                : "bg-[var(--bg-main)] text-[var(--text-primary)] border-[var(--border-subtle)] hover:opacity-90"
-            }`}
-            aria-pressed={props.scope.value === opt.id}
-          >
-            <div class="font-semibold text-sm">{opt.label}</div>
-            <div
-              class={`text-xs mt-1 ${
-                props.scope.value === opt.id ? "" : "text-[var(--text-secondary)]"
-              }`}
-            >
-              {opt.hint}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-});
-
 export default component$(() => {
   const nav = useNavigate();
   // Where the person came from (Add-ons > Components -> Engines, etc.): one
@@ -351,11 +291,14 @@ export default component$(() => {
   // "Run in your terminal" behavior: default = pre-filled, Enter to run.
   const terminalRunImmediately = useSignal(false);
   const currentModel = useSignal<string | null>(null);
-  const rememberScopeSelection = useSignal<RememberScope>("per-ai");
-  const rememberScopeReply = useSignal<RememberScope>("per-ai");
-  // "Automatic learning" = NOT paused (the toggle reads positively; the
-  // stored flag is the pause, shared with the Your Memory page).
+  // On = memory keeps what is settled and tidies by itself. The switch is
+  // the one the Memory page's tidying line turns: one row, for all the
+  // person's devices.
   const memoryLearning = useSignal(true);
+  // Further memory controls on the screens: off unless turned on here.
+  const memoryMore = useSignal(false);
+  // Replies on this computer look in memory (this computer only).
+  const memoryInReplies = useSignal(true);
   // The one online dial ("How much goes online"); frontier-first by default.
   const routingShare = useSignal<"frontier" | "balanced" | "local">("frontier");
   const shareRecent = useSignal<{ online: number; total: number } | null>(null);
@@ -492,9 +435,15 @@ export default component$(() => {
       )
       .then((present) => (buildInstalled.value = present))
       .catch(() => (buildInstalled.value = false));
-    rememberScopeSelection.value = getRememberScope("selection");
-    rememberScopeReply.value = getRememberScope("reply");
-    memoryLearning.value = !isMemoryPaused();
+    memoryMore.value = moreMemoryControls();
+    import("@tauri-apps/api/core")
+      .then(({ invoke }) => invoke<{ state: string }>("memory_tidy_status"))
+      .then((t) => (memoryLearning.value = t.state !== "off"))
+      .catch(() => { /* not signed in or still starting: the switch shows on */ });
+    import("../../utils/memoryKeep")
+      .then(({ memoryInReplies: read }) => read())
+      .then((on) => (memoryInReplies.value = on))
+      .catch(() => { /* still starting: the switch shows on */ });
     loadedModelNow().then((m) => { currentModel.value = m; });
     const savedShare = localStorage.getItem("routingOnlineShare");
     if (savedShare === "balanced" || savedShare === "local") {
@@ -686,9 +635,32 @@ export default component$(() => {
     } catch { /* store mirror is best-effort */ }
   });
 
-  const toggleMemoryLearning = $(() => {
-    memoryLearning.value = !memoryLearning.value;
-    setMemoryPaused(!memoryLearning.value);
+  const toggleMemoryMore = $(() => {
+    memoryMore.value = !memoryMore.value;
+    setMoreMemoryControls(memoryMore.value);
+  });
+
+  const toggleMemoryLearning = $(async () => {
+    const on = !memoryLearning.value;
+    memoryLearning.value = on;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("memory_tidy_set", { off: !on });
+      window.dispatchEvent(new CustomEvent("yoai-memory-changed"));
+    } catch {
+      memoryLearning.value = !on;
+    }
+  });
+
+  const toggleMemoryInReplies = $(async () => {
+    const on = !memoryInReplies.value;
+    memoryInReplies.value = on;
+    try {
+      const { setMemoryInReplies } = await import("../../utils/memoryKeep");
+      await setMemoryInReplies(on);
+    } catch {
+      memoryInReplies.value = !on;
+    }
   });
 
   const toggleSmartMode = $(() => {
@@ -882,7 +854,7 @@ export default component$(() => {
   const matrixLines = useSignal<string[]>([]);
   const matrixPath = useSignal("");
   const matrixError = useSignal("");
-  const runMatrix = $(async () => {
+  const runMatrix = $(async (legs?: string[]) => {
     matrixError.value = "";
     matrixPath.value = "";
     matrixLines.value = [];
@@ -898,7 +870,7 @@ export default component$(() => {
       });
       const now = new Date();
       const stamp = `${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-      matrixPath.value = await invoke<string>("matrix_run", { stamp });
+      matrixPath.value = await invoke<string>("matrix_run", legs?.length ? { stamp, legs } : { stamp });
     } catch (e) {
       matrixError.value = String(e);
     } finally {
@@ -1075,7 +1047,7 @@ export default component$(() => {
                 </div>
               </section>
 
-              {/* Memory — what your AIs remember and where saves go. */}
+              {/* Memory - what your AIs remember. */}
               <section
                 id="settings-memory"
                 class="scroll-mt-4 bg-[var(--bg-card)] rounded-2xl p-6 border border-[var(--border-subtle)]"
@@ -1084,39 +1056,51 @@ export default component$(() => {
                   Memory
                 </h2>
                 <p class="text-sm text-[var(--text-secondary)] mb-4">
-                  Your AIs remember in two places: each AI's own memory (what it
-                  learned and what you gave it), and the shared notes on{" "}
-                  <a href="/your-memory/" class="text-[var(--text-link)] hover:underline">
-                    Your Memory
-                  </a>{" "}
-                  that every AI can draw on. These settings choose where each
-                  "Remember this" action saves to.
+                  What you keep with "Remember" is for all your AIs unless you
+                  choose otherwise on the line that appears when you keep it.
                 </p>
 
                 <div class="space-y-5">
-                  <RememberDestinationPicker
-                    title="Remembering highlighted text"
-                    hint='The "Remember" button that appears when you highlight part of a reply.'
-                    surface="selection"
-                    scope={rememberScopeSelection}
-                  />
-                  <RememberDestinationPicker
-                    title="Remembering whole replies"
-                    hint='The "Remember" button under a reply, and on transcript entries on the memory page.'
-                    surface="reply"
-                    scope={rememberScopeReply}
-                  />
-
-                  <div class="border-t border-[var(--border-subtle)] pt-4">
+                  <div>
                     <SettingToggle
-                      title="Automatic learning"
+                      title="Keep and tidy by itself"
                       checked={memoryLearning}
                       onToggle$={toggleMemoryLearning}
+                      testId="settings-memory-tidy"
                     >
-                      Your AIs pick up facts you share in conversation (your
-                      name, preferences, projects) so you don't repeat yourself.
-                      Turn off to remember only what you save yourself - what's
-                      already learned is kept and managed on Your Memory.
+                      Memory keeps what you settle in conversation and replaces
+                      what is out of date, by itself, on all your devices. Turn
+                      off and it keeps only what you save with Remember and
+                      changes nothing by itself. What is already kept stays.
+                    </SettingToggle>
+                  </div>
+                  <div>
+                    <SettingToggle
+                      title="Use memory in replies on this computer"
+                      checked={memoryInReplies}
+                      onToggle$={toggleMemoryInReplies}
+                      testId="settings-memory-in-replies"
+                    >
+                      Before a reply, memory looks through your earlier
+                      conversations for what bears on your question. On a
+                      slower computer that makes each reply start later. Turn
+                      off and replies here start sooner and do not look. Your
+                      conversations are still kept, and your rules still go
+                      with every reply. This switch is for this computer only,
+                      so a faster one keeps using memory.
+                    </SettingToggle>
+                  </div>
+                  <div>
+                    <SettingToggle
+                      title="Show more memory controls"
+                      checked={memoryMore}
+                      onToggle$={toggleMemoryMore}
+                      testId="settings-memory-more"
+                    >
+                      Memory works the same either way. On, the Memory page
+                      and replies also let you move what is kept, choose which
+                      AIs can use it, see where it came from, leave a passage
+                      out, and see how tidying is going.
                     </SettingToggle>
                   </div>
 
@@ -2003,17 +1987,31 @@ export default component$(() => {
                   </span>{" "}
                   - tests how your models run on this computer. Sending us
                   the report helps us make the app better. It holds no
-                  private data. Takes 10-20 minutes.
+                  private data. Takes 10-20 minutes. Grading your offline
+                  models is a separate, longer run: about half an hour a
+                  model, and its results help the app pick the best model
+                  for everyone.
                 </p>
                 <div class="flex flex-wrap items-center gap-3">
                   <LiquidMetalButton
                     variant="secondary"
-                    onClick$={runMatrix}
+                    onClick$={() => runMatrix()}
                     disabled={matrixBusy.value}
                     class="px-4 py-2 text-sm"
                   >
                     {matrixBusy.value ? "Running…" : "Run truth matrix"}
                   </LiquidMetalButton>
+                  {!matrixBusy.value && (
+                    <LiquidMetalButton
+                      variant="secondary"
+                      onClick$={() => runMatrix(["grade"])}
+                      class="px-4 py-2 text-sm"
+                      testId="matrix-grade-models"
+                      title="Asks each offline model our harder questions and runs the memory check, one model at a time. About half an hour a model. Models already graded in this release are skipped."
+                    >
+                      Grade my models
+                    </LiquidMetalButton>
+                  )}
                   {matrixBusy.value && (
                     <LiquidMetalButton
                       variant="secondary"

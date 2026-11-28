@@ -211,6 +211,12 @@ mod tests {
     }
 
     #[derive(serde::Serialize, Debug)]
+    struct RemoveMemoryRowsInput {
+        anchor: holochain_types::prelude::AnyLinkableHash,
+        hashes: Vec<ActionHash>,
+    }
+
+    #[derive(serde::Serialize, Debug)]
     struct MemoryRowsInput {
         anchor: holochain_types::prelude::AnyLinkableHash,
     }
@@ -341,6 +347,27 @@ mod tests {
                 .call("get_memory_rows", MemoryRowsInput { anchor: anchor6.clone() })
                 .await;
             matches!(rows, Ok(ref r) if r.len() == 1)
+        })
+        .await;
+
+        // (6) Removing a memory row (coordinator 16): only the device that
+        // wrote it can; then it is gone from the other device's read too.
+        let by_a: u32 = a
+            .call("remove_memory_rows", RemoveMemoryRowsInput { anchor: a_anchor.clone(), hashes: vec![row_hash.clone()] })
+            .await
+            .expect("A asks to remove B's row");
+        assert_eq!(by_a, 0, "A did not write the row, so A removes nothing");
+        let by_b: u32 = b
+            .call("remove_memory_rows", RemoveMemoryRowsInput { anchor: a_anchor.clone(), hashes: vec![row_hash.clone()] })
+            .await
+            .expect("B removes its own row");
+        assert_eq!(by_b, 1, "B removes the row it wrote");
+        let (a_ref6, anchor7) = (&a, a_anchor.clone());
+        eventually("A no longer reads the removed row", 420, || async {
+            let rows: Result<Vec<holochain_types::prelude::Record>, String> = a_ref6
+                .call("get_memory_rows", MemoryRowsInput { anchor: anchor7.clone() })
+                .await;
+            matches!(rows, Ok(ref r) if r.is_empty())
         })
         .await;
     }

@@ -1,17 +1,16 @@
 import { component$, useSignal, useVisibleTask$, $ } from '@builder.io/qwik';
-import type { RememberHandle } from '../utils/rememberText';
 
 /**
- * Select-to-remember: highlight text inside any assistant reply and a small
- * floating "Remember" chip appears; click it to save the selection (where it
- * goes - that AI's memory or the shared notes - is the Settings → Memory
- * destination). An already-remembered selection shows "Remembered": the chip
- * is a toggle, click again to forget the save. Mounted ONCE at the chat page
- * (one document listener, not one per message), so it adds no per-message
- * chrome and nothing renders until the user deliberately selects text.
+ * Remember on selected words: highlight text inside any reply, or inside
+ * the person's own message, and a small
+ * floating "Remember" button appears. Pressing it keeps the selected words
+ * as a memory item that points at the exchange, and the Kept line appears
+ * under that message (with its audience and Undo). Mounted ONCE at the chat
+ * page (one document listener, not one per message), so it adds nothing
+ * per message and nothing renders until the person selects text.
  *
- * The chip is pure DOM math (native selection rect) - it never re-renders the
- * message list, so it can't slow streaming or scrolling.
+ * The button is pure DOM math (native selection rect) - it never re-renders
+ * the message list, so it can't slow streaming or scrolling.
  */
 export default component$(() => {
   const visible = useSignal(false);
@@ -20,14 +19,17 @@ export default component$(() => {
   const aiId = useSignal('');
   const text = useSignal('');
   const state = useSignal(''); // '' | 'saving' | 'saved' | 'error'
-  const handle = useSignal<RememberHandle | null>(null);
+  const messageId = useSignal('');
+  const role = useSignal<'user' | 'assistant'>('assistant');
+  /** The whole message the selection is in, when the page can read it: it is how the message is found among the records. */
+  const whole = useSignal('');
+  const seq = useSignal<number | undefined>(undefined);
 
   // eslint-disable-next-line qwik/no-use-visible-task
   useVisibleTask$(({ cleanup }) => {
     const hide = () => {
       visible.value = false;
       state.value = '';
-      handle.value = null;
     };
 
     // On mouseup (selection settled), decide whether to show the chip.
@@ -56,25 +58,17 @@ export default component$(() => {
           return;
         }
         aiId.value = host.getAttribute('data-remember-aiid') || '';
+        role.value = host.getAttribute('data-remember-role') === 'user' ? 'user' : 'assistant';
+        whole.value = role.value === 'user' ? (host.querySelector('[data-testid="own-message-text"]')?.textContent ?? '') : '';
         text.value = selected;
         // Position centered above the selection, clamped to the viewport.
         x.value = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
         y.value = Math.max(rect.top - 8, 40);
+        messageId.value = host.getAttribute('data-remember-id') || '';
+        const n = Number(host.getAttribute('data-remember-seq') ?? '');
+        seq.value = host.hasAttribute('data-remember-seq') && Number.isFinite(n) ? n : undefined;
         state.value = '';
-        handle.value = null;
         visible.value = true;
-        // Already remembered? Flip the chip to its "Remembered" (forget) state.
-        import('../utils/rememberText')
-          .then(({ findRememberedCached }) =>
-            findRememberedCached(aiId.value, selected, 'selection'),
-          )
-          .then((h) => {
-            if (h && visible.value && text.value === selected && state.value === '') {
-              handle.value = h;
-              state.value = 'saved';
-            }
-          })
-          .catch(() => { /* display-only check */ });
       }, 0);
     };
 
@@ -96,35 +90,19 @@ export default component$(() => {
   });
 
   const remember = $(async () => {
-    if (state.value === 'saving') return;
-    if (state.value === 'saved' && handle.value) {
-      // Toggle off: forget the save, keep the chip up showing "Remember".
-      state.value = 'saving';
-      try {
-        const { forgetRemembered } = await import('../utils/rememberText');
-        await forgetRemembered(aiId.value, handle.value);
-        handle.value = null;
-        state.value = '';
-      } catch {
-        state.value = 'saved';
-      }
-      return;
-    }
+    if (state.value === 'saving' || state.value === 'saved') return;
     state.value = 'saving';
     try {
-      const { rememberText } = await import('../utils/rememberText');
-      const h = await rememberText(aiId.value, text.value, 'selection');
-      handle.value = h;
-      state.value = h ? 'saved' : 'error';
+      const { keepMessage, announceKept } = await import('../utils/memoryKeep');
+      const kept = await keepMessage({ aiId: aiId.value, role: role.value, text: whole.value || text.value, selection: text.value, seq: seq.value });
+      announceKept({ messageId: messageId.value, kept, selection: true });
+      state.value = 'saved';
     } catch {
       state.value = 'error';
     }
-    if (state.value === 'saved') {
-      setTimeout(() => {
-        // Unless the user toggled it off again in the meantime.
-        if (state.value === 'saved') visible.value = false;
-      }, 900);
-    }
+    // Gone a moment after it says "Kept", unless a new selection took its place.
+    const kept = text.value;
+    if (state.value === 'saved') setTimeout(() => state.value === 'saved' && text.value === kept && (visible.value = false), 900);
   });
 
   if (!visible.value) return null;
@@ -135,6 +113,7 @@ export default component$(() => {
       // Keep the mousedown from clearing the selection before the click fires.
       preventdefault:mousedown
       onClick$={remember}
+      data-testid="remember-selection"
       style={{
         position: 'fixed',
         left: `${x.value}px`,
@@ -148,9 +127,9 @@ export default component$(() => {
         <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.777.416L8 13.101l-5.223 2.815A.5.5 0 0 1 2 15.5V2zm2-1a1 1 0 0 0-1 1v12.566l4.723-2.482a.5.5 0 0 1 .554 0L13 14.566V2a1 1 0 0 0-1-1H4z" />
       </svg>
       {state.value === 'saving'
-        ? 'Saving…'
+        ? 'Keeping…'
         : state.value === 'saved'
-          ? 'Remembered'
+          ? 'Kept'
           : state.value === 'error'
             ? 'Try again'
             : 'Remember'}

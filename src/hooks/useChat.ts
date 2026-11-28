@@ -8,6 +8,11 @@
  * flushSync is not needed - Qwik signals auto-update the DOM.
  */
 
+import { personAsked } from "../utils/personAsking";
+import { LOOK_FURTHER, takesOffer } from "../utils/openOffer";
+import { onlyADateLine, opensWithADateLine, withAPlainCitation } from "../utils/memoryDateLine";
+import { hearInstruction } from "../utils/ruleOffers";
+import { whereWords } from "../utils/givenLine";
 import { invoke } from "@tauri-apps/api/core";
 import { firstModelInFlight, setHeldTurn } from "../utils/firstModel";
 import { skillsPromptBlock } from "../utils/skills";
@@ -23,10 +28,9 @@ import {
 } from "../utils/holochainTranscripts";
 import { uiLog } from "../utils/uiLog";
 import { beginTurn, updateTurn, endTurn, dropTurn, getTurn, liveTurnFor, abortTurn, requestBoundary, engineHolder, waitForEngine } from "../utils/turns";
-import { extractAndStoreFacts, looksLikeUserFact } from "../utils/memoryExtraction";
-import { isUtilityModelReady } from "../utils/utilityModel";
+import { nameFromCue } from "../utils/nameCue";
 import { groundDocument, type GroundedSource } from "../utils/grounding";
-import { memoryForTurn, type TurnMemory, type ReplyLine, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
+import { addAuthoredFact, memoryForTurn, type TurnMemory, type ReplyLine, loadDocumentContextUsed, followUpQuery, memoryLine, RECALL_BEST_FOR_PAGE_QUESTION } from "../utils/memory";
 import { assembleUserTurn } from "../utils/turnWire";
 import { boundaryIndex } from "../utils/replyBoundary";
 import { llamaServerApi } from "../utils/llamaServerApi";
@@ -41,6 +45,7 @@ import { responseLengthOptions } from "../data/response-lengths";
 import { getArchetypeById } from "../data/bundled-archetypes";
 import { MISSION_CORE } from "../data/missionCore";
 import { extractOnlineError, providerErrorCode, providerErrorText, FALLBACK_CODES } from "../utils/onlineErrors";
+import { canAnswerOnline } from "../utils/memorySent";
 import {
   getMedicalModel,
   isOnlineMedicalChoice,
@@ -360,10 +365,6 @@ async function turnTokensFor(
   return counted + 1500 + imageCount * 1000;
 }
 
-/** How much of each conversation already has an episode (messages counted at
- *  the last write) - a conversation left again with nothing new writes nothing. */
-const episodeMarks = new Map<string, number>();
-
 // A page's conversation while a turn is still creating it. Creating one can
 // take longer than the reply (a conductor that has just started), and the
 // next message on the same page used to find no conversation yet and start a
@@ -379,33 +380,9 @@ const THREAD_WAIT_MS = 90_000;
  *  character, a space or a digit; anything may follow. (The engine's grammar
  *  format; an online service is sent no grammar.) */
 export const SECOND_ASK_GRAMMAR = "root ::= [^\\x00-\\x200-9] [^\\x00]*";
-
-/** The episode of a conversation being left: the first question and the
- *  latest answer, one row per conversation (a stable id revises it). */
-async function leaveEpisode(hash: string | null, messages: Message[], ai: SelectedAiModel): Promise<void> {
-  if (!hash) return;
-  const users = messages.filter((m) => m.role === "user" && m.content.trim());
-  const answers = messages.filter((m) => m.role === "assistant" && m.content.trim() && !m.error);
-  if (users.length < 2 || answers.length === 0) return;
-  if (episodeMarks.get(hash) === messages.length) return;
-  const founding = ai.aiConfig?.foundingKey ?? ai.aiConfig?.agentPubKey ?? "";
-  if (!founding || !ai.aiConfig?.agentPubKey) return;
-  const cut = (t: string, n: number) => (t.length > n ? t.slice(0, n) + "…" : t);
-  const text = cut(
-    `Conversation: ${cut(users[0].content.trim(), 300)}\nLatest answer: ${cut(answers[answers.length - 1].content.trim(), 700)}\n(${users.length} questions)`,
-    2000,
-  );
-  try {
-    const { saveMemoryRow, newRow, aiScope } = await import("../utils/memoryRows");
-    const row = newRow(aiScope(founding), "episode", text, { saved_by: `ai:${founding}`, provenance: `distilled:chat:${hash}` });
-    row.id = `chat-episode-${hash.slice(0, 16)}`;
-    await saveMemoryRow(row, ai.aiConfig.agentPubKey);
-    episodeMarks.set(hash, messages.length);
-    uiLog(`[memory] episode kept for ${hash.slice(0, 12)}.. (${users.length} questions)`);
-  } catch (e) {
-    console.warn("[Chat] episode row failed:", e);
-  }
-}
+/** The same, for a second ask after a reply that was only the line above a
+ *  passage: it may not begin with that line's opening bracket either. */
+export const SECOND_ASK_AFTER_DATE_LINE_GRAMMAR = "root ::= [^\\x00-\\x200-9\\[] [^\\x00]*";
 
 export function useChat(props: UseChatProps) {
   const state = useStore<UseChatState>({
@@ -433,7 +410,7 @@ export function useChat(props: UseChatProps) {
       images: string[] = [],
       modelOverride?: string,
       consentGranted: boolean = false,
-      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string }; readAsText?: string[] },
+      options?: { webOnce?: boolean; fallback?: { reason: string; task?: string }; readAsText?: string[]; keyAnswered?: boolean },
     ) => {
       if (!userInput.trim() || state.isLoading) return;
       // Pictures the document reader already read into text (`readAsText`:
@@ -730,6 +707,7 @@ export function useChat(props: UseChatProps) {
       }
       state.isLoading = true;
       uiLog("[send] chat path: bubbles up");
+      const submittedAt = Date.now();
       // The page this turn was sent from. New (resetChat) starts a new page
       // key; a turn whose page has moved on by the time it would claim the
       // page stays detached - it finishes and records at the root, and the
@@ -742,6 +720,15 @@ export function useChat(props: UseChatProps) {
       // freshness gate and memory retrieval both need the same vector, and
       // each used to compute it separately (two embed-server round trips).
       // Fails soft to null; both consumers degrade exactly as before.
+      // Background writing on the helper steps aside for this question.
+      personAsked();
+      // The offer open above the message box (under the reply before this
+      // message), when this message takes it: "Look further" pressed, or
+      // said in the person's own words. Memory then looks for the question
+      // that reply answered, with everything it finds.
+      const offered = state.messages.filter((m) => m.role === "assistant" && m.id !== assistantId && !m.isLoading).pop()?.lookFurther;
+      const further = offered && takesOffer(LOOK_FURTHER, userInput) ? offered : null;
+      if (further) uiLog("[memory] look further: the question before is searched again, everything found given");
       const queryVecPromise: Promise<number[] | null> = import(
         "../utils/embeddings"
       )
@@ -753,13 +740,29 @@ export function useChat(props: UseChatProps) {
       // adding to them. Wasted work on the rare aborted turn (vision card,
       // consent) is fine: it's read-only.
       const aiModelSetting = selectedAi.aiConfig?.model || "";
-      const memoryPromise = memoryForTurn(userInput, {
+      // The person's switch for this AI, read where it is saved: the AI
+      // held by the open page may be from before the switch was changed.
+      const sharedNow: Promise<boolean> = import("../utils/localAiStorage")
+        .then(({ getLocalCustomAis }) => getLocalCustomAis())
+        .then((list) => {
+          const saved = list.find((a) => a.id === selectedAi.id || a.id === selectedAi.aiConfig?.id);
+          return (saved ?? selectedAi.aiConfig)?.memoryOnline !== false;
+        })
+        .catch(() => selectedAi.aiConfig?.memoryOnline !== false);
+      const memoryPromise = sharedNow.then((memoryShared) => memoryForTurn(userInput, {
         aiId: selectedAi.id,
         foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
         conversationHash: state.conversationHash,
         queryVec: queryVecPromise,
-      }).catch(() => null);
-      void aiModelSetting;
+        // The model is not chosen yet. An AI that may answer off this
+        // computer, with sharing turned off, is given nothing memory holds
+        // in this part, wherever this turn ends up being answered: a turn
+        // that falls back to an online model must not carry it either.
+        sharing: {
+          online: canAnswerOnline(aiModelSetting) || !!modelOverride?.startsWith("online:") || !!modelOverride?.startsWith("external:"),
+          memoryShared,
+        },
+      })).catch(() => null);
 
       // Live information this AI could not look up: the reply carries the
       // offer above the composer. At most once a conversation, never for a
@@ -1466,6 +1469,22 @@ export function useChat(props: UseChatProps) {
         return;
       }
 
+      // A message that looks like it holds a password or a key, on its
+      // way off this computer: asked first. This is the one question put
+      // before a message is sent, and it is put only then.
+      if ((isOnlineModel || isExternalModel) && !options?.keyAnswered) {
+        const masked = await invoke<{ text: string; hidden: number }>("mask_text", { text: userInput }).catch(() => null);
+        if (masked && masked.hidden > 0) {
+          state.pendingTurn = { userInput, chatAction, images, fileContext, visionModel: "" };
+          abortWith(JSON.stringify({ code: "key_ask", where: whereWords(preferredModel ?? ""), without: masked.text }));
+          return;
+        }
+      }
+
+      // An instruction about how to work is noted; the second time it is
+      // given, the offer to keep it as a rule shows under the message.
+      void hearInstruction(userInput, state.conversationHash, selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null);
+
       // Cancel any ongoing request
       if (abortControllerRef.value) {
         abortControllerRef.value.abort();
@@ -1628,7 +1647,14 @@ export function useChat(props: UseChatProps) {
       try {
         // Memory: the block was kicked off in parallel right after the
         // optimistic UI - by now routing/model-load usually paid for it.
+        // What the person waits for before the model is asked anything, by
+        // step, in one log line per turn.
+        const sendBegan = submittedAt;
+        const waited: string[] = [];
+        waited.push(`model chosen by ${Date.now() - sendBegan}`);
+        const lap = (what: string) => waited.push(`${what} by ${Date.now() - sendBegan}`);
         const turnMemory = await memoryPromise;
+        lap("memory's system part");
         const userMemory = turnMemory?.systemPart ?? "";
         // Report mode: a model that thinks by itself gets the ceremony-free
         // prompt (its thinking arrives as reasoning already): a local model
@@ -1655,6 +1681,7 @@ export function useChat(props: UseChatProps) {
           await queryVecPromise,
         );
         if (skillsBlock.block) systemPrompt += "\n\n" + skillsBlock.block;
+        lap("skills");
         const skillsUsed = skillsBlock.names;
         // Tools (MCP servers) work in projects only for now - chat has no
         // tool loop. Tell the model, so an AI that carries Playwright says
@@ -1744,24 +1771,32 @@ export function useChat(props: UseChatProps) {
           let room = Number.POSITIVE_INFINITY;
           if (!isOnlineModel && !isExternalModel) {
             const base = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt);
+            lap("turn counted");
             await growContextFor(base);
+            lap("room checked");
             room = roomCtx > 0 ? Math.max(0, roomCtx - base) : 0;
           }
           const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
           // What memory finds for this question, sized to the room; the
           // documents get the room it leaves.
-          foundMemory = await memoryForTurn(userInput, {
+          foundMemory = await memoryForTurn(further ? further.question : userInput, {
             aiId: selectedAi.id,
             foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
             conversationHash: state.conversationHash,
-            queryVec: qvec,
+            // Looking further searches for the earlier question, not for
+            // these words: it is embedded where the search runs.
+            queryVec: further ? undefined : qvec,
             room: {
               windowTokens: roomCtx > 0 ? roomCtx : null,
               roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
+              model: isOnlineModel || isExternalModel ? null : preferredModel,
+              further: !!further,
               online: isOnlineModel || isExternalModel,
+              memoryShared: await sharedNow,
               previousQuestion: before ?? null,
             },
           }).catch(() => null);
+          lap("memory searched");
           if (foundMemory?.beforeQuestion && Number.isFinite(room)) {
             const used = await invoke<number>("count_tokens", { text: foundMemory.beforeQuestion }).catch(() => Math.ceil(foundMemory!.beforeQuestion!.length / 3));
             room = Math.max(0, room - used);
@@ -1772,11 +1807,18 @@ export function useChat(props: UseChatProps) {
             ? await import("../utils/embeddings").then(({ embedQueryBounded }) => embedQueryBounded(followUp)).catch(() => null)
             : null;
           const recalled = await loadDocumentContextUsed(
-            selectedAi.id, qvec, room, 8, followUpVec,
+            // A reply made off this computer is given more passages. A
+            // model on it keeps eight whatever its window: with twelve, a
+            // small model answered a question no note answers by making
+            // something up (measured, four runs of four), and with eight
+            // it said so.
+            selectedAi.id, qvec, room, isOnlineModel || isExternalModel ? 12 : 8, followUpVec,
             addressesInQuestion > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
+            userInput,
           );
           docContext = recalled.text;
           libraryGiven = recalled.used;
+          lap("documents searched");
         }
         // The person's turn as sent, put together in one place: the file,
         // the pages, the document passages, what memory found, the question
@@ -1802,6 +1844,8 @@ export function useChat(props: UseChatProps) {
         if (!isOnlineModel && !isExternalModel) {
           const estTokens = await turnTokensFor(state.messages, userInput, fileContext, images.length, systemPrompt + "\n" + docContext);
           if ((await growContextFor(estTokens)) === "refused") return;
+          lap("room checked again");
+          uiLog(`[send] before the model: ${waited.join(", ")} ms`);
           if (roomCtx > 0 && estTokens > roomCtx) {
             // A fine-tune pin held the window below this turn: say so on the
             // bubble rather than let the engine trim the prompt silently.
@@ -2035,9 +2079,20 @@ export function useChat(props: UseChatProps) {
         // stopped, the request was refused): that is not the model answering
         // with nothing, and the message below must not say it is.
         let retryDidNotRun = false;
-        if (!fullResponse.trim() && !controller.signal.aborted) {
-          console.warn("[Chat] empty reply - one retry with a plain-words steer");
-          uiLog(`[chat] empty reply after ${updateCount} update(s) - one retry with a plain-words steer`);
+        // A reply that is only the line above a passage memory gave (the
+        // model began to cite and ended there) answers nothing either: the
+        // same one more ask, and the first reply stands if that one fails.
+        // A reply that copies a passage out, line above it and all, answers
+        // nothing either, and is asked again the same way.
+        const saidFirst = extractThinkingFromContent(fullResponse).contentWithoutThinking;
+        const dateLineOnly =
+          !!fullResponse.trim() &&
+          (onlyADateLine(saidFirst, foundMemory?.beforeQuestion) || opensWithADateLine(saidFirst, foundMemory?.beforeQuestion)?.kind === "copy");
+        const firstReply = fullResponse;
+        if ((!fullResponse.trim() || dateLineOnly) && !controller.signal.aborted) {
+          console.warn(`[Chat] ${dateLineOnly ? "a date line alone or a copied passage" : "empty reply"} - one retry with a plain-words steer`);
+          uiLog(`[chat] ${dateLineOnly ? "a reply that was only the line above a passage, or a copy of one" : `empty reply after ${updateCount} update(s)`} - one retry with a plain-words steer`);
+          if (dateLineOnly) fullResponse = "";
           state.messages = state.messages.map((m) =>
             m.id === assistantId
               ? { ...m, statusText: "Asking again...", isLoading: true }
@@ -2045,7 +2100,9 @@ export function useChat(props: UseChatProps) {
           );
           const steer =
             systemPrompt +
-            "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.";
+            (dateLineOnly
+              ? "\n\nAnswer the question in full sentences of your own. A date, the name of a conversation, or a passage copied out is not an answer."
+              : "\n\nAnswer in plain sentences only. Do not use any tool-call or function-call format - no tools are available in this conversation.");
           // On this computer's engine the second ask may not end before it
           // has begun: its first visible character must be something other
           // than a space, a control character or a digit. Asked again the
@@ -2056,7 +2113,7 @@ export function useChat(props: UseChatProps) {
           // digit first, right answers 143 of 150). An answer that is a
           // number still comes, after the model's own empty thought tags or
           // in words. Online services take no such rule and get none.
-          const mustBegin = !isOnlineModel && !isExternalModel ? SECOND_ASK_GRAMMAR : undefined;
+          const mustBegin = !isOnlineModel && !isExternalModel ? (dateLineOnly ? SECOND_ASK_AFTER_DATE_LINE_GRAMMAR : SECOND_ASK_GRAMMAR) : undefined;
           try {
             for await (const chunk of llamaServerApi.chatCompletion(
               chatHistory,
@@ -2095,7 +2152,16 @@ export function useChat(props: UseChatProps) {
             uiLog(`[chat] the second ask did not go through: ${String(e).slice(0, 160)}`);
             retryDidNotRun = true;
           }
+          // The first reply was words, if too few: it stands when the
+          // second ask brought nothing.
+          if (dateLineOnly && !fullResponse.trim()) {
+            fullResponse = firstReply;
+            retryDidNotRun = false;
+          }
         }
+        // The line above a passage, when the model's own answer follows it,
+        // reads as a plain citation.
+        fullResponse = withAPlainCitation(fullResponse, foundMemory?.beforeQuestion);
 
         // Calculate tokens per second
         const streamEndTime = Date.now();
@@ -2140,16 +2206,30 @@ export function useChat(props: UseChatProps) {
         // model): which passages it quoted, which quotes are in none of
         // them, and the line the reply gets.
         let replyLine: ReplyLine | undefined;
+        let lookFurther: { question: string } | undefined;
         let quotesNotGiven: string[] | undefined;
         if (givenRecord) {
-          const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null }>(
+          const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null; lookFurther?: boolean }>(
             "memory_reply_checked",
-            { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [] },
+            { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [], question: userInput },
           ).catch(() => null);
           if (checked) {
             if (checked.given) givenRecord = checked.given;
             replyLine = checked.line ?? undefined;
+            // Only the closest results were given and the reply used none:
+            // the one offer above the message box, for this reply only.
+            if (checked.lookFurther) lookFurther = { question: further ? further.question : userInput };
             quotesNotGiven = checked.check.notGiven.length ? checked.check.notGiven : undefined;
+            // An exchange the reply quoted word for word answered something
+            // the person asked: it is kept, once, with no model involved.
+            if (checked.check.quoted.some(Boolean)) {
+              void invoke("memory_keep_quoted", {
+                reply: displayContent,
+                given: givenRecord,
+                texts: foundMemory?.givenTexts ?? [],
+                ai: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
+              }).catch((e) => console.warn("[memory] keeping what was quoted failed:", e));
+            }
           }
         }
 
@@ -2196,10 +2276,7 @@ export function useChat(props: UseChatProps) {
         // on it - extraction spends seconds generating before it saves, by which
         // time the write has resolved this (or settled it to null if Holochain
         // is down, degrading gracefully to an unlinked fact).
-        let settleUserMsgHash: (h: string | null) => void = () => {};
-        const userMsgHashPromise = new Promise<string | null>((res) => {
-          settleUserMsgHash = res;
-        });
+        const settleUserMsgHash = (_h: string | null) => {};
 
         const localCurrent = props.currentModel.value;
         // Extraction worker (see ON_DEVICE_COMPONENTS.md): the on-device utility
@@ -2216,35 +2293,13 @@ export function useChat(props: UseChatProps) {
                 !localCurrent.startsWith("external:")
               ? localCurrent
               : null;
-        // Remote turns (proxy or the user's own external server) may extract
-        // via the same remote model - the content already went there.
-        let extractionFallback =
-          warmOffline ?? (isOnlineModel || isExternalModel ? preferredModel : null);
-        // gpt-oss speaks its own channel format and fights the extraction
-        // grammar (junk output, then a cancelled task): never use it as the
-        // extraction fallback. With the on-device utility model installed
-        // the fallback is not consulted, so extraction still runs.
-        if (
-          extractionFallback &&
-          /gpt-oss/i.test(extractionFallback) &&
-          !(await isUtilityModelReady())
-        ) {
-          extractionFallback = null;
-        }
-        // Pre-gate: only spend a model call when the message could state a
-        // personal fact (skips pure questions/requests/lookups).
-        if (extractionFallback && looksLikeUserFact(userInput)) {
-          console.log(`[Memory] Extracting facts from turn (fallback: ${extractionFallback})…`);
-          void extractAndStoreFacts({
-            userText: userInput,
-            model: extractionFallback,
-            aiId: selectedAi.id,
-            sourceActionHash: userMsgHashPromise,
-          });
-        } else {
-          console.log(
-            `[Memory] Extraction skipped - ${!extractionFallback ? "no model" : "no personal fact in message"}`,
-          );
+        // No model reads the message for facts about the person any more:
+        // what an exchange settled is looked at in idle time, and kept as
+        // an item the person can see and undo. Their name, said in plain
+        // words, is still taken at once, so every AI goes on using it.
+        const saidName = nameFromCue(userInput);
+        if (saidName) {
+          void addAuthoredFact({ predicate: "name_is", value: saidName }).catch((e) => console.warn("[Memory] the name was not saved:", e));
         }
 
         // Record transcript to Holochain (fire-and-forget)
@@ -2255,7 +2310,7 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven, lookFurther }
             : m,
         );
         // The root's copy too: a page that folds this reply in later (it
@@ -2345,12 +2400,13 @@ export function useChat(props: UseChatProps) {
             // Record assistant message - with full provenance: sources, the
             // exact system prompt it ran under, mode, and the runtime/build.
             if (sources?.length) uiLog(`[web] recording the reply with ${sources.length} source(s)`);
+            const replySeq = takeSeq();
             const assistantMsgHash = await recordMessage(
               holochainId,
               turnConv!,
               "assistant",
               displayContent,
-              takeSeq(),
+              replySeq,
               modelName,
               finalThinking || undefined,
               tokenUsage ? {
@@ -2363,7 +2419,7 @@ export function useChat(props: UseChatProps) {
                 sources: sources || undefined,
                 // Names and counts only - the passages stay out of the record.
                 library: libraryGiven.length
-                  ? libraryGiven.map(({ doc_id, name, passages, best }) => ({ doc_id, name, passages, best }))
+                  ? libraryGiven.map(({ doc_id, name, passages, best, idx, asOf }) => ({ doc_id, name, passages, best, ...(idx?.length ? { idx } : {}), ...(asOf ? { asOf } : {}) }))
                   : undefined,
                 system_prompt: systemPrompt,
                 mode: turnMode,
@@ -2392,9 +2448,57 @@ export function useChat(props: UseChatProps) {
             if (assistantMsgHash) {
               state.messages = state.messages.map((m) =>
                 m.id === assistantId
-                  ? { ...m, transcriptHash: assistantMsgHash }
+                  ? { ...m, transcriptHash: assistantMsgHash, sequence: replySeq }
                   : m,
               );
+            }
+            // "Remember that", said in fixed words: now that the turn is
+            // recorded, the exchange before (or this message) is kept and
+            // its Kept line shown.
+            if (assistantMsgHash && foundMemory?.remember) {
+              const at = state.messages.findIndex((m) => m.id === userMessage.id);
+              const before = at > 0 ? [...state.messages.slice(0, at)].reverse().find((m) => m.role === "assistant" && !!m.content) : undefined;
+              const target = foundMemory.remember === "this" ? { messageId: userMessage.id, role: "user" as const, text: userInput, seq: undefined } : before ? { messageId: before.id, role: "assistant" as const, text: before.content, seq: before.sequence } : null;
+              if (target) {
+                void import("../utils/memoryKeep")
+                  .then(({ keepSaid }) => keepSaid({ ...target, aiId: selectedAi.id, conversation: turnConv ?? undefined }))
+                  .catch((e) => console.warn("[memory] keeping what was asked for failed:", e));
+              }
+            }
+            // "That's done", said in fixed words: the one thing this
+            // conversation left open is marked done (a rule on the device
+            // reads the words; any other message changes nothing).
+            if (assistantMsgHash && userInput.trim().length <= 80) {
+              void import("../utils/memoryKeep")
+                .then(({ doneSaid }) => doneSaid({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined }))
+                .catch((e) => console.warn("[memory] closing what was said to be done failed:", e));
+            }
+            // "That's right", "forget that", "keep this conversation out
+            // of memory", said in fixed words (a rule on the device reads
+            // them; any other message changes nothing). What the reply
+            // before was given in its note is what "that" may mean.
+            if (assistantMsgHash && userInput.trim().length <= 120) {
+              const at = state.messages.findIndex((m) => m.id === userMessage.id);
+              const before = at > 0 ? [...state.messages.slice(0, at)].reverse().find((m) => m.role === "assistant" && !!m.content) : undefined;
+              const used = ((before?.given as { note_items?: string[] } | undefined)?.note_items ?? []).filter((id) => typeof id === "string");
+              void import("../utils/memoryKeep")
+                .then(({ saidControl }) => saidControl({ messageId: userMessage.id, aiId: selectedAi.id, text: userInput, conversation: turnConv ?? undefined, used }))
+                .catch((e) => console.warn("[memory] a control said in the chat failed:", e));
+            }
+            // Lines of the person's notes that answered are kept as rows
+            // that point at the note (a rule on the device; no model).
+            if (assistantMsgHash && libraryGiven.some((g) => g.idx?.length)) {
+              void import("../utils/memoryNotes")
+                .then(async ({ noteAnswered }) =>
+                  noteAnswered({
+                    conversation: turnConv ?? "",
+                    agentKey: selectedAi.aiConfig?.agentPubKey ?? null,
+                    question: userInput,
+                    reply: displayContent,
+                    given: libraryGiven,
+                  }),
+                )
+                .catch((e) => console.warn("[memory] keeping the note lines that answered failed:", e));
             }
             console.log(
               `[Holochain] Assistant message recorded (${grounded.length} grounded source${grounded.length === 1 ? "" : "s"})`,
@@ -2750,13 +2854,7 @@ export function useChat(props: UseChatProps) {
   });
 
   const resetChat = $(() => {
-    // Leaving a conversation is a plain chat's session boundary
-    // (the memory design §5.5): one episode row in the AI's own memory,
-    // raw and deterministic - the question that opened it and the latest
-    // answer - revised in place when the conversation is left again with
-    // more said, never rewritten here (dreaming consolidates later).
     uiLog(`[turns] New: leaving ${state.conversationHash?.slice(0, 12) ?? "no conversation"}, ${state.messages.length} message(s), loading ${state.isLoading}`);
-    void leaveEpisode(state.conversationHash, state.messages, props.selectedAi.value);
     // A reply in flight stays at the app root (utils/turns.ts): the page
     // lets go of it - it finishes and records on its own, Stop reaches it
     // from the tray or when its conversation is opened again.

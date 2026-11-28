@@ -103,7 +103,29 @@ fn wait_for_calm() {
     }
 }
 
+/// The file's hash now: the one already known, or made on the spot for
+/// work the person asked for and is waiting on (it does not wait for the
+/// computer to be calm). None when the file cannot be read.
+pub(crate) async fn ensure(app: &tauri::AppHandle, model: &str) -> Option<String> {
+    if let Some(h) = get(app, model) {
+        return Some(h);
+    }
+    if !model.to_lowercase().ends_with(".gguf") {
+        return None;
+    }
+    let (a, name) = (app.clone(), model.to_string());
+    let made = tauri::async_runtime::spawn_blocking(move || hash_file(&a, &name, false)).await;
+    if let Ok(Err(e)) = &made {
+        log::warn!("[model-hash] {} failed: {}", model, e);
+    }
+    get(app, model)
+}
+
 fn note_file_blocking(app: &tauri::AppHandle, filename: &str) -> Result<(), String> {
+    hash_file(app, filename, true)
+}
+
+fn hash_file(app: &tauri::AppHandle, filename: &str, patient: bool) -> Result<(), String> {
     let dir = crate::llm::get_models_dir(app)?;
     let path = dir.join(filename);
     let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
@@ -113,7 +135,7 @@ fn note_file_blocking(app: &tauri::AppHandle, filename: &str) -> Result<(), Stri
     let mut reads = 0usize;
     loop {
         reads += 1;
-        if reads % READS_PER_LOOK == 0 {
+        if patient && reads % READS_PER_LOOK == 0 {
             wait_for_calm();
         }
         let n = f.read(&mut buf).map_err(|e| e.to_string())?;

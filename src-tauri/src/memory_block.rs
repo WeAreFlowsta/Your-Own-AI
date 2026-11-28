@@ -23,6 +23,9 @@ const TITLE_CHARS: usize = 60;
 const RAN: &str = "A search of all their conversations was run for this question.";
 const RULE: &str = "\nRule for questions about their past work: answer only from a line you can quote from these exchanges, and quote it with its date. If none of them answers the question, say plainly that you searched their conversations and found nothing that answers it, and say what you did find. Never answer about their past from guesswork.";
 /// What the rule is for, and what it leaves alone.
+/// The same rule when only the closest of what was found is given (held
+/// to the wait before the first word): "found nothing" would not be true.
+const RULE_CLOSEST: &str = "\nRule for questions about their past work: answer only from a line you can quote from these exchanges, and quote it with its date. Only the closest results of the search are shown here; it found more. If none of these answers the question, do not say that nothing was found: say plainly that the answer is not in the closest results, say what you did find, and say that they can ask you to look further. Never answer about their past from guesswork.";
 const RULE_SCOPE: &str = " The rule is for claims about what they said or did; general knowledge may be used when you say that it is general.";
 
 /// A message of a conversation, with its secrets already hidden.
@@ -148,10 +151,16 @@ pub(crate) fn day(micros: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
+/// Messages of one conversation as the lines a passage is made of, in
+/// the form every judgment reads ("They said: ...", "AI: ...").
+pub(crate) fn passage_text(said: &[Said]) -> String {
+    said.iter().map(|m| line(m, false).0).collect::<Vec<_>>().join("\n")
+}
+
 /// An exchange as text, and as pointers to what the text shows.
 pub(crate) fn exchange_text(e: &Exchange, wording: Wording) -> (String, GivenExchange) {
     let mut lines: Vec<String> = Vec::new();
-    let mut ptr = |m: &Said, tail: bool, lines: &mut Vec<String>| {
+    let ptr = |m: &Said, tail: bool, lines: &mut Vec<String>| {
         let (text, a, b) = line(m, tail);
         lines.push(text);
         Ptr { c: e.conversation, s: m.seq, t: m.at, a, b }
@@ -198,6 +207,54 @@ pub(crate) struct About {
     pub withheld: u32,
     /// Older exchanges were left out because memory marks them replaced.
     pub replaced_left_out: bool,
+    /// Fewer were given than found so that the reply starts soon: the
+    /// rule then says so, and that the person can ask to look further.
+    pub closest_only: bool,
+}
+
+/// What was found, held to what the model can read within the wait before
+/// its first word (`wait_chars`; absent = no such limit) and to the room
+/// the turn has left. When not everything fits, the found messages come
+/// first, each alone, as many as fit in rank order: the answer is nearly
+/// always in the found message itself, so three found messages serve a
+/// question better than one with the messages around it. Room left over
+/// then goes to the messages around them, the best result's first. The
+/// best result is always given, even when it alone is more than the wait
+/// allows.
+pub(crate) fn within_wait(mut found: Vec<Exchange>, at_most: usize, room_chars: Option<usize>, wait_chars: Option<usize>, wording: Wording) -> (Vec<Exchange>, Option<usize>) {
+    let Some(wait) = wait_chars else { return (found, room_chars) };
+    let cap = room_chars.map_or(wait, |r| r.min(wait));
+    // As `block_with` counts: each one's text, and the blank line after it.
+    let size = |e: &Exchange| exchange_text(e, wording).0.chars().count() + 2;
+    let whole: Vec<(Option<Said>, Option<Said>)> = found.iter_mut().map(|e| (e.before.take(), e.after.take())).collect();
+    let mut used = 0;
+    let mut taken = 0;
+    for e in found.iter().take(at_most) {
+        let n = size(e);
+        if taken > 0 && used + n > cap {
+            break;
+        }
+        used += n;
+        taken += 1;
+    }
+    for (e, (before, after)) in found.iter_mut().zip(whole).take(taken) {
+        let alone = size(e);
+        // Both, or the one after (what was answered to it), or the one before.
+        for (b, a) in [(before.clone(), after.clone()), (None, after), (before, None)] {
+            if b.is_none() && a.is_none() {
+                continue;
+            }
+            let with = size(&Exchange { before: b.clone(), after: a.clone(), ..e.clone() });
+            if used - alone + with <= cap {
+                e.before = b;
+                e.after = a;
+                used = used - alone + with;
+                break;
+            }
+        }
+    }
+    let least = used.max(wait);
+    (found, Some(room_chars.map_or(least, |r| r.min(least))))
 }
 
 /// The block and what it holds.
@@ -282,7 +339,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
     if !about.absent_names.is_empty() {
         report.push_str(&format!(" No conversation anywhere mentions: {}.", about.absent_names.join(", ")));
     }
-    report.push_str(RULE);
+    report.push_str(if about.closest_only && n > 0 { RULE_CLOSEST } else { RULE });
     if wording.rule_scope {
         report.push_str(RULE_SCOPE);
     }
@@ -304,6 +361,8 @@ pub enum WhyNot {
     VaultLocked,
     IndexRebuilding,
     SwitchedOffForThisAi,
+    /// The person turned off using memory in replies on this computer.
+    OffOnThisComputer,
 }
 
 impl WhyNot {
@@ -318,6 +377,7 @@ impl WhyNot {
             WhyNot::VaultLocked => "their Vault is locked, so their conversations cannot be opened",
             WhyNot::IndexRebuilding => "the search index is being rebuilt",
             WhyNot::SwitchedOffForThisAi => "they have switched memory off for this AI",
+            WhyNot::OffOnThisComputer => "they have turned off using memory in replies on this computer",
         }
     }
 }
@@ -365,6 +425,10 @@ pub struct SearchReport {
     /// said so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_percent: Option<u8>,
+    /// Only the closest results were given, to keep the wait short, and
+    /// the block said so (the person can ask to look further).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closest_only: bool,
 }
 
 /// What a reply was given by memory: recorded with the reply, as pointers.
@@ -393,6 +457,15 @@ pub struct GivenRecord {
     /// the pointers is compared with.
     #[serde(default)]
     pub block: String,
+    /// Found, and left out because memory marks them replaced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub left_out: Vec<LeftOut>,
+    /// The items the note after the question was made from, and the
+    /// note's sha256.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub note_items: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
     /// sha256 of the person's turn exactly as sent (set by the sender,
     /// which is the one that knows the final text).
     #[serde(default)]
@@ -400,6 +473,23 @@ pub struct GivenRecord {
     /// Fields later versions add ride through untouched.
     #[serde(flatten)]
     pub more: serde_json::Map<String, serde_json::Value>,
+}
+
+impl GivenRecord {
+    /// Was the reply handed exchanges the search found? Such a reply
+    /// repeats them; a later search goes to the exchanges themselves.
+    pub(crate) fn gave_exchanges(&self) -> bool {
+        self.search.ran && !self.exchanges.is_empty()
+    }
+}
+
+/// A found message that was left out of what was given, and the replaced
+/// item it was left out for.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct LeftOut {
+    pub hit: Ptr,
+    pub score: f32,
+    pub item: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq)]
@@ -445,6 +535,9 @@ pub struct PanelPassage {
     /// sequence: where "Open this in the conversation" goes.
     pub conversation_id: String,
     pub seq: u32,
+    /// The conversation's start: its name on every device, which "Do not
+    /// use this" is recorded under.
+    pub started_at: i64,
     /// The lines as the AI saw them, each `[by the person, text]`.
     pub lines: Vec<(bool, String)>,
     pub quoted: bool,
@@ -476,6 +569,24 @@ pub struct Panel {
     pub lines: Vec<String>,
     /// The report and the rule, exactly as given (when it could be rebuilt).
     pub instruction: Option<String>,
+    /// Found and left out because memory marks them replaced: each by its
+    /// found message.
+    pub left_out: Vec<PanelLeftOut>,
+}
+
+/// A left-out message as the panel shows it.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PanelLeftOut {
+    /// State `left-out`; one line, the found message's.
+    #[serde(flatten)]
+    pub passage: PanelPassage,
+    /// The replaced item it was left out for.
+    pub item: String,
+    /// The day that item was replaced, and whether it still is (filled by
+    /// the reader of the items).
+    pub replaced_on: Option<String>,
+    pub still_replaced: bool,
 }
 
 /// Rebuild what a reply was given from its record: each pointer looked up
@@ -493,7 +604,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
     let mut exchanges: Vec<Exchange> = Vec::new();
     let (mut deleted, mut not_here) = (0u32, 0u32);
     for g in &record.exchanges {
-        let gone = |state: &'static str| PanelPassage { state, day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, lines: Vec::new(), quoted: g.quoted, score: g.score };
+        let gone = |state: &'static str| PanelPassage { state, day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, started_at: g.hit.c, lines: Vec::new(), quoted: g.quoted, score: g.score };
         match at(&g.hit) {
             Now::Deleted => {
                 deleted += 1;
@@ -528,13 +639,13 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
                     not_here += 1;
                 }
                 let lines = lines.into_iter().map(|(p, t)| (p, t.trim_start_matches(if p { "They said: " } else { "AI: " }).to_string())).collect();
-                passages.push(PanelPassage { state: "shown", day: day(g.hit.t), title, ai_name, conversation_id, seq: g.hit.s, lines, quoted: g.quoted, score: g.score });
+                passages.push(PanelPassage { state: "shown", day: day(g.hit.t), title, ai_name, conversation_id, seq: g.hit.s, started_at: g.hit.c, lines, quoted: g.quoted, score: g.score });
                 exchanges.push(e);
             }
         }
     }
     let s = &record.search;
-    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: false };
+    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: !record.left_out.is_empty(), closest_only: s.closest_only };
     // Everything that was given is here: put it together again, as given
     // (no budget: what was given already fit).
     let whole = deleted == 0 && not_here == 0;
@@ -542,23 +653,141 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
     let checked = match (&rebuilt, record.block.is_empty()) {
         (None, _) => Checked::SomeGone,
         (Some(_), true) => Checked::NoRecord,
-        (Some(b), false) if fingerprint(&b.text) == record.block && s.found == s.given => Checked::Exact,
-        // More was found than fit: the report's first sentence said so in
+        // The same text, to the character: what is shown is what was given,
+        // whether or not more was found than fit.
+        (Some(b), false) if fingerprint(&b.text) == record.block => Checked::Exact,
+        // More was found than fit and none of it did: the report said so in
         // words this rebuild does not have; compare what was shown instead.
         (Some(b), false) if s.found != s.given && b.texts.len() as u32 == s.given => Checked::NoRecord,
         (Some(_), false) => Checked::Differs,
     };
     let instruction = rebuilt.as_ref().map(|b| b.text.split("\n\n[").next().unwrap_or("").trim_start_matches("[From memory. ").trim_end_matches(']').to_string());
-    Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction }
+    let left_out = record
+        .left_out
+        .iter()
+        .map(|g| {
+            let gone = PanelPassage { state: "left-out", day: day(g.hit.t), title: String::new(), ai_name: None, conversation_id: String::new(), seq: g.hit.s, started_at: g.hit.c, lines: Vec::new(), quoted: false, score: g.score };
+            match at(&g.hit) {
+                Now::Here { by_person, text, title, ai_name, conversation_id, .. } => {
+                    let shown = line(&Said { by_person, text, seq: g.hit.s, at: g.hit.t }, false).0;
+                    let shown = shown.trim_start_matches(if by_person { "They said: " } else { "AI: " }).to_string();
+                    PanelPassage { title, ai_name, conversation_id, lines: vec![(by_person, shown)], ..gone }
+                }
+                _ => gone,
+            }
+        })
+        .zip(&record.left_out)
+        .map(|(passage, l)| PanelLeftOut { passage, item: l.item.clone(), replaced_on: None, still_replaced: true })
+        .collect();
+    Panel { checked, passages, deleted, not_here, lines: record.lines.clone(), instruction, left_out }
 }
 
-/// The person's turn as it is sent: the block, the question exactly as
-/// typed, and the state note, in that order (the order is measured).
+/// One thing memory holds to be true now, for the note after a question.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Held {
+    /// The sentence: what a replacement judgment wrote as true now, or the
+    /// item's own statement.
+    pub sentence: String,
+    /// When it became so (ms).
+    pub as_of: i64,
+    /// The person confirmed it.
+    pub confirmed: bool,
+}
+
+/// A state note holds at most this many items, each at least this close
+/// in meaning to the question, and at most this many characters.
+pub(crate) const NOTE_ITEMS: usize = 3;
+pub(crate) const NOTE_FLOOR: f32 = 0.55;
+const NOTE_CHARS: usize = 600;
+const NOT_CONFIRMED: &str = " (an AI's note, not confirmed by them)";
+
+/// The items a note is made from: the closest to the question over the
+/// floor, at most three, newest first. `near`: each candidate's index and
+/// its likeness to the question.
+pub(crate) fn note_items(held: &[Held], near: &[(usize, f32)]) -> Vec<Held> {
+    note_order(held, near).into_iter().map(|i| held[i].clone()).collect()
+}
+
+/// `note_items`, as places in `held`.
+pub(crate) fn note_order(held: &[Held], near: &[(usize, f32)]) -> Vec<usize> {
+    let mut close: Vec<(usize, f32)> = near.iter().copied().filter(|(i, s)| *s >= NOTE_FLOOR && *i < held.len()).collect();
+    close.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // The same sentence held twice takes one place: the confirmed one,
+    // else the newer.
+    let same = |a: usize, b: usize| collapse(&held[a].sentence).eq_ignore_ascii_case(&collapse(&held[b].sentence));
+    let mut once: Vec<(usize, f32)> = Vec::new();
+    for (i, s) in close {
+        match once.iter_mut().find(|(o, _)| same(*o, i)) {
+            Some(o) => {
+                let (old, new) = (&held[o.0], &held[i]);
+                if (new.confirmed, new.as_of) > (old.confirmed, old.as_of) {
+                    o.0 = i;
+                }
+            }
+            None => once.push((i, s)),
+        }
+    }
+    let mut close = once;
+    close.truncate(NOTE_ITEMS);
+    let mut picked: Vec<usize> = close.into_iter().map(|(i, _)| i).collect();
+    picked.sort_by(|a, b| held[*b].as_of.cmp(&held[*a].as_of));
+    picked
+}
+
+/// The state note, placed right after the question: what memory holds to
+/// be true now, with the date of the newest. `mark_unconfirmed` says of an
+/// AI's own note that the person has not confirmed it. Never dropped for
+/// room: it is short by rule (later sentences give way, then the one that
+/// is left is cut).
+pub(crate) fn state_note(items: &[Held], mark_unconfirmed: bool) -> Option<String> {
+    let newest = items.iter().map(|i| i.as_of).max()?;
+    let sentence = |i: &Held| {
+        let mut s = collapse(&i.sentence);
+        if !s.ends_with(['.', '!', '?']) {
+            s.push('.');
+        }
+        if mark_unconfirmed && !i.confirmed {
+            s.push_str(NOT_CONFIRMED);
+        }
+        s
+    };
+    let mut said: Vec<String> = Vec::new();
+    for i in items {
+        let s = sentence(i);
+        if !said.is_empty() && said.iter().map(|x| x.chars().count() + 1).sum::<usize>() + s.chars().count() > NOTE_CHARS {
+            break;
+        }
+        said.push(s);
+    }
+    let mut body = said.join(" ");
+    if body.chars().count() > NOTE_CHARS {
+        body = body.chars().take(NOTE_CHARS).collect();
+    }
+    Some(format!("[From memory, the state record for this, current as of {}: {body} Anything older that disagrees is history.]", day(newest * 1000)))
+}
+
+/// Found exchanges that memory marks as replaced are left out of what is
+/// given: the exchange an item now replaced came from. Answers with what
+/// stays and what was left out, both in rank order.
+pub(crate) fn leave_out_replaced(found: Vec<Exchange>, replaced_sources: &[(i64, u32)]) -> (Vec<Exchange>, Vec<Exchange>) {
+    found.into_iter().partition(|e| !replaced_sources.contains(&(e.conversation, e.hit.seq)))
+}
+
+/// Stands between a block and the person's message. After several
+/// thousand characters of what memory found, a short question with nothing
+/// to mark it is lost on a small model, which then answers nothing asked.
+pub(crate) const THEIR_MESSAGE: &str = "[That is all from memory. Their message now, which is what to answer:]";
+
+/// The person's turn as it is sent: the block, the line that marks their
+/// message, the question exactly as typed, and the state note, in that
+/// order (the order is measured).
 pub(crate) fn turn_text(before_question: Option<&str>, question: &str, after_question: Option<&str>) -> String {
     let mut out = String::new();
     if let Some(b) = before_question.filter(|b| !b.is_empty()) {
         out.push_str(b);
         out.push_str("\n\n");
+        out.push_str(THEIR_MESSAGE);
+        out.push('\n');
     }
     out.push_str(question);
     if let Some(a) = after_question.filter(|a| !a.is_empty()) {
@@ -692,6 +921,69 @@ mod tests {
     }
 
     #[test]
+    fn a_block_of_the_closest_results_only_says_so_and_never_found_nothing() {
+        let w = Wording::shipped();
+        let about = About { closest_only: true, ..About::default() };
+        let b = block(&[mill(), mill()], &about, 1, 42_000, None, w);
+        assert_eq!((b.shown, b.found), (1, 2));
+        assert!(b.text.contains("Only the closest results of the search are shown here") && b.text.contains("look further"));
+        assert!(b.text.contains("do not say that nothing was found") && !b.text.contains("found nothing that answers it"));
+        // Everything given: the ordinary rule.
+        let b = block(&[mill()], &About::default(), 12, 42_000, None, w);
+        assert!(b.text.contains("found nothing that answers it") && !b.text.contains("look further"));
+        // Nothing shown at all: the report says none fits; no word of looking further.
+        let b = block(&[mill()], &about, 12, 10, None, w);
+        assert!(b.shown == 0 && !b.text.contains("look further"));
+        // The record carries it, and the panel's rebuild reads it back.
+        assert_eq!(serde_json::to_value(SearchReport { ran: true, ..Default::default() }).unwrap().get("closest_only"), None);
+        assert_eq!(serde_json::to_value(SearchReport { ran: true, closest_only: true, ..Default::default() }).unwrap()["closest_only"], true);
+    }
+
+    #[test]
+    fn what_is_given_is_held_to_the_wait_and_the_best_result_always_goes() {
+        let w = Wording::shipped();
+        let size = |e: &Exchange| exchange_text(e, w).0.chars().count() + 2;
+        let whole = size(&mill());
+        let alone = size(&Exchange { before: None, after: None, ..mill() });
+        let shown = |found: &[Exchange], room: Option<usize>| block(found, &About::default(), 12, 42_000, room, w);
+        // No wait known: nothing changes.
+        let (found, room) = within_wait(vec![mill(), mill()], 12, Some(900), None, w);
+        assert_eq!((found.len(), room, found[0].before.is_some()), (2, Some(900), true));
+        // A wait that holds everything: everything goes, whole.
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 12, None, Some(whole * 3), w);
+        assert!(found.iter().all(|e| e.before.is_some() && e.after.is_some()));
+        assert_eq!(shown(&found, room).shown, 3);
+        // A wait that holds two whole or three alone: three found messages
+        // go, and the room left over gives the best one its neighbors back.
+        let wait = alone * 3 + (whole - alone);
+        assert!(wait < whole * 3 && wait >= whole + alone * 2);
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 12, None, Some(wait), w);
+        let b = shown(&found, room);
+        assert_eq!(b.shown, 3);
+        assert!(found[0].before.is_some() && found[0].after.is_some() && found[2].before.is_none() && found[2].after.is_none());
+        assert_eq!(b.found, 3, "what was found is still counted whole");
+        // The turn's own room, when less than the wait, is the limit.
+        assert_eq!(within_wait(vec![mill()], 12, Some(50), Some(whole + 1), w).1, Some(50));
+        // No more than the count allowed.
+        let (found, room) = within_wait(vec![mill(), mill(), mill()], 2, None, Some(alone * 3), w);
+        assert_eq!(block(&found, &About::default(), 2, 42_000, room, w).shown, 2);
+        // A wait shorter than the best exchange: the found message goes
+        // alone, without the ones around it, and it is shown.
+        let (found, room) = within_wait(vec![mill(), mill()], 12, None, Some(whole - 3), w);
+        assert!(found[0].before.is_none() || found[0].after.is_none());
+        let b = shown(&found, room);
+        assert_eq!(b.shown, 1);
+        assert!(b.text.contains("Hartwell Mills"));
+        // Shorter than the found message itself: it still goes.
+        let (found, room) = within_wait(vec![mill(), mill()], 12, None, Some(10), w);
+        let b = shown(&found, room);
+        assert_eq!(b.shown, 1);
+        assert!(b.text.contains("Hartwell Mills") && !b.text.contains("Dunmore"));
+        // Nothing found: nothing to give.
+        assert!(within_wait(Vec::new(), 12, None, Some(10), w).0.is_empty());
+    }
+
+    #[test]
     fn the_day_is_the_utc_day() {
         assert_eq!(day(T), "2026-01-20");
         assert_eq!(day(0), "1970-01-01");
@@ -716,7 +1008,7 @@ mod tests {
              They said: Free delivery starts at $60 from March 9.\n\
              AI: Set: $60 from Monday March 9.]"
         );
-        assert_eq!(turn_text(Some(&b.text), "Which mill do we use?", None), format!("{}\n\nWhich mill do we use?", b.text));
+        assert_eq!(turn_text(Some(&b.text), "Which mill do we use?", None), format!("{}\n\n{THEIR_MESSAGE}\nWhich mill do we use?", b.text));
         // A name no conversation mentions is said before the rule.
         let about = About { absent_names: vec!["Bellamy".into(), "Crest Bank".into()], ..Default::default() };
         let b = block(&[mill()], &about, 12, 42_000, None, Wording::measured());
@@ -820,7 +1112,7 @@ mod tests {
 
     #[test]
     fn did_not_run_says_why() {
-        for why in [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi] {
+        for why in [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi, WhyNot::OffOnThisComputer] {
             let text = did_not_run(why, "Today is 2026-11-24.", Wording::all());
             assert!(text.starts_with("[From memory. Today is 2026-11-24. No search of their conversations was run for this question: "), "{text}");
             assert!(text.contains(why.said()) && text.ends_with("do not answer about their past from guesswork.]"));
@@ -828,8 +1120,9 @@ mod tests {
             assert!(!text.contains("was run for this question. It returned") && !text.contains("found nothing"));
         }
         assert_eq!(serde_json::to_string(&WhyNot::DidNotStartInTime).unwrap(), "\"did_not_start_in_time\"");
-        let all: std::collections::HashSet<&str> = [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi].iter().map(|w| w.said()).collect();
-        assert_eq!(all.len(), 8, "each cause has its own sentence");
+        let all: std::collections::HashSet<&str> = [WhyNot::ComponentMissing, WhyNot::ComponentDownloading, WhyNot::NotEnoughMemory, WhyNot::DidNotStartInTime, WhyNot::TimedOut, WhyNot::VaultLocked, WhyNot::IndexRebuilding, WhyNot::SwitchedOffForThisAi, WhyNot::OffOnThisComputer].iter().map(|w| w.said()).collect();
+        assert_eq!(all.len(), 9, "each cause has its own sentence");
+        assert_eq!(serde_json::to_string(&WhyNot::OffOnThisComputer).unwrap(), "\"off_on_this_computer\"");
     }
 
     #[test]
@@ -863,13 +1156,79 @@ mod tests {
         let note = "[From memory, the state record for this, current as of 2026-03-09: Free delivery starts at $60. Anything older that disagrees is history.]";
         let question = "What is the free delivery threshold?";
         let turn = turn_text(Some(&b.text), question, Some(note));
-        assert_eq!(turn, format!("{}\n\n{question}\n\n{note}", b.text));
+        assert_eq!(turn, format!("{}\n\n{THEIR_MESSAGE}\n{question}\n\n{note}", b.text));
         let (at_block, at_question, at_note) = (turn.find("[From memory. ").unwrap(), turn.find(question).unwrap(), turn.find("[From memory, the state record").unwrap());
         assert!(at_block == 0 && at_block + b.text.len() < at_question && at_question + question.len() < at_note);
         // With no memory at all the turn is the question as typed.
         assert_eq!(turn_text(None, question, None), question);
         assert_eq!(turn_text(Some(""), question, Some("")), question);
         assert_eq!(turn_text(None, question, Some(note)), format!("{question}\n\n{note}"));
+    }
+
+    #[test]
+    fn note_text_matches_the_measured_form() {
+        let march_3 = 1_772_496_000_000i64; // 2026-03-03 00:00 UTC, ms
+        let one = [Held { sentence: "Free delivery starts at $60.".into(), as_of: march_3, confirmed: true }];
+        assert_eq!(
+            state_note(&one, true).unwrap(),
+            "[From memory, the state record for this, current as of 2026-03-03: Free delivery starts at $60. Anything older that disagrees is history.]"
+        );
+        assert_eq!(state_note(&one, false), state_note(&one, true), "a confirmed item reads the same either way");
+        assert_eq!(state_note(&[], true), None);
+        // Several: newest first as given, the date of the newest, a missing full stop added.
+        let two = [Held { sentence: "Free delivery starts at $60".into(), as_of: march_3, confirmed: true }, Held { sentence: "Orders under $60 keep the $6 fee.".into(), as_of: march_3 - 86_400_000, confirmed: true }];
+        assert_eq!(state_note(&two, true).unwrap(), "[From memory, the state record for this, current as of 2026-03-03: Free delivery starts at $60. Orders under $60 keep the $6 fee. Anything older that disagrees is history.]");
+        // After the question, never before it.
+        let turn = turn_text(None, "What is the free delivery threshold?", state_note(&one, true).as_deref());
+        assert!(turn.starts_with("What is the free delivery threshold?\n\n[From memory, the state record for this"));
+        // Short by rule.
+        let long: Vec<Held> = (0..3).map(|i| Held { sentence: format!("{i} {}", "word ".repeat(80)), as_of: march_3, confirmed: true }).collect();
+        let note = state_note(&long, true).unwrap();
+        assert!(note.chars().count() < 600 + 130, "{}", note.chars().count());
+        assert!(note.contains("0 word") && !note.contains("2 word"));
+    }
+
+    #[test]
+    fn an_unconfirmed_note_is_marked() {
+        let march_3 = 1_772_496_000_000i64;
+        let mixed = [Held { sentence: "Closed on Saturdays from March.".into(), as_of: march_3, confirmed: false }, Held { sentence: "Open 7:30 on weekdays.".into(), as_of: march_3 - 5, confirmed: true }];
+        assert_eq!(
+            state_note(&mixed, true).unwrap(),
+            "[From memory, the state record for this, current as of 2026-03-03: Closed on Saturdays from March. (an AI's note, not confirmed by them) Open 7:30 on weekdays. Anything older that disagrees is history.]"
+        );
+        assert!(!state_note(&mixed, false).unwrap().contains("not confirmed"), "the measured form has no mark");
+    }
+
+    #[test]
+    fn a_note_is_made_from_the_closest_items_newest_first() {
+        let held: Vec<Held> = (0..6).map(|i| Held { sentence: format!("Item {i}."), as_of: 1000 + i as i64, confirmed: true }).collect();
+        let near = [(0, 0.9), (1, 0.54), (2, 0.6), (3, 0.7), (4, 0.56), (5, 0.2), (9, 0.99)];
+        let picked: Vec<String> = note_items(&held, &near).into_iter().map(|h| h.sentence).collect();
+        assert_eq!(picked, vec!["Item 3.", "Item 2.", "Item 0."], "the three closest over the floor, newest first");
+        assert!(note_items(&held, &[(0, 0.5), (1, 0.3)]).is_empty(), "nothing close enough: no note");
+        // The same sentence held three times takes one place, and the confirmed one speaks.
+        let h = |s: &str, as_of: i64, confirmed: bool| Held { sentence: s.into(), as_of, confirmed };
+        let twice = [h("Free delivery starts at $60.", 5, false), h("free delivery starts at  $60.", 3, true), h("Free delivery starts at $60.", 9, false), h("Orders under $60 keep the $6 fee.", 1, false), h("The van runs on Tuesdays.", 2, false)];
+        let picked = note_items(&twice, &[(0, 0.9), (1, 0.88), (2, 0.87), (3, 0.7), (4, 0.6)]);
+        assert_eq!(picked.len(), 3, "{picked:?}");
+        assert_eq!(picked.iter().filter(|p| p.sentence.to_lowercase().starts_with("free delivery")).count(), 1);
+        assert!(picked.iter().any(|p| p.confirmed && p.as_of == 3));
+    }
+
+    #[test]
+    fn replaced_sources_are_left_out_and_reported() {
+        let old = Exchange { conversation: 111, title: "Delivery, January".into(), hit: person(0, "let's make delivery free over $40."), before: None, after: None, ..mill() };
+        let new = Exchange { conversation: 222, title: "Delivery, March".into(), hit: person(0, "raise the free delivery threshold to $60 from Monday."), before: None, after: None, ..mill() };
+        let (stay, left_out) = leave_out_replaced(vec![new.clone(), old.clone(), mill()], &[(111, 0)]);
+        assert_eq!(stay.iter().map(|e| e.conversation).collect::<Vec<_>>(), vec![222, mill().conversation]);
+        assert_eq!(left_out, vec![old]);
+        // The report says older, replaced exchanges were left out (the measured sentence).
+        let b = block(&stay, &About { replaced_left_out: !left_out.is_empty(), ..Default::default() }, 12, 42_000, None, Wording::measured());
+        assert!(b.text.contains("It returned the 2 dated exchange(s) below; older exchanges that memory has marked as replaced were left out."));
+        assert!(!b.text.contains("$40"));
+        // Nothing replaced among what was found: nothing is said of it.
+        let (stay, left_out) = leave_out_replaced(vec![new], &[(999, 4)]);
+        assert_eq!((stay.len(), left_out.len()), (1, 0));
     }
 
     #[test]
@@ -949,8 +1308,8 @@ mod tests {
     #[test]
     fn fingerprint_is_of_the_exact_wire_text() {
         let turn = turn_text(Some("[From memory. x]"), "Which mill?", None);
-        assert_eq!(fingerprint(&turn), fingerprint("[From memory. x]\n\nWhich mill?"));
-        assert_ne!(fingerprint(&turn), fingerprint("[From memory. x]\n\nWhich mill? "));
+        assert_eq!(fingerprint(&turn), fingerprint(&format!("[From memory. x]\n\n{THEIR_MESSAGE}\nWhich mill?")));
+        assert_ne!(fingerprint(&turn), fingerprint(&format!("[From memory. x]\n\n{THEIR_MESSAGE}\nWhich mill? ")));
         assert_eq!(fingerprint("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 

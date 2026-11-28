@@ -2,10 +2,15 @@
 // the Your Memory page is a pinned person-scope row in the person's own
 // records - it is listed first, survives a reload (read back from the
 // network), and a removal is a record that hides it.
-import { shot, invoke, invokeLong, waitForChat, ask, waitForReplyDone } from "./_helpers";
+import { shot, invoke, waitForChat, ask, waitForReplyDone } from "./_helpers";
 
 const RULE = `Always ask before sending anything (test ${Date.now().toString(36)})`;
-const SAID_RULE = `From now on, answer in one short sentence (test ${Date.now().toString(36)})`;
+// No run mark in these words: a random mark alone moves two sayings apart (0.675 measured).
+const SAID_RULE = "From now on, answer in one short sentence.";
+// This step is about the flow; how far apart two wordings may be is measured in memory-rule-offers.
+const SAID_RULE_AGAIN = "From now on, please answer in one short sentence.";
+const OTHER_RULE = "Never use tables in your replies.";
+const OTHER_RULE_AGAIN = "Never use tables in your replies, please.";
 
 async function mcpCall(name: string, args: Record<string, unknown>, headers: Record<string, string> = {}) {
   const r = await fetch("http://127.0.0.1:11435/mcp", {
@@ -18,8 +23,8 @@ async function mcpCall(name: string, args: Record<string, unknown>, headers: Rec
 }
 
 async function yourMemory() {
-  await browser.url("tauri://localhost/your-memory/");
-  await (await $('[data-testid="memory-add"]')).waitForDisplayed({ timeout: 60_000 });
+  await browser.url("tauri://localhost/your-memory/#rules");
+  await (await $('[data-testid="rule-add"]')).waitForDisplayed({ timeout: 60_000 });
 }
 
 describe("memory rules", () => {
@@ -29,16 +34,12 @@ describe("memory rules", () => {
     await browser.waitUntil(async () => {
       try { await invoke("list_memory_rows", { agentKey: null, scope: "person" }); return true; } catch { return false; }
     }, { timeout: 180_000, timeoutMsg: "the person's memory rows never answered" });
-    await (await $('[data-testid="memory-add"]')).click();
-    await (await $('[data-testid="memory-add-kind"]')).click();
-    await (await $('[data-testid="memory-add-option"][data-kind="rule"]')).click();
-    const input = await $('[data-testid="memory-add-value"]');
     await browser.execute((t: string) => {
-      const el = document.querySelector('[data-testid="memory-add-value"]') as HTMLInputElement;
+      const el = document.querySelector('[data-testid="rule-add"]') as HTMLInputElement;
       el.focus(); el.value = t;
       el.dispatchEvent(new Event("input", { bubbles: true }));
     }, RULE);
-    await browser.keys("Enter");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="rule-add-save"]'));
     const rule = await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`);
     await rule.waitForDisplayed({ timeout: 60_000 });
     await shot("memory-rule-added");
@@ -78,32 +79,68 @@ describe("memory rules", () => {
     await shot("memory-rule-rail-line");
   });
 
-  it("offers to keep an instruction said in chat as a rule, and the remember tool revises instead of duplicating", async () => {
+  it("offers a rule the second time an instruction is given, never the first, and No stays No", async () => {
     await waitForChat();
-    // Said in chat, instruction-shaped: one line under the message offers.
+    const offers = () => browser.execute(() => document.querySelectorAll('[data-testid="rule-offer"]').length) as Promise<number>;
+    // The first time: noted, nothing offered, no rule made.
     await ask(SAID_RULE);
+    await waitForReplyDone().catch(() => undefined);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+    let rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(false);
+    // The second time, in other words: one line under the message offers.
+    await ask(SAID_RULE_AGAIN);
     const offer = await $('[data-testid="rule-offer"]');
-    await offer.waitForDisplayed({ timeout: 15_000 });
+    await offer.waitForDisplayed({ timeout: 60_000 });
+    expect(await offer.getText()).toContain("You have asked for this twice. Keep it as a rule?");
     await shot("memory-rule-offer");
+    // Left unanswered, nothing is held up and no rule exists.
+    await waitForReplyDone().catch(() => undefined);
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE_AGAIN)).toBe(false);
     await (await $('[data-testid="rule-offer-keep"]')).click();
-    await (await $('[data-testid="rule-kept"]')).waitForDisplayed({ timeout: 30_000 });
+    const kept = await $('[data-testid="rule-kept"]');
+    await kept.waitForDisplayed({ timeout: 30_000 });
+    expect(await kept.getText()).toContain("Every AI is given it");
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE_AGAIN)).toBe(true);
+    // Given a third time: it is a rule already, nothing is offered.
+    await ask(SAID_RULE);
     await waitForReplyDone().catch(() => undefined);
-    const rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
-    expect(rows.some((r) => r.kind === "rule" && r.text === SAID_RULE)).toBe(true);
-    // A preference that is NOT instruction-shaped: the extractor finds it a
-    // few seconds after the turn and the same line offers it, in the
-    // extractor's wording.
-    const PREF = `I'd rather you kept answers short since I read on my phone (pref ${Date.now().toString(36)})`;
-    await ask(PREF);
-    await browser.waitUntil(async () => {
-      const offers = await $$('[data-testid="rule-offer"]');
-      for (const o of offers) if ((await o.getText()).includes('"')) return true;
-      return false;
-    }, { timeout: 120_000, timeoutMsg: "the extractor's rule offer never appeared under the preference" });
-    const texts2 = await browser.execute(() => [...document.querySelectorAll('[data-testid="rule-offer"]')].map((n) => (n as HTMLElement).innerText));
-    console.log(`e2e: offers ${JSON.stringify(texts2)}`);
-    expect(texts2.some((t: string) => t.includes('"'))).toBe(true);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+
+    // Another instruction, twice, answered No: a third time brings no offer.
+    await ask(OTHER_RULE);
     await waitForReplyDone().catch(() => undefined);
+    await ask(OTHER_RULE_AGAIN);
+    await (await $('[data-testid="rule-offer"]')).waitForDisplayed({ timeout: 60_000 });
+    await (await $('[data-testid="rule-offer-no"]')).click();
+    await browser.waitUntil(async () => (await offers()) === 0, { timeout: 20_000, timeoutMsg: "the offer stayed after No" });
+    await waitForReplyDone().catch(() => undefined);
+    await ask(OTHER_RULE);
+    await waitForReplyDone().catch(() => undefined);
+    await browser.pause(4000);
+    expect(await offers()).toBe(0);
+    expect(await invoke<string[]>("memory_rule_offers_declined")).toContain(OTHER_RULE_AGAIN);
+    rows = await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" });
+    expect(rows.some((r) => r.kind === "rule" && /tables/.test(r.text))).toBe(false);
+    await shot("memory-rule-declined");
+    // The declined offer is listed on the Rules board, and "Offer it again"
+    // takes it off the list, so the instruction can be offered once more.
+    await browser.url("tauri://localhost/your-memory/#rules");
+    const declinedRow = await $('[data-testid="declined-offer"]');
+    await declinedRow.waitForDisplayed({ timeout: 60_000 });
+    expect(await declinedRow.getText()).toContain(OTHER_RULE_AGAIN);
+    await shot("memory-rule-declined-listed");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="declined-offer-again"]'));
+    await (await $('[data-testid="declined-offers"]')).waitForExist({ reverse: true, timeout: 30_000 });
+    expect(await invoke<string[]>("memory_rule_offers_declined")).not.toContain(OTHER_RULE_AGAIN);
+    const heardAgain = await invoke<{ offer: boolean; why: string }>("memory_rule_heard", { input: { text: OTHER_RULE_AGAIN, conversation: `again-${Date.now()}`, at: Date.now(), rules: [] } });
+    console.log(`e2e: said again after "Offer it again": ${JSON.stringify(heardAgain)}`);
+    expect(heardAgain.offer).toBe(true);
+    await waitForChat();
     // The remember tool: said twice with new words, one row with the newer text.
     const first = await mcpCall("remember", { text: "Run npm test before every commit (e2e)", kind: "command" });
     console.log(`e2e: remember 1 -> ${JSON.stringify(first.text)}`);
@@ -140,56 +177,6 @@ describe("memory rules", () => {
     await invoke("save_memory_row", { agentKey: null, row: { ...cmd, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 
-  it("dreaming merges two commands that say the same, shows it in the history, and Undo brings both back", async () => {
-    const stamp = Date.now().toString(36);
-    const mk = (id: string, text: string, at: number) => ({
-      id, scope: "person", kind: "command", text, structured: null, as_of: at, valid_to: null, saved_by: "person",
-      provenance: "authored", pinned: false, topics: [], replaces: [], deleted: false, updated_at: at,
-    });
-    const A = `Run cargo test before every release (dream ${stamp})`;
-    const B = `Always run cargo test before each release (dream ${stamp})`;
-    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-a-${stamp}`, A, Date.now() - 2000) });
-    await invoke("save_memory_row", { agentKey: null, row: mk(`dream-b-${stamp}`, B, Date.now() - 1000) });
-    // A note with a relative date and two statements: the model-assisted
-    // pass (through the memory slot) dates it, splits it or tags it - never
-    // rewords it. Which of the three a small model manages may vary; one
-    // assisted revision is the proof.
-    const noteText = `Met Alex at the market yesterday. The office opens at nine (dream ${stamp})`;
-    await invoke("save_memory_row", { agentKey: null, row: { ...mk(`dream-n-${stamp}`, noteText, Date.now() - 3000), kind: "note" } });
-    const n = await invokeLong<number>("dream_now", { scope: "person", agentKey: null });
-    console.log(`e2e: dream wrote ${n} revision(s)`);
-    expect(n).toBeGreaterThan(0);
-    const assisted = (await invoke<any[]>("list_memory_revisions", { agentKey: null, scope: "person" }))
-      .filter((r) => (r.id === `dream-n-${stamp}` || r.id.startsWith(`dream-n-${stamp}-`)) && r.provenance.startsWith("dream:"));
-    console.log(`e2e: assisted ${JSON.stringify(assisted.map((r) => [r.id, r.text.slice(0, 40), r.as_of, r.topics]))}`);
-    expect(assisted.length).toBeGreaterThan(0);
-    for (const r of assisted) expect(noteText.toLowerCase()).toContain(r.text.toLowerCase().replace(/ \(dream.*$/, "").slice(0, 12));
-    const live = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
-    expect(live.length).toBe(1);
-    expect(live[0].text).toBe(B);
-    expect(live[0].provenance.startsWith("dream:")).toBe(true);
-    expect(live[0].provenance).toContain("authored");
-    // The history shows it; Undo restores both.
-    await yourMemory();
-    const section = await $('[data-testid="memory-dreams"]');
-    await section.waitForDisplayed({ timeout: 60_000 });
-    await (await section.$("button*=Show")).click();
-    const entry = await $(`[data-testid="memory-dream"]*=${B.slice(0, 24)}`);
-    await entry.waitForDisplayed({ timeout: 15_000 });
-    console.log(`e2e: dream line ${JSON.stringify(await entry.getText())}`);
-    expect(await entry.getText()).toContain("Merged");
-    await shot("memory-dream-history");
-    await (await entry.$("button=Undo")).click();
-    await browser.waitUntil(async () => {
-      const rows = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((r) => r.kind === "command" && r.text.includes(`(dream ${stamp})`));
-      return rows.length === 2;
-    }, { timeout: 30_000, timeoutMsg: "Undo did not bring both commands back" });
-    // Tidy (the note and anything the dream made of it too).
-    for (const r of (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).filter((x) => x.text.includes(`(dream ${stamp})`) || x.id.startsWith(`dream-n-${stamp}`))) {
-      await invoke("save_memory_row", { agentKey: null, row: { ...r, deleted: true, updated_at: Date.now(), action_hash: null } });
-    }
-  });
-
   it("keeps the rule across a reload and removes it as a record", async () => {
     await yourMemory();
     await (await $(`[data-testid="memory-rule"]*=${RULE.slice(0, 30)}`)).waitForDisplayed({ timeout: 60_000 });
@@ -202,7 +189,7 @@ describe("memory rules", () => {
     expect(after.some((r) => r.text === RULE)).toBe(false);
     await shot("memory-rule-removed");
     // Tidy the rule kept from chat the same way.
-    const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE);
+    const said = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === SAID_RULE_AGAIN);
     if (said) await invoke("save_memory_row", { agentKey: null, row: { ...said, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 
@@ -225,5 +212,47 @@ describe("memory rules", () => {
     expect(again.added).toBe(0);
     expect(text).toContain("## How to work here");
     expect(text).toContain(`- ${RULE}`);
+  });
+
+  it("one AI's rule is made a rule for every AI: it moves to the person's own list", async function () {
+    this.timeout(300_000);
+    const ai = await browser.execute(async () => {
+      const t = (window as any).__TAURI__;
+      const p = await t.core.invoke("profile_store_path", { name: "ai-data.json" });
+      const store = await t.store.load(p);
+      const a = (((await store.get("custom-ais")) || []) as { id?: string; agentPubKey?: string; foundingKey?: string }[])[0];
+      return a ? { id: a.id ?? "", key: a.foundingKey || a.agentPubKey || a.id || "" } : null;
+    });
+    if (!ai?.id) this.skip();
+    const ONE = `Sign off with a short goodbye (test ${Date.now().toString(36)})`;
+    const scope = `ai:${ai!.key}`;
+    await invoke("save_memory_row", { agentKey: ai!.id, row: {
+      id: `one-ai-${Date.now().toString(36)}`, scope, kind: "rule", text: ONE, structured: null,
+      as_of: Date.now(), valid_to: null, saved_by: "person", provenance: "authored", pinned: true, topics: [], replaces: [], deleted: false, updated_at: Date.now(),
+    } });
+    await browser.execute(() => {
+      localStorage.setItem("yoai-memory-more", "1");
+      window.dispatchEvent(new CustomEvent("yoai-memory-more"));
+    });
+    await browser.url("tauri://localhost/your-memory/");
+    const face = await $(`[data-testid="memory-owner-ai"][data-ai-id="${ai!.id}"]`);
+    await face.waitForExist({ timeout: 60_000 });
+    await browser.execute((e) => (e as HTMLElement).click(), face);
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="memory-tab"][data-tab="rules"]'));
+    const mine = await $(`//*[@data-testid="ai-rules"]//*[@data-testid="memory-rule"][contains(., "${ONE.slice(0, 30)}")]`);
+    await mine.waitForExist({ timeout: 60_000, timeoutMsg: "the AI's own rule is not listed under its face" });
+    await browser.execute((e) => (e as HTMLElement).click(), await mine.$('[data-testid="rule-for-every-ai"]'));
+    await browser.waitUntil(
+      async () => (await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope: "person" })).some((r) => r.kind === "rule" && r.text === ONE),
+      { timeout: 60_000, timeoutMsg: "the rule did not reach the person's own list" },
+    );
+    await browser.waitUntil(
+      async () => !(await invoke<{ text: string }[]>("list_memory_rows", { agentKey: ai!.id, scope })).some((r) => r.text === ONE),
+      { timeout: 60_000, timeoutMsg: "the rule is still in the one AI's list" },
+    );
+    // On the page: gone from the AI's rules, there among the person's own.
+    await mine.waitForExist({ reverse: true, timeout: 30_000 });
+    const moved = (await invoke<any[]>("list_memory_rows", { agentKey: null, scope: "person" })).find((r) => r.text === ONE);
+    if (moved) await invoke("save_memory_row", { agentKey: null, row: { ...moved, deleted: true, updated_at: Date.now(), action_hash: null } });
   });
 });

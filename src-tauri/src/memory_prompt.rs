@@ -95,8 +95,14 @@ fn listed<'a>(lines: impl IntoIterator<Item = &'a str>) -> String {
 /// project's.
 pub(crate) const RULES_BUDGET: usize = 2048;
 
-fn is_rule_kind(kind: &str) -> bool {
+pub(crate) fn is_rule_kind(kind: &str) -> bool {
     matches!(kind, "rule" | "command" | "location")
+}
+
+/// A rule that is given: of a rule kind and not turned off. The person
+/// turns a rule off without removing it; the row then says when it ended.
+pub(crate) fn is_live_rule(row: &MemoryRow) -> bool {
+    is_rule_kind(&row.kind) && row.valid_to.is_none()
 }
 
 fn layer_text(rows: &[&MemoryRow]) -> String {
@@ -115,7 +121,60 @@ fn layer_text(rows: &[&MemoryRow]) -> String {
     lines.join("\n")
 }
 
-const PROJECT_HEADING: &str = "Rules for this project:";
+pub(crate) const PROJECT_HEADING: &str = "Rules for this project:";
+
+/// How much of a project's rules is put beside the person's prompt.
+pub(crate) const RULES_BESIDE_BUDGET: usize = 1200;
+
+/// A project's rules as a note beside the person's prompt in a session.
+/// They are in the session's system message too; a small model reads what
+/// is beside the question and skims a long system message. Pinned rules
+/// first, then the newest, within a budget; given in their own order.
+pub(crate) fn rules_beside(project_rows: &[MemoryRow]) -> Option<String> {
+    let all: Vec<&MemoryRow> = project_rows.iter().filter(|r| !r.deleted && is_live_rule(r) && !r.text.trim().is_empty()).collect();
+    let mut wanted = all.clone();
+    wanted.sort_by(|a, b| b.pinned.cmp(&a.pinned).then(b.updated_at.cmp(&a.updated_at)));
+    let mut kept: Vec<&MemoryRow> = Vec::new();
+    for r in wanted {
+        let mut tried = kept.clone();
+        tried.push(r);
+        if layer_text(&in_order(&tried, &all)).len() <= RULES_BESIDE_BUDGET {
+            kept = tried;
+        }
+    }
+    let text = layer_text(&in_order(&kept, &all));
+    (!text.is_empty()).then(|| format!("{PROJECT_HEADING}\n{text}"))
+}
+
+/// The note of a project's rules for a session's prompt, read from this
+/// device's copy of the project's rows.
+pub(crate) fn project_rules_beside(app: &tauri::AppHandle, project: Option<&str>) -> Option<String> {
+    use tauri::Manager;
+    let scope = project_scope(project)?;
+    let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).ok()?;
+    rules_beside(&crate::memory_rows::read_cache(app, &key, &scope))
+}
+
+/// An online turn's record of what was sent, with the lines the person
+/// keeps about themselves counted in. A turn that searched nothing still
+/// gets a record when such lines went, so the reply can say so.
+pub(crate) fn sent_about(given: Option<crate::memory_block::GivenRecord>, online: bool, about: usize, today: &str) -> Option<crate::memory_block::GivenRecord> {
+    if !online || about == 0 {
+        return given;
+    }
+    let mut rec = given.unwrap_or_else(|| crate::memory_block::GivenRecord {
+        v: 1,
+        search: crate::memory_block::SearchReport { ran: false, why_not: None, today: today.to_string(), ..Default::default() },
+        mask_version: crate::secret_mask::MASK_VERSION.to_string(),
+        cut_version: crate::memory_block::CUT_VERSION.to_string(),
+        ..Default::default()
+    });
+    let sent = rec.more.entry("sent".to_string()).or_insert_with(|| serde_json::json!({ "passages": 0, "lines": 0, "note": false }));
+    if let Some(o) = sent.as_object_mut() {
+        o.insert("about".into(), serde_json::json!(about));
+    }
+    Some(rec)
+}
 
 /// The rows of `all` that are among `kept`, in the order of `all`.
 fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a MemoryRow> {
@@ -125,8 +184,8 @@ fn in_order<'a>(kept: &[&'a MemoryRow], all: &[&'a MemoryRow]) -> Vec<&'a Memory
 /// The rules layer: the person's words, first, on every turn. The rows of
 /// the person and the AI, then the rows of the project the turn is in.
 fn rules_layer(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
-    let mut own: Vec<&MemoryRow> = rows.iter().filter(|r| is_rule_kind(&r.kind)).collect();
-    let mut project: Vec<&MemoryRow> = project_rows.iter().filter(|r| is_rule_kind(&r.kind)).collect();
+    let mut own: Vec<&MemoryRow> = rows.iter().filter(|r| is_live_rule(r)).collect();
+    let mut project: Vec<&MemoryRow> = project_rows.iter().filter(|r| is_live_rule(r)).collect();
     let text_of = |own: &[&MemoryRow], project: &[&MemoryRow]| {
         let (a, b) = (layer_text(own), layer_text(project));
         match (a.is_empty(), b.is_empty()) {
@@ -283,6 +342,14 @@ pub(crate) struct TurnInput {
     /// the reply's reserve, when the sender has counted it.
     #[serde(default)]
     pub room_tokens: Option<u32>,
+    /// The local model file the reply will come from, when the sender
+    /// knows it: what was found is sized to how fast that model reads here.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The person asked memory to look further for this question: what was
+    /// found is not held to the wait before the first word.
+    #[serde(default)]
+    pub further: bool,
     /// The person's question before this one, in the open conversation.
     #[serde(default)]
     pub previous_question: Option<String>,
@@ -294,6 +361,15 @@ pub(crate) struct TurnInput {
     /// made before the model and its window are known).
     #[serde(default)]
     pub skip_search: bool,
+    /// What is found rides beside the question whatever the surface (a
+    /// session's turn, whose block is added at the port).
+    #[serde(default)]
+    pub beside: bool,
+    /// The person's switch for an online AI, "Share memory with this AI".
+    /// Absent or true: shared. It means nothing for a local AI, whose
+    /// turns never leave the computer.
+    #[serde(default)]
+    pub memory_shared: Option<bool>,
 }
 
 /// What memory adds to a turn.
@@ -319,6 +395,10 @@ pub(crate) struct TurnMemory {
     /// the dated lines. For this turn only, in memory: the reply's
     /// quotations are checked against them and the panel shows them.
     pub given_texts: Vec<String>,
+    /// The person said, in fixed words, to keep something: the exchange
+    /// before, or this message. The page keeps it once the turn is
+    /// recorded; the turn is told so, and the reply can agree.
+    pub remember: Option<crate::memory_items::SaidRemember>,
 }
 
 /// `Today is YYYY-MM-DD.` for a date.
@@ -399,8 +479,14 @@ pub(crate) fn rules_revision(app: &tauri::AppHandle, founding_key: Option<&str>,
 /// with the stores closed it gives the name-unknown line and the date.
 pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMemory {
     use tauri::Manager;
+    let turn_began = std::time::Instant::now();
+    // The early call of a turn comes seconds before its search: the list
+    // of words the name check needs is made meanwhile.
+    crate::transcript_search::words_soon(app);
+    let mut turn_took: Vec<(&str, u128)> = Vec::new();
     let key = app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).ok();
     let facts = key.as_ref().and_then(|k| crate::memory::read_facts(app, k).ok()).unwrap_or_default();
+    turn_took.push(("facts", turn_began.elapsed().as_millis()));
     let mut rows: Vec<MemoryRow> = Vec::new();
     let mut project_rows: Vec<MemoryRow> = Vec::new();
     if let Some(k) = &key {
@@ -413,17 +499,34 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
             refresh_rows_soon(app, &scope);
         }
     }
+    turn_took.push(("rules", turn_began.elapsed().as_millis()));
     let ai_id = input.ai_id.as_deref().filter(|a| !a.is_empty());
+    // Read only while it is still given (see below): on a long history it
+    // is the largest read here, and the person waits for it.
+    let updated = crate::memory_migrate::update_done(app);
     let recall = match (&key, ai_id) {
-        (Some(k), Some(ai)) => Some(crate::transcript_memory::read_for(app, k, ai).unwrap_or_default()),
+        (Some(k), Some(ai)) if !updated => Some(crate::transcript_memory::read_for(app, k, ai).unwrap_or_default()),
         _ => None,
     };
+    turn_took.push(("earlier turns", turn_began.elapsed().as_millis()));
+    // Once the update's pass has run on this profile, the older stores
+    // are no longer given: what an AI had guessed about the person is set
+    // aside, the short description of them is retired, and each AI's own
+    // list of earlier turns is gone (whole conversations are searched).
+    // Their name keeps working, and what they kept about themselves is
+    // given as they kept it.
+    let (facts, recall) = if updated { (after_update(facts), None) } else { (facts, recall) };
+    let about_you = match (&key, updated && shares_memory(input.online, input.memory_shared)) {
+        (Some(k), true) => kept_about_them(&crate::memory_items::items(&crate::memory_rows::read_cache(app, k, crate::memory_items::SCOPE)), input.founding_key.as_deref().unwrap_or(""), input.project.as_deref(), input.online),
+        _ => Vec::new(),
+    };
+    turn_took.push(("about them", turn_began.elapsed().as_millis()));
     let asked = !input.question.trim().is_empty();
     let live_note = |f: &&crate::memory::MemoryFact| f.valid_to.is_none() && f.entry_kind == "note";
     let has_notes = facts.iter().filter(live_note).any(|f| f.embedding.as_ref().is_some_and(|v| !v.is_empty()));
     // A turn typed to an AI gets what memory found beside the question; an
     // agent's step still gets it in the system part.
-    let beside = matches!(input.surface, Surface::Chat | Surface::ApiPersona);
+    let beside = input.beside || matches!(input.surface, Surface::Chat | Surface::ApiPersona);
     let question_vector = match (asked && !beside, input.question_vector.clone()) {
         (false, _) => None,
         (true, Some(v)) => Some(v),
@@ -438,27 +541,123 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         question_vector: question_vector.as_deref(),
         conversation: input.conversation.as_deref().filter(|c| !c.is_empty()),
     });
+    turn_took.push(("system part", turn_began.elapsed().as_millis()));
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
-    let (before_question, given, given_texts) = if beside && asked && !input.skip_search {
-        let (text, mut record, texts) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
+    // "Remember that", said in fixed words (no model reads it). With no
+    // exchange before, there is nothing "that" could mean.
+    let remember = crate::memory_items::said_remember(&input.question).filter(|r| *r == crate::memory_items::SaidRemember::This || input.conversation.as_deref().is_some_and(|c| !c.is_empty()));
+    // A message that states something to keep is not a question about
+    // the past: nothing is searched for it.
+    let stated = remember == Some(crate::memory_items::SaidRemember::This);
+    let (before_question, given, given_texts, after_question) = if beside && asked && !input.skip_search && !stated {
+        let (text, mut record, texts, note) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
         if let Some(r) = record.as_mut() {
             r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
         }
-        (text, record, texts)
+        (text, record, texts, note)
     } else {
-        (None, None, Vec::new())
+        (None, None, Vec::new(), None)
+    };
+    // What the person keeps about themselves rides in the system part: for
+    // an AI that answers elsewhere it left the computer too, and the line
+    // under the reply counts it.
+    turn_took.push(("search", turn_began.elapsed().as_millis()));
+    log::info!("[memory] a turn's memory in {} ms ({})", turn_began.elapsed().as_millis(), turn_took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "));
+    let given = sent_about(given, input.online, about_you.len(), &today);
+    let after_question = match remember {
+        None => after_question,
+        Some(r) => {
+            let told = match r {
+                crate::memory_items::SaidRemember::Before => "[The person asked for the exchange before this to be kept in memory. It is being kept, and they are shown a line that says so.]",
+                crate::memory_items::SaidRemember::This => "[The person asked for this message to be kept in memory. It is being kept, and they are shown a line that says so.]",
+            };
+            Some(match after_question {
+                Some(note) => format!("{note}\n{told}"),
+                None => told.to_string(),
+            })
+        }
+    };
+    // "Forget that" and "keep this conversation out of memory", said in
+    // fixed words: the app acts on them once the turn is recorded, so the
+    // model is told, and does not answer that it cannot.
+    let told = match crate::memory_items::said_control(&input.question) {
+        Some(crate::memory_items::SaidControl::KeepOut) => Some("[The person asked for this conversation to be kept out of memory. That is being done, and they are shown a line that says so.]"),
+        Some(crate::memory_items::SaidControl::OffHere) if replies_use_memory(app) => Some("[The person asked for replies on this computer to stop using memory. The app does that from their next message on, and shows them a line that says so, with Undo. Their conversations are still recorded and kept, and their rules still apply.]"),
+        Some(crate::memory_items::SaidControl::OnHere) if !replies_use_memory(app) => Some("[The person asked for replies on this computer to use memory again. The app does that from their next message on, and shows them a line that says so.]"),
+        Some(crate::memory_items::SaidControl::Forget) if input.conversation.as_deref().is_some_and(|c| !c.is_empty()) => Some("[The person asked memory to forget what was just said. The app does that, and shows them a line that says what it did. Do not say that you cannot forget.]"),
+        _ => None,
+    };
+    // "Look further", pressed or said after a reply that was given only
+    // the closest results: this turn carries everything memory found for
+    // the question before it.
+    let told = if input.further { Some("[The person asked you to look further for their question before this one. Everything memory found for it is given above this time. Answer that question from it.]") } else { told };
+    let after_question = match (after_question, told) {
+        (Some(note), Some(told)) => Some(format!("{note}\n{told}")),
+        (None, Some(told)) => Some(told.to_string()),
+        (note, None) => note,
     };
     TurnMemory {
-        system_part: format!("{text}\n{today}"),
+        system_part: if about_you.is_empty() { format!("{text}\n{today}") } else { format!("{text}\n{}\n{today}", about_them_text(&about_you)) },
         before_question,
-        after_question: None,
+        after_question,
+        remember,
         counts,
         bare_notes: facts.iter().filter(live_note).any(|f| !f.embedding.as_ref().is_some_and(|v| !v.is_empty())),
         bare_knowledge: recall.as_deref().is_some_and(|r| r.iter().any(|e| e.kind == "authored" && e.source.is_none() && e.vector.is_empty())),
         given,
         given_texts,
     }
+}
+
+/// May an AI with this model setting be answered off this computer: an
+/// online model, a server the person runs elsewhere, or an automatic
+/// choice that may pick an online model.
+pub(crate) fn may_answer_elsewhere(model: &str) -> bool {
+    let m = model.trim();
+    m.starts_with("online:") || m.starts_with("external:") || m == "auto:online-offline" || m == "auto:online"
+}
+
+/// Is what memory holds given to this turn's AI? Always for a local AI.
+/// For an online one, unless the person turned sharing off for it.
+pub(crate) fn shares_memory(online: bool, memory_shared: Option<bool>) -> bool {
+    !online || memory_shared != Some(false)
+}
+
+/// The facts file after the update: only the person's name is still read
+/// from it.
+pub(crate) fn after_update(facts: Vec<MemoryFact>) -> Vec<MemoryFact> {
+    facts.into_iter().filter(|f| f.valid_to.is_none() && f.entry_kind != "note" && f.entry_kind != "synthesis" && f.entry_kind != "library" && is_name_predicate(&f.predicate)).collect()
+}
+
+/// How much of what the person kept about themselves a turn carries.
+const ABOUT_THEM_BUDGET: usize = 1500;
+
+/// What the person kept about themselves, for a turn of this AI: current
+/// items of the subject "About you" that they stand behind, newest first,
+/// within the budget. The name has its own line and is not repeated.
+pub(crate) fn kept_about_them(items: &[crate::memory_items::Item], ai: &str, project: Option<&str>, online: bool) -> Vec<String> {
+    let mut mine: Vec<&crate::memory_items::Item> = items
+        .iter()
+        .filter(|i| i.meta.subject.as_deref() == Some(crate::memory_subjects::ABOUT_YOU) && i.meta.state == crate::memory_items::ItemState::Current && i.meta.confirmed.is_some() && i.row.id != "mig-name")
+        .filter(|i| crate::memory_items::may_use(&i.meta, ai, project, online))
+        .collect();
+    mine.sort_by(|a, b| b.row.updated_at.cmp(&a.row.updated_at).then(a.row.id.cmp(&b.row.id)));
+    let mut out = Vec::new();
+    let mut size = 0usize;
+    for i in mine {
+        let line = crate::secret_mask::hand_on(i.row.text.trim()).text;
+        if !out.is_empty() && size + line.len() > ABOUT_THEM_BUDGET {
+            break;
+        }
+        size += line.len() + 3;
+        out.push(line);
+    }
+    out
+}
+
+fn about_them_text(lines: &[String]) -> String {
+    format!("About them, kept by them (use naturally where relevant; do not recite this list):\n{}", lines.iter().map(|l| format!("- {l}")).collect::<Vec<_>>().join("\n"))
 }
 
 /// A question short enough to lean on the one before it is also searched
@@ -486,10 +685,41 @@ pub(crate) fn merge_hits(a: Vec<crate::memory_index::Hit>, b: Vec<crate::memory_
     all
 }
 
+/// The setting's name in this computer's own settings file. It is never
+/// synced: the reason to turn it off is how fast this computer is.
+const OFF_HERE_KEY: &str = "memoryInRepliesOff";
+
+/// Do replies on this computer look in memory? On unless the person
+/// turned it off here. Off changes nothing else: conversations are still
+/// recorded, read and kept, what they ask to be remembered is kept, and
+/// their rules and what they keep about themselves go with every reply.
+pub(crate) fn replies_use_memory(app: &tauri::AppHandle) -> bool {
+    use tauri_plugin_store::StoreExt;
+    !app.store("settings.json").ok().and_then(|s| s.get(OFF_HERE_KEY)).and_then(|v| v.as_bool()).unwrap_or(false)
+}
+
+/// Is using memory in replies on, on this computer?
+#[tauri::command]
+pub fn memory_in_replies(app: tauri::AppHandle) -> bool {
+    replies_use_memory(&app)
+}
+
+/// Turn using memory in replies on or off, on this computer only.
+#[tauri::command]
+pub fn memory_in_replies_set(app: tauri::AppHandle, on: bool) -> Result<(), String> {
+    use tauri_plugin_store::StoreExt;
+    let store = app.store("settings.json").map_err(|e| e.to_string())?;
+    store.set(OFF_HERE_KEY, serde_json::json!(!on));
+    store.save().map_err(|e| e.to_string())?;
+    log::info!("[memory] replies on this computer {} memory", if on { "use" } else { "no longer use" });
+    Ok(())
+}
+
 /// What memory found for the question, as the block that goes ahead of it,
-/// with the record of what was given. No block at all when there is
-/// nothing to search: a first message is answered as if memory were not
-/// there.
+/// with the record of what was given, the texts given, and the note that
+/// goes after the question (what memory holds to be true now). No block at
+/// all when there is nothing to search: a first message is answered as if
+/// memory were not there.
 async fn found_beside(
     app: &tauri::AppHandle,
     input: &TurnInput,
@@ -497,11 +727,16 @@ async fn found_beside(
     facts: &[crate::memory::MemoryFact],
     recall: Option<&[TranscriptEmbedding]>,
     today: &str,
-) -> (Option<String>, Option<crate::memory_block::GivenRecord>, Vec<String>) {
+) -> (Option<String>, Option<crate::memory_block::GivenRecord>, Vec<String>, Option<String>) {
     use crate::memory_block::{self as mb, About, GivenRecord, SearchReport, WhyNot, Wording};
     let wording = Wording::shipped();
     let record = |search: SearchReport| GivenRecord { v: 1, search, mask_version: crate::secret_mask::MASK_VERSION.to_string(), cut_version: mb::CUT_VERSION.to_string(), ..Default::default() };
-    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new());
+    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new(), None);
+    // The person turned sharing off for this online AI: nothing memory
+    // holds goes with the turn (their rules still do, in the system part).
+    if !shares_memory(input.online, input.memory_shared) {
+        return not_run(WhyNot::SwitchedOffForThisAi);
+    }
     if !stores_open {
         return not_run(WhyNot::VaultLocked);
     }
@@ -510,7 +745,12 @@ async fn found_beside(
     let notes: Vec<&crate::memory::MemoryFact> = facts.iter().filter(|f| f.valid_to.is_none() && f.entry_kind == "note" && f.embedding.as_ref().is_some_and(|v| !v.is_empty())).collect();
     let knowledge: Vec<&TranscriptEmbedding> = recall.unwrap_or(&[]).iter().filter(|e| e.kind == "authored" && !e.vector.is_empty()).collect();
     if passages == 0 && reading.total == 0 && notes.is_empty() && knowledge.is_empty() {
-        return (None, None, Vec::new());
+        return (None, None, Vec::new(), None);
+    }
+    // Turned off on this computer by the person: said only when there is
+    // something memory could have looked through (the check above).
+    if !replies_use_memory(app) {
+        return not_run(WhyNot::OffOnThisComputer);
     }
     if crate::memory_reading::rebuilding(app) {
         return not_run(WhyNot::IndexRebuilding);
@@ -521,20 +761,44 @@ async fn found_beside(
             Ok(v) => v,
             Err(why) => return not_run(why),
         },
-        // The sender embeds the question itself and could not.
-        None => return not_run(WhyNot::DidNotStartInTime),
+        // The sender embeds the question itself and could not. When the
+        // part that searches is not on this computer, that is the cause to
+        // name: it is the one the person can do something about.
+        None => return not_run(if crate::inference_memory::search_part_is_here(app) { WhyNot::DidNotStartInTime } else { WhyNot::ComponentMissing }),
     };
     // The open conversation's own messages are already being sent.
     let open_k = input.conversation.as_deref().filter(|c| !c.is_empty()).and_then(|c| crate::transcript_search::row_key(app, c).ok());
     let on_wire_from = input.on_wire_from.unwrap_or(0);
-    let keep = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
+    // What the person decided about conversations and items: who a
+    // conversation is for, what is kept out, what was forgotten.
+    let memory_rows = {
+        use tauri::Manager;
+        app.state::<std::sync::Arc<crate::commands_holochain::HolochainState>>().get().and_then(|m| m.data_key()).map(|k| crate::memory_rows::read_cache(app, &k, crate::memory_items::SCOPE)).unwrap_or_default()
+    };
+    let uses = crate::memory_use::conv_uses(&memory_rows);
+    let forgotten = crate::memory_use::forgotten_sources(&crate::memory_items::items(&memory_rows));
+    let who = crate::memory_use::Asking { ai: input.founding_key.as_deref().unwrap_or(""), project: input.project.as_deref().filter(|p| !p.is_empty()), online: input.online };
+    let may = |c: &crate::memory_index::Candidate| {
+        if forgotten.contains(&(c.meta.started_at, c.seq)) {
+            return crate::memory_use::May::Never;
+        }
+        crate::memory_use::may_use_message(&uses, c.meta.started_at, c.seq, &who)
+    };
+    let searched = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
+    let keep = |c: &crate::memory_index::Candidate| searched(c) && may(c) == crate::memory_use::May::Use;
     let at_most = crate::memory_index::FOUND_AT_MOST;
+    // How long each part of the search takes is in the log: it is time the
+    // person waits before the model is asked anything.
+    let begun = std::time::Instant::now();
+    let mut took: Vec<(&str, u128)> = Vec::new();
+    let mut mark = |what: &'static str| took.push((what, begun.elapsed().as_millis()));
     let mut hits = match crate::memory_reading::search(app, &question, at_most, &keep) {
         Ok(f) => f.hits,
         Err(_) => return not_run(WhyNot::IndexRebuilding),
     };
     let follow_up = follow_up_query(input.previous_question.as_deref(), &input.question);
     let mut followed = false;
+    let held_health;
     if let Some(joined) = &follow_up {
         if let Ok(v) = crate::inference_memory::embed_for_search(app, joined).await {
             if let Ok(f) = crate::memory_reading::search(app, &v, at_most, &keep) {
@@ -543,7 +807,53 @@ async fn found_beside(
             }
         }
     }
-    let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits).unwrap_or_default();
+    mark("search");
+    // A turn about the person's health is never given to an AI that
+    // answers off this computer: found ones stay here, and are counted.
+    {
+        let (kept, held) = crate::memory_health::hold_back(std::mem::take(&mut hits), input.online);
+        hits = kept;
+        held_health = held;
+    }
+    // Conversations that would have been found and that this AI may not
+    // use: counted, so the person can be told and can allow it.
+    let withheld = {
+        let held_back = |c: &crate::memory_index::Candidate| searched(c) && may(c) == crate::memory_use::May::Withheld;
+        let mut conversations: Vec<String> = crate::memory_reading::search(app, &question, at_most, &held_back).map(|f| f.hits.into_iter().map(|h| h.k).collect()).unwrap_or_default();
+        conversations.sort();
+        conversations.dedup();
+        if uses.is_empty() { 0 } else { conversations.len() as u32 }
+    };
+    mark("withheld");
+    let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits, input.online).unwrap_or_default();
+    // What memory holds to be true now on this matter: the note for after
+    // the question, and the found exchanges it marks as replaced, which
+    // are left out of what is given and recorded as left out.
+    mark("texts");
+    let stand = crate::memory_state::stand_for(app, &question, &memory_rows, &who);
+    // The subjects of what the note was made from came up, together.
+    if let Ok(k) = tauri::Manager::state::<std::sync::Arc<crate::commands_holochain::HolochainState>>(app).get().and_then(|m| m.data_key()) {
+        crate::memory_subjects::came_up(app, &k, &memory_rows, &stand.note_items);
+    }
+    let (exchanges, left_out) = {
+        let like: Vec<Vec<f32>> = stand.superseded.iter().map(|s| s.like.clone()).collect();
+        let alike: std::collections::HashMap<(i64, u32), Vec<Option<f32>>> = hits
+            .iter()
+            .zip(crate::memory_reading::hits_beside(app, &hits, &like))
+            .filter_map(|(h, (started, alike))| started.map(|c| ((c, h.seq), alike)))
+            .collect();
+        let unknown: Vec<Option<f32>> = Vec::new();
+        let mut stay = Vec::new();
+        let mut left: Vec<mb::LeftOut> = Vec::new();
+        for e in exchanges {
+            match crate::memory_state::left_out(&stand, e.conversation, e.hit.seq, e.hit.at, alike.get(&(e.conversation, e.hit.seq)).unwrap_or(&unknown)) {
+                Some(item) => left.push(mb::LeftOut { hit: mb::Ptr { c: e.conversation, s: e.hit.seq, t: e.hit.at, a: 0, b: 0 }, score: e.score, item: item.to_string() }),
+                None => stay.push(e),
+            }
+        }
+        (stay, left)
+    };
+    mark("state");
     // Saved notes and knowledge given to this AI, found by the rule they
     // were always found by, as dated lines.
     let mut dated: Vec<String> = Vec::new();
@@ -560,6 +870,7 @@ async fn found_beside(
         hidden += m.hidden;
         dated.push(mb::dated_line(at, "knowledge they gave this AI", &m.text));
     }
+    mark("notes");
     // Names in the question that no conversation mentions. When the
     // keyword index cannot say, nothing is claimed.
     let absent = mb::absent_names(
@@ -567,19 +878,52 @@ async fn found_beside(
         &|name| crate::transcript_search::mentions(app, name).unwrap_or(true),
         &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
     );
-    let partial = (reading.total > 0 && reading.read < reading.total).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
-    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld: 0, replaced_left_out: false };
+    mark("names");
+    // The turn in hand was recorded a moment ago and is read into the
+    // index within seconds: its own messages are not "the rest".
+    const IN_HAND: i64 = 2;
+    let partial = (reading.total > 0 && (reading.total as i64) - (reading.read as i64) > IN_HAND).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
+    let mut about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: !left_out.is_empty(), closest_only: false };
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
     let room = input.room_tokens.map(|t| t as usize * 3);
-    let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    // A model on this computer reads all of it before its first word:
+    // what is given is held to the wait that reading may add. Before a
+    // model's speed has been seen here, the smallest count is given.
+    let model = input.model.as_deref().filter(|m| crate::read_speed::is_local_file(m));
+    let speed = if input.online || input.further { None } else { model.and_then(|m| crate::read_speed::of(app, m)) };
+    let count = if !input.online && !input.further && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
+    let held_to_the_wait = speed.is_some() || count < mb::budget(input.window_tokens.unwrap_or(4096), input.online).0;
+    let (exchanges, room) = mb::within_wait(exchanges, count, room, speed.map(crate::read_speed::wait_chars), wording);
+    let mut b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    // Fewer given than found, for the wait: the block says so, and that
+    // the person can ask to look further (its words are not counted in
+    // what the wait allows, so the same exchanges are shown).
+    if held_to_the_wait && b.shown > 0 && b.shown < b.found {
+        about.closest_only = true;
+        b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    }
+    log::info!("[memory] searched for the turn in {} ms ({}); {} of {} given", begun.elapsed().as_millis(), took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "), b.shown, b.found);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
-    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string(), partial_percent: partial });
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial, closest_only: about.closest_only });
     rec.exchanges = b.given;
     rec.lines = b.lines;
     rec.block = mb::fingerprint(&b.text);
     rec.masked = hidden;
-    (Some(b.text), Some(rec), b.texts)
+    rec.left_out = left_out;
+    let mut texts = b.texts;
+    if let Some(note) = &stand.note {
+        rec.note_items = stand.note_items.clone();
+        rec.note = mb::fingerprint(note);
+        // A reply that quotes the note quotes what it was given.
+        texts.push(note.clone());
+    }
+    if input.online {
+        // What left the computer with this turn, for the line under the reply,
+        // and how many found messages stayed here because they are about the person's health.
+        rec.more.insert("sent".into(), serde_json::json!({ "passages": rec.exchanges.len(), "lines": rec.lines.len(), "note": stand.note.is_some(), "held": held_health }));
+    }
+    (Some(b.text), Some(rec), texts, stand.note)
 }
 
 /// The chat page's door to the builder. While the stores are still opening
@@ -626,6 +970,38 @@ impl KeptPart {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn old_fact(id: &str, predicate: &str, value: &str, kind: &str) -> MemoryFact {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "subject": "user", "predicate": predicate, "value": value, "confidence": 0.9, "valid_from": 1, "source_ai_id": null,
+            "owner_scope": "personal", "key_scope": "personal", "entry_kind": kind, "provenance": "extracted", "created_at": 1, "updated_at": 2,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_sharing_switch_is_for_online_ais_only_and_is_on_unless_turned_off() {
+        assert!(shares_memory(true, None));
+        assert!(shares_memory(true, Some(true)));
+        assert!(!shares_memory(true, Some(false)));
+        assert!(shares_memory(false, Some(false)), "a local AI's turns never leave the computer");
+    }
+
+    #[test]
+    fn after_the_update_the_name_keeps_working_and_nothing_else_of_the_old_facts_is_given() {
+        let facts = vec![
+            old_fact("f1", "name_is", "Marta", "fact"),
+            old_fact("f2", "runs_business", "Crumb & Kettle", "fact"),
+            old_fact("f3", "synthesis", "Marta runs a small bakery.", "synthesis"),
+            old_fact("f4", "library", "Recipes and letters.", "library"),
+            old_fact("f5", "note", "The flour supplier is Mill and Sons.", "note"),
+        ];
+        let kept = after_update(facts);
+        let (text, counts) = block(&Held { facts: &kept, rows: &[], project_rows: &[], recall: None, question_vector: None, conversation: None });
+        assert_eq!(text, "Their name is Marta.");
+        assert_eq!(counts.facts, 0);
+        assert!(!text.contains("bakery") && !text.contains("Crumb"), "the portrait and the guessed facts are in no prompt");
+    }
 
     /// Made-up profiles, each with the block the chat page's own builder
     /// gave for it before this module replaced that builder.
@@ -691,6 +1067,70 @@ mod tests {
 
     fn with_rows(rows: &[MemoryRow], project_rows: &[MemoryRow]) -> (String, Counts) {
         block(&Held { facts: &[], rows, project_rows, recall: None, question_vector: None, conversation: None })
+    }
+
+    #[test]
+    fn the_switch_holds_for_every_ai_that_may_answer_off_this_computer() {
+        for model in ["online:gpt-x", "external:llama", "auto:online-offline", "auto:online", " online:gpt-x "] {
+            assert!(may_answer_elsewhere(model), "{model}");
+            assert!(!shares_memory(may_answer_elsewhere(model), Some(false)), "{model}: switched off, nothing memory holds is given");
+            assert!(shares_memory(may_answer_elsewhere(model), None), "{model}: sharing is on until the person turns it off");
+        }
+        for model in ["auto:offline", "Qwen3.5-4B-Q4_K_M.gguf", ""] {
+            assert!(!may_answer_elsewhere(model), "{model}");
+            assert!(shares_memory(may_answer_elsewhere(model), Some(false)), "{model}: an AI on this computer is always given its person's memory");
+        }
+    }
+
+    #[test]
+    fn what_the_person_keeps_about_themselves_is_counted_in_what_an_online_turn_sent() {
+        // On this computer nothing is "sent": no record is made or changed.
+        assert_eq!(sent_about(None, false, 3, "Today is 2026-03-02."), None);
+        // Online with nothing kept about them: as it was.
+        assert_eq!(sent_about(None, true, 0, "Today is 2026-03-02."), None);
+        // Online, no search ran, two kept lines went in the system part: the reply has a record that says so.
+        let rec = sent_about(None, true, 2, "Today is 2026-03-02.").unwrap();
+        assert_eq!(rec.more["sent"], serde_json::json!({ "passages": 0, "lines": 0, "note": false, "about": 2 }));
+        assert!(!rec.search.ran && rec.search.why_not.is_none());
+        // Online with a search: its counts stay, and the kept lines are added.
+        let mut searched = crate::memory_block::GivenRecord { v: 1, ..Default::default() };
+        searched.search.ran = true;
+        searched.more.insert("sent".into(), serde_json::json!({ "passages": 4, "lines": 1, "note": true }));
+        let rec = sent_about(Some(searched), true, 2, "x").unwrap();
+        assert_eq!(rec.more["sent"], serde_json::json!({ "passages": 4, "lines": 1, "note": true, "about": 2 }));
+        assert!(rec.search.ran);
+    }
+
+    #[test]
+    fn a_projects_rules_are_also_a_note_beside_a_sessions_prompt() {
+        assert_eq!(rules_beside(&[]), None);
+        let rows = vec![row("project:p", "rule", "Deploy with: make ship", 10, false), row("project:p", "command", "make test", 20, false), row("project:p", "note", "A note is not a rule.", 30, false)];
+        let note = rules_beside(&rows).unwrap();
+        assert!(note.starts_with(PROJECT_HEADING), "{note}");
+        assert!(note.contains("Deploy with: make ship") && note.contains("make test") && !note.contains("A note is not a rule."), "{note}");
+        // Over the budget: the newest stay, and the note stays within it.
+        let many: Vec<MemoryRow> = (0..60).map(|n| row("project:p", "rule", &format!("Rule number {n} says to do a particular thing in a particular way."), n, false)).collect();
+        let cut = rules_beside(&many).unwrap();
+        assert!(cut.len() <= RULES_BESIDE_BUDGET + PROJECT_HEADING.len() + 1);
+        assert!(cut.contains("Rule number 59 ") && !cut.contains("Rule number 0 "), "the newest are kept");
+    }
+
+    #[test]
+    fn a_rule_turned_off_is_not_given_and_comes_back_when_turned_on() {
+        let mut off = row("person", "rule", "Answer in French.", 5, false);
+        off.valid_to = Some(6);
+        let on = row("person", "rule", "Use metric units.", 4, false);
+        let (text, _) = with_rows(&[off.clone(), on.clone()], &[]);
+        assert!(text.contains("Use metric units."), "{text}");
+        assert!(!text.contains("Answer in French."), "{text}");
+        off.valid_to = None;
+        let (text, _) = with_rows(&[off, on], &[]);
+        assert!(text.contains("Answer in French."), "{text}");
+        // The same holds for a project's rules.
+        let mut p = row("project:p1", "rule", "Bread only.", 9, false);
+        p.valid_to = Some(10);
+        let (text, _) = with_rows(&[], &[p]);
+        assert!(!text.contains("Bread only."), "{text}");
     }
 
     #[test]
@@ -803,5 +1243,12 @@ mod tests {
         assert_eq!((t.surface, t.question_vector.as_deref(), t.embed_here), (Surface::Chat, Some(&[1.0f32, 0.0][..]), false));
         let t: TurnInput = serde_json::from_value(serde_json::json!({ "surface": "tools-session" })).unwrap();
         assert_eq!((t.surface, t.ai_id, t.question.as_str()), (Surface::ToolsSession, None, ""));
+    }
+
+    #[test]
+    fn words_the_person_wrote_about_themselves_are_given_to_any_of_their_ais() {
+        let (row, _) = crate::memory_items::keep_words("it-w".into(), "Vegetarian since 2019.", 5_000);
+        let items = crate::memory_items::items(&[row]);
+        assert_eq!(kept_about_them(&items, "any-ai", None, true), vec!["Vegetarian since 2019.".to_string()]);
     }
 }

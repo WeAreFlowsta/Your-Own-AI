@@ -1,3 +1,5 @@
+import { MEMORY_SHARED_EVENT, type MemorySharedDetail } from "../../components/memory/SentLine";
+import { LOOK_FURTHER } from "../../utils/openOffer";
 import { lastKnownEntitled } from "../../utils/entitlement";
 import { toggleAgentView } from "../../utils/agentView";
 /**
@@ -54,7 +56,6 @@ const ARRIVAL_POLL_PARTIAL_MS = 20_000;
 const ARRIVAL_GONE_HINT_MS = 10 * 60_000;
 const ARRIVAL_MAX_MS = 2 * 60 * 60_000;
 import ConfirmModal from "../../components/ConfirmModal";
-import { drainPendingExtractions, prewarmExtractionModel } from "../../utils/memoryExtraction";
 import GpuSafeModeNotice from "../../components/GpuSafeModeNotice";
 import { VisionDownloadCard } from "../../components/VisionDownloadCard";
 import { OcrAttachStatus } from "../../components/OcrAttachStatus";
@@ -270,7 +271,31 @@ export default component$(() => {
       await resendAgentLast$();
     };
     window.addEventListener("yoai-go-online", onGoOnline);
-    cleanup(() => window.removeEventListener("yoai-go-online", onGoOnline));
+    // The memory switch, changed from the line under a reply: the open
+    // chat uses it with the next message.
+    const onMemoryShared = (e: Event) => {
+      const d = (e as CustomEvent<MemorySharedDetail>).detail;
+      const ai = selectedAi.value;
+      if (d && ai?.aiConfig?.id === d.aiId) selectedAi.value = { ...ai, aiConfig: { ...ai.aiConfig, memoryOnline: d.on } };
+    };
+    window.addEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
+    // "Show the record", pressed on a reply: this conversation's signed record, at that message.
+    const onShowRecord = (e: Event) => {
+      const d = (e as CustomEvent<{ aiId?: string; seq?: number }>).detail;
+      const hash = chatState.conversationHash;
+      if (!hash) return;
+      sessionStorage.setItem("memory-ai-id", d?.aiId || selectedAi.value.aiConfig?.id || "");
+      sessionStorage.setItem("memory-agent-key", "");
+      sessionStorage.setItem("record-conversation", hash);
+      if (typeof d?.seq === "number") sessionStorage.setItem("record-seq", String(d.seq));
+      void nav("/memory/");
+    };
+    window.addEventListener("yoai-show-record", onShowRecord);
+    cleanup(() => {
+      window.removeEventListener("yoai-go-online", onGoOnline);
+      window.removeEventListener("yoai-show-record", onShowRecord);
+      window.removeEventListener(MEMORY_SHARED_EVENT, onMemoryShared);
+    });
   });
 
   // The permission the agent waits on right now, from the turn's own
@@ -586,6 +611,9 @@ export default component$(() => {
 
   // A message sent while a reply was streaming (see handleSubmit).
   const queuedMessage = useSignal<string | null>(null);
+  // The key ask was answered for the session message about to be sent
+  // again: it is not asked a second time.
+  const sessionKeyAnswered = useSignal(false);
 
   const resumeGeneration = useSignal(0);
   const resumeConversation = $(
@@ -1105,6 +1133,12 @@ export default component$(() => {
         sessionStorage.removeItem("pending-open-folder");
         setTimeout(() => openFolderGuarded(pendingFolder), 300);
       }
+      // Words handed over to be sent by the person: they wait in the box.
+      const ready = sessionStorage.getItem("chat-words-ready");
+      if (ready) {
+        sessionStorage.removeItem("chat-words-ready");
+        input.value = ready;
+      }
       const raw = sessionStorage.getItem("resume-conversation");
       if (raw) {
         sessionStorage.removeItem("resume-conversation");
@@ -1384,9 +1418,15 @@ export default component$(() => {
         !aiModel.startsWith("auto:") &&
         !aiModel.startsWith("online:") &&
         !aiModel.startsWith("external:");
+      // The remembered pick counts only while its file is still on this
+      // computer: a model removed since would load nothing and leave the
+      // chat without one.
+      const remembered = localStorage.getItem("currentModel");
       const targetModel = isLocalFile && models.some((m) => m.name === aiModel)
         ? aiModel
-        : localStorage.getItem("currentModel") || models[0].name;
+        : remembered && models.some((m) => m.name === remembered)
+          ? remembered
+          : models[0].name;
 
       // Check if this model is already loaded and ready (e.g. returning from another page)
       // Verify via Rust state that the model is actually loaded, not just that the server is healthy
@@ -1487,28 +1527,10 @@ export default component$(() => {
         void import("../../utils/warmPrompt").then((m) => m.warmSystemPrompt(selectedAi.value, targetModel));
       }
 
-      // A local model is now ready — re-run any extraction that was cut off by
-      // an app close last session (e.g. closing right after sending).
-      if (
-        currentModel.value &&
-        !currentModel.value.startsWith("online:") &&
-        !currentModel.value.startsWith("external:")
-      ) {
-        void drainPendingExtractions(currentModel.value);
-      }
-
-      // Pre-warm the on-device utility model (if installed) now that startup +
-      // the chat model have settled — loads it + primes the extraction prompt
-      // cache so the first fact this session isn't a cold ~22s wait. CPU-only,
-      // never touches the chat model (GPU); no-op if the model isn't installed.
-      void prewarmExtractionModel();
       // The tools gate and the documents search both embed the question:
       // warm that small model now, not on the first keystroke.
       void import("../../utils/embeddings").then((m) => m.embedTexts(["warm up"]).catch(() => {}));
-      // A late, quiet consolidation pass catches changes from the previous
-      // session (hash-gated no-op when nothing changed).
       setTimeout(() => {
-        import("../../utils/memoryConsolidation").then((m) => void m.maybeConsolidateMemory());
         // Library cards for documents that have none yet, then the portrait.
         import("../../utils/documentSummaries").then(
           (m) => void m.summarizePendingDocuments().then(() => m.refreshLibraryPortrait()),
@@ -1690,6 +1712,7 @@ export default component$(() => {
           6,
           followUp ? await embedQueryBounded(followUp) : null,
           findWebAddresses(question).length > 0 ? RECALL_BEST_FOR_PAGE_QUESTION : undefined,
+          question,
         );
         remembered = recalled.text;
         library = recalled.used;
@@ -1846,7 +1869,24 @@ export default component$(() => {
       agentState.mode === "tools" &&
       activeTools(selectedAi.value.aiConfig).length > 0 &&
       (!agentState.sessionAiId || agentState.sessionAiId === selectedAi.value.aiConfig?.id);
+    // A message that looks like it holds a password or a key, on its way
+    // to a session whose AI answers off this computer: asked first, as a
+    // direct chat asks.
+    const sessionKeyAsk = async (): Promise<boolean> => {
+      const model = selectedAi.value.aiConfig?.model ?? "";
+      if (!/^(online|external):/.test(model)) return false;
+      if (sessionKeyAnswered.value) {
+        sessionKeyAnswered.value = false;
+        return false;
+      }
+      const masked = await invoke<{ text: string; hidden: number }>("mask_text", { text: finalInput }).catch(() => null);
+      if (!masked || masked.hidden === 0) return false;
+      const { whereWords } = await import("../../utils/givenLine");
+      chatState.error = JSON.stringify({ code: "key_ask", where: whereWords(model), without: masked.text, session: true, typed: input.value });
+      return true;
+    };
     if (agentState.folderPath && (agentState.mode === "project" || toolsSessionIsThisAis)) {
+      if (await sessionKeyAsk()) return;
       // Document text goes to the model as context; the bubble shows file
       // chips - never the extracted text (a PDF used to land wholesale in
       // the user's bubble on this path).
@@ -1874,6 +1914,7 @@ export default component$(() => {
     // when the session cannot start (Build not installed, no agent-ready
     // model) - the AI then says tools need Projects.
     if (wantsTools) {
+      if (await sessionKeyAsk()) return;
       // The turn goes on screen NOW, on the tools surface, and the session
       // opens behind it (its tool servers, sometimes a model load: 15 s of
       // a blank page on 09-25). The pearl says what it waits for.
@@ -1921,7 +1962,20 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "project-online" | "project-local" | "project-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "project-online" | "project-local" | "project-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper" | "look-further") => {
+    // An open offer's button: its words go as the person's message, by
+    // the same path as typing them.
+    if (target === "look-further") {
+      if (chatState.isLoading) return;
+      const typed = input.value;
+      input.value = LOOK_FURTHER.say;
+      try {
+        await handleSubmit();
+      } finally {
+        if (typed && !input.value) input.value = typed;
+      }
+      return;
+    }
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.
@@ -2741,6 +2795,74 @@ export default component$(() => {
                               chatState.pendingTurn = null;
                             }}
                             class="text-sm text-yellow-700 dark:text-yellow-300 hover:underline"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (online?.code === "key_ask") {
+                    const k = online as { where?: string; without?: string; session?: boolean; typed?: string };
+                    const link = "text-sm text-yellow-700 dark:text-yellow-300 hover:underline";
+                    return (
+                      <div class="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-700 rounded-lg p-4" data-testid="key-ask">
+                        <p class="text-sm font-medium text-yellow-800 dark:text-yellow-200 mb-3">
+                          This message holds something that looks like a key. Send it to {k.where ?? "an online model"}?
+                        </p>
+                        <div class="flex items-center gap-3 flex-wrap">
+                          <LiquidMetalButton
+                            testId="key-ask-without"
+                            onClick$={async () => {
+                              // In a session the message is still in the field: it
+                              // is sent again from there.
+                              if (k.session) {
+                                chatState.error = null;
+                                sessionKeyAnswered.value = true;
+                                // What is sent without the key already carries the chosen action's words.
+                                selectedAction.value = null;
+                                input.value = k.without ?? "";
+                                await handleSubmit();
+                                return;
+                              }
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t && k.without) await sendMessage(k.without, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
+                            }}
+                            class="px-4 py-2 text-sm"
+                          >
+                            Send without it
+                          </LiquidMetalButton>
+                          <button
+                            type="button"
+                            data-testid="key-ask-send"
+                            onClick$={async () => {
+                              // In a session the message is still in the field: it
+                              // is sent again from there.
+                              if (k.session) {
+                                chatState.error = null;
+                                sessionKeyAnswered.value = true;
+                                input.value = k.typed ?? input.value;
+                                await handleSubmit();
+                                return;
+                              }
+                              const t = chatState.pendingTurn;
+                              chatState.error = null;
+                              if (t) await sendMessage(t.userInput, t.chatAction, t.fileContext, t.images, undefined, true, { keyAnswered: true });
+                            }}
+                            class={link}
+                          >
+                            Send
+                          </button>
+                          <button
+                            type="button"
+                            data-testid="key-ask-cancel"
+                            onClick$={() => {
+                              chatState.error = null;
+                              chatState.pendingTurn = null;
+                            }}
+                            class={link}
                           >
                             Cancel
                           </button>

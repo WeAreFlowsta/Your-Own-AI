@@ -667,6 +667,17 @@ pub(crate) async fn is_medical_turn_with_margin(
     medical_check(app, query, query_vec, min_margin).await.0
 }
 
+/// The health gate's verdict on a message, for the record of the turn:
+/// `None` when only the keyword stage could run and found nothing (the
+/// question was not checked, which is not a "no").
+pub(crate) async fn health_verdict(app: &AppHandle, query: &str) -> Option<bool> {
+    if query.trim().is_empty() {
+        return Some(false);
+    }
+    let (medical, semantic_ran) = medical_check(app, query, None, MEDICAL_MARGIN).await;
+    (medical || semantic_ran).then_some(medical)
+}
+
 /// The health gate with its own honesty flag: `(medical, semantic_ran)`.
 /// `semantic_ran == false` means only the keyword stage could run (no
 /// embedding model, or the embed server would not start) - the router must
@@ -927,7 +938,11 @@ async fn pick_offline_detail(app: &AppHandle, task: &str, lean: &str, agent_only
     // score; the health task never learns.
     let adj = if task == "medical" { Adjustments::default() } else { learned_adjustments(app) };
     let cap = |f: &crate::fit::ModelFit| {
-        let task_cap = size_capped(crate::model_caps::caps_for(&f.name).by_task(task), f.params_b);
+        // A model we have put our own questions to is placed by what it did
+        // (for the kinds of question the set tests); any other by the
+        // capability table, bounded by its size, as before.
+        let task_cap = crate::local_results::measured_score(&f.name, task, crate::matrix::QUALITY_HARD_SET)
+            .unwrap_or_else(|| size_capped(crate::model_caps::caps_for(&f.name).by_task(task), f.params_b));
         if agent_only {
             agent_rank_cap(crate::model_caps::agent_caps(&f.name), task_cap)
         } else {

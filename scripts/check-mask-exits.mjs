@@ -20,7 +20,8 @@ const EXITS = [
   { what: "knowledge given to an AI, found for a question", file: "src-tauri/src/memory_prompt.rs", at: "for text in closest(knowledge.iter().copied(), &question) {", call: "secret_mask::hand_on(", within: 2 },
   { what: "document passages given to a model", file: "src-tauri/src/corpus.rs", at: "out.push(RecallHit {", call: "secret_mask::hand_on(", within: 8 },
   { what: "the digest a resumed session starts from", file: "src/hooks/useAgentSession.ts", at: "buildResumeDigest(props.chatState.messages.slice(0, -2))", call: "maskText(", within: 0 },
-  { what: "the session digest kept as memory", file: "src/hooks/useAgentSession.ts", at: "const distillMemory$ = $(async (folderPath: string, rawDigest: string) => {", call: "maskText(rawDigest)", within: 4 },
+  { what: "an exchange put to the model that keeps what was settled", file: "src-tauri/src/memory_keeping.rs", at: ".filter(|e| e.role == \"user\" || e.role == \"assistant\")", call: "secret_mask::hand_on(", within: 1 },
+  { what: "what an AI keeps as an item", file: "src-tauri/src/memory_keeping.rs", at: "// What is kept is kept without its secrets.", call: "secret_mask::hand_on(", within: 1 },
   { what: "the page's mask call fails closed", file: "src/utils/secretMask.ts", at: "export async function maskText(", call: 'return "";', within: 9 },
 ];
 // Text a log line must not carry: the first characters of a message.

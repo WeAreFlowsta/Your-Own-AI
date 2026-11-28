@@ -1130,6 +1130,25 @@ pub(crate) fn apply_no_think_here(body: &mut serde_json::Value, model: &str) -> 
 /// character. The stream drops the leading whitespace it produces.
 pub(crate) const EMPTY_THOUGHT_PREFILL: &str = " ";
 
+/// How much memory the chat engine may use to keep the states of past
+/// prompts, in MiB: a sixteenth of the machine's memory, at least 512 and
+/// at most 2,048.
+pub(crate) fn prompt_store_mib(total_ram_gb: f64) -> u32 {
+    ((total_ram_gb.max(0.0) * 1024.0 / 16.0) as u32).clamp(512, 2048)
+}
+
+#[cfg(test)]
+mod prompt_store_tests {
+    #[test]
+    fn the_prompt_store_is_a_share_of_the_machines_memory() {
+        assert_eq!(super::prompt_store_mib(4.0), 512, "a small machine still keeps a few conversations warm");
+        assert_eq!(super::prompt_store_mib(16.0), 1024);
+        assert_eq!(super::prompt_store_mib(24.0), 1536);
+        assert_eq!(super::prompt_store_mib(64.0), 2048, "never the engine's own 8 GB");
+        assert_eq!(super::prompt_store_mib(0.0), 512);
+    }
+}
+
 /// The engine's `--reasoning` flag for a model, from its own template:
 /// `off` for a model whose template declares a thinking switch (the app
 /// turns thinking on per request, report mode), `auto` for one that does
@@ -2795,7 +2814,7 @@ pub fn start_idle_unload(app: &AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-            let idle = crate::dreaming::own_idle_secs();
+            let idle = crate::machine::own_idle_secs();
             if idle < IDLE_UNLOAD_SECS {
                 continue;
             }
@@ -3524,6 +3543,11 @@ pub async fn start_llama_server(
         // path (what the previous engine did), which loads reliably.
         "--fit".to_string(),
         "off".to_string(),
+        // The engine keeps the states of past prompts in memory, so a
+        // conversation that comes back is answered sooner. Left alone it
+        // keeps up to 8 GB of them; here, a share of this machine's memory.
+        "--cache-ram".to_string(),
+        prompt_store_mib(total_ram_gb).to_string(),
     ];
     // Machine fine-tune: a chosen worker-thread count; the engine's own
     // default otherwise (settings.json engineThreads).
@@ -4337,6 +4361,10 @@ async fn ensure_embedding_server(
         "--ctx-size".to_string(),
         EMBED_CTX.to_string(),
         "--no-webui".to_string(),
+        // No text is embedded twice: the engine's store of past prompts
+        // would hold nothing of use.
+        "--cache-ram".to_string(),
+        "0".to_string(),
     ];
     // Pooling comes from the file's own metadata unless the model needs it
     // spelled out (embedding_model::POOLING; bge needed `cls`).
@@ -4496,7 +4524,46 @@ pub async fn embed_texts(
         })
         .collect();
 
-    match embed_request(&model, &texts).await {
+    // One text is a question someone is waiting on; several are passages
+    // or examples being prepared. The server answers in the order asked,
+    // so a question that arrived behind a batch of 24 on a processor-run
+    // model waited past its limit and the reply went without its search.
+    // A batch therefore goes a few texts at a time, and lets any waiting
+    // question in before each piece.
+    if texts.len() == 1 {
+        let _first = Inflight::new(&EMBED_ONE_WAITING);
+        return embed_batch(&state, &model, texts).await;
+    }
+    let kind = if texts[0].starts_with(crate::embedding_model::DOC_PREFIX) {
+        "passages"
+    } else if texts[0].starts_with(crate::embedding_model::SAID_PREFIX) {
+        "sayings"
+    } else if texts[0].starts_with(crate::embedding_model::QUERY_PREFIX) {
+        "questions"
+    } else {
+        "plain texts"
+    };
+    log::info!("[embed] the {} are {kind}; in pieces of {EMBED_PIECE}, a single question first", texts.len());
+    let mut out = Vec::with_capacity(texts.len());
+    for piece in texts.chunks(EMBED_PIECE) {
+        let asked = std::time::Instant::now();
+        while EMBED_ONE_WAITING.load(std::sync::atomic::Ordering::SeqCst) > 0 && asked.elapsed() < EMBED_GIVE_WAY {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        out.extend(embed_batch(&state, &model, piece.to_vec()).await?);
+    }
+    Ok(out)
+}
+
+/// How many texts of a batch go to the memory model at once (it has four
+/// places), and how long a batch gives way to single questions before it
+/// goes on regardless.
+const EMBED_PIECE: usize = 4;
+const EMBED_GIVE_WAY: std::time::Duration = std::time::Duration::from_secs(20);
+static EMBED_ONE_WAITING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+async fn embed_batch(state: &State<'_, LLMState>, model: &str, texts: Vec<String>) -> Result<Vec<Vec<f32>>, String> {
+    match embed_request(model, &texts).await {
         Ok(v) => Ok(v),
         Err(EmbedError::TooLarge(_)) | Err(EmbedError::Server(_)) => {
             // One input over the model's 512-token window fails the WHOLE
@@ -4506,7 +4573,7 @@ pub async fn embed_texts(
             // until it fits. The opening of a passage carries its meaning.
             let mut out = Vec::with_capacity(texts.len());
             for t in texts {
-                out.push(embed_one_shrinking(&model, t).await?);
+                out.push(embed_one_shrinking(model, t).await?);
             }
             Ok(out)
         }
@@ -4517,7 +4584,7 @@ pub async fn embed_texts(
             // one instead of queueing behind a server that has stopped.
             if e.contains("timed out") || e.contains("timeout") {
                 log::warn!("[embed] {e} - stopping the embedding server; the next request restarts it");
-                stop_embedding_server_inner(&state).await;
+                stop_embedding_server_inner(state).await;
             }
             Err(e)
         }
@@ -4705,6 +4772,12 @@ async fn ensure_utility_server(
         "--reasoning".to_string(),
         reasoning_flag_for(Some(model_filename)).to_string(),
         "--no-webui".to_string(),
+        // The engine keeps the states of past prompts in memory, up to
+        // 8 GB unless told otherwise. Every task here is asked once and
+        // never comes back, so the store only grows (measured: about
+        // 70 MB a minute while document cards were written). Off.
+        "--cache-ram".to_string(),
+        "0".to_string(),
     ];
     let mut place = helper_verdict().1;
     let mut device_args = helper_processor_args();
@@ -4825,7 +4898,7 @@ pub(crate) enum BackgroundChoice {
     StepAside,
 }
 
-/// Background work (memory extraction, titles, dreaming) is model-agnostic
+/// Background work (memory keeping, titles, tidying) is model-agnostic
 /// enough to ride whatever is loaded; it must never move the engine.
 pub(crate) fn background_model_choice(wanted: &str, current: Option<&str>, healthy: bool) -> BackgroundChoice {
     match current {
@@ -4851,9 +4924,10 @@ impl Drop for ForegroundTurn {
 /// Warm the chat server's prompt cache with an AI's instructions right
 /// after a load, so the first real question only pays for its own words.
 /// A one-token request straight to llama-server (not the streaming path,
-/// so no speed sample is recorded). Silent no-op when nothing is serving.
+/// so no writing-speed sample is recorded; the reading speed is noted).
+/// Silent no-op when nothing is serving.
 #[tauri::command]
-pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Result<u64, String> {
+pub async fn warm_chat_prompt(app: AppHandle, state: State<'_, LLMState>, system: String) -> Result<u64, String> {
     if !*state.is_server_running.lock().await || system.trim().is_empty() {
         return Ok(0);
     }
@@ -4895,6 +4969,11 @@ pub async fn warm_chat_prompt(state: State<'_, LLMState>, system: String) -> Res
     }
     let parsed: serde_json::Value = resp.json().await.unwrap_or_default();
     let tokens = parsed["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+    // How fast this model reads here, known before the first question:
+    // what memory gives that question is sized by it.
+    if let Some(model) = state.current_model.lock().await.clone() {
+        crate::read_speed::note(&app, &model, parsed["timings"]["prompt_per_second"].as_f64(), parsed["timings"]["prompt_n"].as_u64());
+    }
     log::info!(
         "[LLM] warmed the AI's instructions: {tokens} tokens in {} ms",
         started.elapsed().as_millis()
@@ -4912,6 +4991,7 @@ pub async fn utility_chat(
     user: String,
     grammar: Option<String>,
     max_tokens: u32,
+    yields: Option<bool>,
 ) -> Result<String, String> {
     let _ = state;
     // A grammar means a fixed-form answer - the routing classifier's two
@@ -4920,7 +5000,29 @@ pub async fn utility_chat(
     // matrix read "debug my sourdough starter" as CODE, Linux as GENERAL).
     // Free prose (summaries, portraits) keeps its warmth.
     let temperature = if grammar.is_some() { 0.0 } else { 0.7 };
-    memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await
+    if yields != Some(true) {
+        return memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature).await;
+    }
+    // Work nobody waits on: dropped when the person asks something (the
+    // request to the helper closes, and the helper ends that task).
+    tokio::select! {
+        done = memory_complete(&app_handle, &model, &system, &user, grammar.as_deref(), max_tokens, temperature) => done,
+        _ = STEP_ASIDE.notified() => Err("set aside for the person's question".to_string()),
+    }
+}
+
+/// Told when the person asks something: helper work that yields ends now.
+static STEP_ASIDE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// The person has just asked something: helper work marked as yielding
+/// (a document's card) is dropped, so their question's search and reply do
+/// not wait behind it.
+#[tauri::command]
+pub fn helper_step_aside() {
+    // Asking is being here: background work that waits for the person to
+    // be away waits from this moment, not from when the reply starts.
+    crate::machine::note_activity();
+    STEP_ASIDE.notify_waiters();
 }
 
 /// One memory-work completion through the memory slot (the memory design
@@ -6507,6 +6609,20 @@ pub(crate) fn last_chat_request() -> Option<serde_json::Value> {
     LAST_CHAT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+static LAST_AGENT_REQUEST: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
+
+/// The last call of the app's own session as it left for the model (dev
+/// builds only keep it), so a test can read what a session's step carried.
+pub(crate) fn note_agent_request(body: &serde_json::Value) {
+    if cfg!(debug_assertions) {
+        *LAST_AGENT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()) = Some(body.clone());
+    }
+}
+
+pub(crate) fn last_agent_request() -> Option<serde_json::Value> {
+    LAST_AGENT_REQUEST.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// One chat turn on the loaded local model, not streamed, with the settings
 /// an ordinary chat turn uses (no thinking, the chat sampling, the chat
 /// stops). Answers with the request as sent and the model's message. For
@@ -6541,6 +6657,45 @@ pub(crate) async fn chat_turn_once(state: &LLMState, messages: Vec<serde_json::V
     Ok((body, parsed["choices"][0]["message"].clone()))
 }
 
+/// One fixed-form answer from the loaded local model: the reply is held
+/// to a JSON schema, with no thinking. Answers with the reply's text (the
+/// content, or what the engine filed as reasoning when a template that
+/// always thinks left the content empty). For memory's own judging.
+pub(crate) async fn fixed_form_once(state: &LLMState, system: &str, user: &str, schema: serde_json::Value, temperature: f64, max_tokens: u32, seed: Option<u64>) -> Result<String, String> {
+    let model = state.current_model.lock().await.clone().ok_or("no model is loaded")?;
+    if !our_chat_server_is_up() {
+        return Err("the local engine is not running".into());
+    }
+    let mut body = serde_json::json!({
+        "model": model,
+        "messages": [{ "role": "system", "content": system }, { "role": "user", "content": user }],
+        "stream": false,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "top_p": 0.9,
+        "response_format": { "type": "json_schema", "json_schema": { "name": "v", "schema": schema } },
+        "stop": chat_stop_strings(&model),
+    });
+    if let Some(s) = seed {
+        body["seed"] = serde_json::json!(s);
+    }
+    apply_no_think_here(&mut body, &model);
+    let _turn = CHAT_ONE_AT_A_TIME.acquire().await.map_err(|e| e.to_string())?;
+    let resp = local_http()
+        .post(format!("http://localhost:{}/v1/chat/completions", chat_port()))
+        .bearer_auth(local_api_key())
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(300))
+        .send()
+        .await
+        .map_err(|e| format!("the local engine did not answer: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("the local engine answered {}", resp.status()));
+    }
+    let parsed: serde_json::Value = resp.json().await.map_err(|e| format!("the local engine's answer did not parse: {e}"))?;
+    Ok(completion_text(&parsed))
+}
+
 #[derive(serde::Deserialize, Clone, Copy, Default)]
 pub struct SamplingParams {
     pub temperature: Option<f64>,
@@ -6572,7 +6727,7 @@ pub async fn stream_chat_completion(
     // The person's own replies count as activity; work nobody is waiting
     // on (memory extraction riding the chat model) does not.
     if background != Some(true) {
-        crate::dreaming::note_activity();
+        crate::machine::note_activity();
     }
     // Online models ("online:<id>") route to the YOAI proxy with the
     // Flowsta (Vault-grant) token; external models ("external:<id>") post to
@@ -7022,6 +7177,8 @@ pub async fn stream_chat_completion(
     let mut provider_fingerprint: Option<String> = None;
     let mut server_tps: Option<f64> = None;
     let mut prompt_tps: Option<f64> = None;
+    // Tokens the engine read for this turn (not counting what it already held).
+    let mut prompt_read: Option<u64> = None;
     let mut sources: Vec<SourceItem> = Vec::new();
     let mut in_reasoning = false;
     // The empty-thought prefill puts a space before the reply's first
@@ -7143,6 +7300,7 @@ pub async fn stream_chat_completion(
                             // Emit usage data if captured
                             if let Some(ref mut usage) = usage_data {
                                 finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+                                crate::read_speed::note(&app, &model_name, prompt_tps, prompt_read);
                                 // Stamp the engine that served: the GGUF name
                                 // for llama.cpp (routing ranks by it), an
                                 // "mlx:" key for MLX, so the row can show both.
@@ -7220,6 +7378,9 @@ pub async fn stream_chat_completion(
                                 if pp.is_finite() && pp > 0.0 {
                                     prompt_tps = Some(pp);
                                 }
+                            }
+                            if let Some(n) = parsed.get("timings").and_then(|t| t.get("prompt_n")).and_then(|v| v.as_u64()) {
+                                prompt_read = Some(n);
                             }
                             // If the server streams reasoning_content (native thinking from
                             // reasoning models like Grok), always wrap it in <think> tags and
@@ -7382,6 +7543,7 @@ pub async fn stream_chat_completion(
     // Emit usage data if captured (fallback for streams that end without [DONE])
     if let Some(ref mut usage) = usage_data {
         finish_usage(usage, server_tps, prompt_tps, first_bytes_at, last_bytes_at);
+        crate::read_speed::note(&app, &model_name, prompt_tps, prompt_read);
         if model_name != "remote" {
             if let Some(tps) = usage.tokens_per_second {
                 let key = if mlx_serving { format!("mlx:{}", model_name) } else { model_name.clone() };

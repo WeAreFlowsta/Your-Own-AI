@@ -12,6 +12,7 @@ import { renderMarkdown } from '../utils/renderMarkdown';
 import { Message } from '../types';
 import {
   LuBot,
+  LuBrain,
   LuFileText,
 } from '@qwikest/icons/lucide';
 import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
@@ -20,9 +21,14 @@ import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
 import GivenPanel from './GivenPanel';
 import { invoke } from '@tauri-apps/api/core';
-import { givenLineWords } from '../utils/givenLine';
-import type { RememberHandle } from '../utils/rememberText';
-import { looksLikeInstruction } from '../utils/memory';
+import { givenLineWords, type Sent, hasMemoryToShow } from '../utils/givenLine';
+import { useMoreMemoryControls } from '../utils/memoryMore';
+import { MemoryDownload } from './memory/MemoryDownload';
+import { MemoryHere } from './memory/MemoryHere';
+import { SentLine } from './memory/SentLine';
+import { KeptLine } from './KeptLine';
+import { KEPT_EVENT, keysOf, type Kept, type KeptEventDetail } from '../utils/memoryKeep';
+import { answerOffer, openProjectId, ruleKeptWords, type RuleFor } from '../utils/ruleOffers';
 
 // Markdown rendering imported from shared utility (renderMarkdown)
 
@@ -129,6 +135,10 @@ interface ChatMessageProps {
   /** This AI carries tools (a direct reply offers them). */
   canUseTools?: boolean;
   aiLabel?: string;
+  /** The AI of this message's turn (a person's own message names the AI
+   *  that answered it), for Remember. */
+  turnAiId?: string;
+  turnAiName?: string;
   aiImageUrl?: string | null;
   setSidePanelContent$: QRL<(content: { messageId: string; codeString: string; language: string } | null) => void>;
   /** Answer a permission ask inside this message's agent working log. */
@@ -315,104 +325,39 @@ interface ActionBarProps {
 const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
+  const moreMemory = useMoreMemoryControls();
   const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | 'given' | null>(null);
-  /** '' | 'saving' | 'saved' | 'error' - the Remember button's state. Saved is
-   *  a TOGGLE: clicking again forgets the save (via the kept handle). */
-  const rememberState = useSignal('');
-  const rememberHandle = useSignal<RememberHandle | null>(null);
-
-  // Reflect an already-saved reply across reloads (cheap: one index per store,
-  // shared by every button on the page).
+  /** Remember on this reply: '' | 'saving' | what went wrong. The Kept line
+   *  below the bar shows what was kept, with its audience and Undo. */
+  const keepState = useSignal('');
+  const kept = useSignal<Kept | null>(null);
+  /** The words kept were selected in the reply. */
+  const keptSelection = useSignal(false);
   // eslint-disable-next-line qwik/no-use-visible-task
-  useVisibleTask$(async ({ track }) => {
-    track(() => props.isLoading);
-    if (props.isLoading || props.message.role !== 'assistant' || !props.message.content) return;
-    try {
-      const { findRememberedCached } = await import('../utils/rememberText');
-      const h = await findRememberedCached(props.message.model, props.message.content, 'reply');
-      if (h) {
-        rememberHandle.value = h;
-        rememberState.value = 'saved';
+  useVisibleTask$(({ cleanup }) => {
+    if (props.message.role !== 'assistant') return;
+    const onKept = (e: Event) => {
+      const d = (e as CustomEvent<KeptEventDetail>).detail;
+      if (d?.messageId && d.messageId === props.message.id) {
+        keptSelection.value = !!d.selection;
+        kept.value = d.kept;
       }
-    } catch {
-      /* display-only check */
-    }
+    };
+    window.addEventListener(KEPT_EVENT, onKept);
+    cleanup(() => window.removeEventListener(KEPT_EVENT, onKept));
   });
-
-  const rememberReply = $(async () => {
-    if (rememberState.value === 'saving') return;
-    if (rememberState.value === 'saved' && rememberHandle.value) {
-      rememberState.value = 'saving';
-      try {
-        const { forgetRemembered } = await import('../utils/rememberText');
-        await forgetRemembered(props.message.model, rememberHandle.value);
-        rememberHandle.value = null;
-        rememberState.value = '';
-      } catch {
-        rememberState.value = 'saved';
-      }
-      return;
-    }
-    rememberState.value = 'saving';
+  const keepReply = $(async () => {
+    if (keepState.value === 'saving') return;
+    keepState.value = 'saving';
+    const { keepMessage, keepError } = await import('../utils/memoryKeep');
     try {
-      const { rememberText } = await import('../utils/rememberText');
-      const handle = await rememberText(props.message.model, props.message.content, 'reply');
-      rememberHandle.value = handle;
-      rememberState.value = handle ? 'saved' : 'error';
-    } catch {
-      rememberState.value = 'error';
+      keptSelection.value = false;
+      kept.value = await keepMessage({ aiId: props.message.model, role: 'assistant', text: props.message.content, seq: props.message.sequence });
+      keepState.value = '';
+    } catch (e) {
+      keepState.value = keepError(e);
+      setTimeout(() => (keepState.value = ''), 4000);
     }
-    if (rememberState.value === 'error') {
-      setTimeout(() => (rememberState.value = ''), 2500);
-    }
-  });
-
-  // Folder sessions have TWO honest destinations for a remembered reply:
-  // the folder's shared memory (likelier mid-work) or this AI's own memory.
-  // The little menu makes the choice explicit - never a silent default.
-  const rememberMenuOpen = useSignal(false);
-  const rememberFolder = useSignal<string | null>(null);
-
-  const rememberClick = $(async () => {
-    if (rememberState.value === 'saving') return;
-    // Saved-toggle (per-AI) keeps its forget-on-click behavior.
-    if (rememberState.value === 'saved' && rememberHandle.value) {
-      await rememberReply();
-      return;
-    }
-    if (props.message.agentTurn) {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const status = await invoke<{ folder: string | null; tools?: boolean }>('build_agent_status');
-        if (status.folder && !status.tools) {
-          rememberFolder.value = status.folder;
-          rememberMenuOpen.value = true;
-          return;
-        }
-      } catch {
-        /* no bridge - plain per-AI save */
-      }
-    }
-    await rememberReply();
-  });
-
-  const rememberToFolder = $(async () => {
-    const folder = rememberFolder.value;
-    rememberMenuOpen.value = false;
-    if (!folder) return;
-    rememberState.value = 'saving';
-    try {
-      const { appendWorkspaceNote } = await import('../utils/workspaceMemory');
-      const ok = await appendWorkspaceNote(folder, props.message.content);
-      rememberState.value = ok ? 'saved-folder' : 'error';
-    } catch {
-      rememberState.value = 'error';
-    }
-    setTimeout(() => {
-      if (rememberState.value === 'saved-folder' || rememberState.value === 'error') {
-        rememberState.value = '';
-      }
-    }, 2500);
   });
 
   const hasTokens = props.message.tokens && (props.message.tokens.total_tokens || 0) > 0;
@@ -430,7 +375,12 @@ const ActionBar = component$<ActionBarProps>((props) => {
   // The rail no longer folds whole: its header carries the summary and
   // the Simple | Detailed control, so the action bar has no Steps button.
   const hasSteps = false;
-  const hasButtons = hasSteps || hasTokens || hasThoughts || hasSources || hasWebNote || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
+  // Memory gave this reply something, and there is nothing more to say at
+  // rest: a button among the others, never a line that makes the bar taller.
+  const memoryLine = !props.message.isLoading ? props.message.givenLine : undefined;
+  const madeOffThisComputer = /^(online|external):/.test(props.message.servedBy || '');
+  const hasMemoryButton = hasMemoryToShow(memoryLine, madeOffThisComputer ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined);
+  const hasButtons = hasMemoryButton || hasSteps || hasTokens || hasThoughts || hasSources || hasWebNote || hasGrounded || hasLibrary || canGround || !!props.message.groundingPending || !!props.message.groundingNote || hasModelInfo;
   const showStatus = props.isLoading && !props.message.error;
 
   // Nothing to say and nothing to offer: render nothing. (The empty bar
@@ -616,62 +566,16 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 </LiquidMetalButton>
               )}
             {props.message.role === 'assistant' && !!props.message.content && (
-              <span class="relative inline-flex">
-                <LiquidMetalButton
-                  onClick$={rememberClick}
-                  class="px-3 py-1 text-xs flex items-center"
-                  title={
-                    rememberState.value === 'error'
-                      ? 'Could not save - remembering needs the small helper download (Settings - Components)'
-                      : rememberState.value === 'saved'
-                        ? 'Remembered - click to forget it again'
-                        : rememberState.value === 'saved-folder'
-                          ? 'Saved to this project’s memory'
-                          : 'Remember this reply - your AI will draw on it in future conversations'
-                  }
-                  disabled={rememberState.value === 'saving'}
-                >
-                  <BsBookmarkIcon />
-                  <span class="hidden md:inline">
-                    {rememberState.value === 'saved'
-                      ? 'Remembered'
-                      : rememberState.value === 'saved-folder'
-                        ? 'Saved to project'
-                        : rememberState.value === 'saving'
-                          ? 'Saving...'
-                          : rememberState.value === 'error'
-                            ? 'Try again'
-                            : 'Remember'}
-                  </span>
-                </LiquidMetalButton>
-                {rememberMenuOpen.value && (
-                  <>
-                    <span
-                      class="fixed inset-0 z-[45]"
-                      onClick$={() => (rememberMenuOpen.value = false)}
-                    />
-                    <span class="absolute left-0 bottom-full mb-2 w-56 rounded-2xl bg-[var(--bg-dropdown)] border border-[var(--border-subtle)] py-1 shadow-lg z-50 overflow-hidden block">
-                      <button
-                        type="button"
-                        onClick$={rememberToFolder}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
-                      >
-                        Remember for this project
-                      </button>
-                      <button
-                        type="button"
-                        onClick$={() => {
-                          rememberMenuOpen.value = false;
-                          rememberReply();
-                        }}
-                        class="flex w-full items-center gap-2 px-3 py-2 text-sm text-[var(--text-dropdown)] hover:bg-[var(--bg-dropdown-hover)] text-left"
-                      >
-                        Remember for {props.message.aiLabel || 'this AI'}
-                      </button>
-                    </span>
-                  </>
-                )}
-              </span>
+              <LiquidMetalButton
+                onClick$={keepReply}
+                class="px-3 py-1 text-xs flex items-center"
+                title="Keep this exchange in memory, for your AIs to use later"
+                disabled={keepState.value === 'saving'}
+                testId="remember-reply"
+              >
+                <BsBookmarkIcon />
+                <span class="hidden md:inline">{keepState.value === 'saving' ? 'Keeping...' : 'Remember'}</span>
+              </LiquidMetalButton>
             )}
             {hasModelInfo && (
               <LiquidMetalButton
@@ -683,6 +587,21 @@ const ActionBar = component$<ActionBarProps>((props) => {
                 <BsCpuIcon />
                 <span class="hidden md:inline">Model</span>
               </LiquidMetalButton>
+            )}
+            {hasMemoryButton && (
+              <span class="contents" data-testid="given-line" data-kind={memoryLine?.kind ?? 'sent-only'}>
+                <LiquidMetalButton
+                  onClick$={() => toggleSection$('given')}
+                  class="px-3 py-1 text-xs flex items-center"
+                  aria-expanded={openSection.value === 'given'}
+                  aria-label="What this AI was given from your memory"
+                  title="What this AI was given from your memory"
+                  testId="given-show"
+                >
+                  <LuBrain class="w-[1em] h-[1em] md:mr-1.5" />
+                  <span class="hidden md:inline">Memory</span>
+                </LiquidMetalButton>
+              </span>
             )}
             {hasThoughts && (
               <LiquidMetalButton
@@ -728,29 +647,52 @@ const ActionBar = component$<ActionBarProps>((props) => {
         )}
       </div>
 
-      {/* The line under a reply: what memory gave it, in one sentence,
-          with the passages one step away. */}
-      {props.message.givenLine && !props.message.isLoading && (() => {
-        const w = givenLineWords(props.message.givenLine!, props.message.aiLabel || 'This AI');
+      {/* Under a reply: nothing about memory at rest. The Memory button
+          among the reply's buttons opens this: what was sent off this
+          computer, what the search gave, or why memory did not look. */}
+      {!props.message.isLoading && openSection.value === 'given' && (() => {
+        // A reply made elsewhere: what memory sent with the question. A
+        // reply made on this computer sent nothing, whatever was readied.
+        const madeElsewhere = /^(online|external):/.test(props.message.servedBy || '');
+        const sent = madeElsewhere ? (props.message.given as { sent?: Sent } | undefined)?.sent : undefined;
+        const line = props.message.givenLine;
+        if (!hasMemoryToShow(line, sent)) return null;
+        const w = line ? givenLineWords(line, props.message.aiLabel || 'This AI') : null;
+        const switchedOff = line?.kind === 'did-not-look' && line.why === 'switched_off_for_this_ai';
         return (
-          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={props.message.givenLine!.kind}>
-            {w.label && <div class="text-[var(--text-muted)]">{w.label}</div>}
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
-              <span>{w.text}</span>
-              {w.show && !!props.message.given && (
-                <button type="button" class="underline" data-testid="given-show" aria-expanded={openSection.value === 'given'} onClick$={() => toggleSection$('given')}>
-                  {openSection.value === 'given' ? 'Hide' : 'Show'}
-                </button>
+          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-opened" data-kind={line?.kind ?? 'sent-only'}>
+            <div class="mt-3 flex flex-col gap-1" data-testid="given-details">
+              {(sent || switchedOff) && (
+                <SentLine sent={sent} servedBy={props.message.servedBy || ''} aiId={props.message.model} aiName={props.message.aiLabel || 'this AI'} off={switchedOff} isLast={props.isLast} />
               )}
-              {w.readRest && (
-                <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
-                  Read the rest now
-                </button>
+              {w && (
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  <span>
+                    {w.label ? `${w.label}. ` : ''}
+                    {w.text}
+                  </span>
+                  {w.readRest && moreMemory.value && (
+                    <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
+                      Read the rest now
+                    </button>
+                  )}
+                </div>
               )}
+              {line?.kind === 'did-not-look' && line.why === 'component_missing' && <MemoryDownload />}
+              {line?.kind === 'did-not-look' && line.why === 'off_on_this_computer' && <MemoryHere />}
             </div>
           </div>
         );
       })()}
+      {(kept.value || (keepState.value && keepState.value !== 'saving')) && (
+        <div class="px-4 pb-2">
+          {kept.value ? (
+            <KeptLine kept={kept} />
+          ) : (
+            <span class="text-[11px] text-[var(--text-muted)]" data-testid="keep-failed">{keepState.value}</span>
+          )}
+        </div>
+      )}
       {openSection.value === 'given' && !!props.message.given && (
         <GivenPanel given={props.message.given} ai={props.message.aiLabel || 'This AI'} />
       )}
@@ -783,6 +725,18 @@ const ActionBar = component$<ActionBarProps>((props) => {
             {!!props.message.skills?.length && (
               <p class="text-xs mt-1.5">
                 Skills carried on this turn: {props.message.skills.join(', ')}
+              </p>
+            )}
+            {typeof props.message.sequence === 'number' && (
+              <p class="text-xs mt-1.5">
+                <button
+                  type="button"
+                  class="underline"
+                  data-testid="show-record"
+                  onClick$={() => window.dispatchEvent(new CustomEvent('yoai-show-record', { detail: { aiId: props.message.model, seq: props.message.sequence } }))}
+                >
+                  Show the record
+                </button>
               </p>
             )}
             {props.message.agentTurn && (
@@ -1026,21 +980,41 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
     window.addEventListener('rule-offer', onOffer);
     cleanup(() => window.removeEventListener('rule-offer', onOffer));
   });
-  const keepAsRule = $(async () => {
+  /** Whom the rule just kept is for. */
+  const ruleFor = useSignal<RuleFor>('all');
+  /** A project is open: the offer has a fourth answer. */
+  const inProject = useSignal(false);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ track }) => {
+    track(() => offeredRule.value);
+    inProject.value = !!offeredRule.value && !!openProjectId();
+  });
+  const keepAsRule = $(async (whom: RuleFor) => {
     if (captureState.value === 'saving') return;
     captureState.value = 'saving';
     try {
-      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope }, { normalizeRuleText, clearRuleOffer }] = await Promise.all([
+      const [{ saveMemoryRow, newRow, listMemoryRowsCached, personScope, aiScope, projectScope }, { normalizeRuleText, clearRuleOffer }] = await Promise.all([
         import('../utils/memoryRows'),
         import('../utils/memory'),
       ]);
-      // The extractor's wording when it offered one, else the message as said.
       const text = (offeredRule.value ?? props.message.content).trim();
+      let scope = personScope;
+      if (whom === 'ai') {
+        const { founding } = await keysOf(props.turnAiId ?? '');
+        if (!founding) throw new Error('this AI has no key yet');
+        scope = aiScope(founding);
+      } else if (whom === 'project') {
+        const project = openProjectId();
+        if (!project) throw new Error('no project is open');
+        scope = projectScope(project);
+      }
       clearRuleOffer(props.message.content);
-      const same = (await listMemoryRowsCached(personScope).catch(() => [])).find(
+      const same = (await listMemoryRowsCached(scope).catch(() => [])).find(
         (r) => r.kind === 'rule' && normalizeRuleText(r.text) === normalizeRuleText(text),
       );
-      if (!same) await saveMemoryRow(newRow(personScope, 'rule', text, { pinned: true }));
+      if (!same) await saveMemoryRow(newRow(scope, 'rule', text, { pinned: true }));
+      void answerOffer(text, 'kept');
+      ruleFor.value = whom;
       captureState.value = 'saved-rule';
     } catch (e) {
       console.warn('[ChatMessage] keeping the rule failed:', e);
@@ -1048,18 +1022,30 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       setTimeout(() => (captureState.value = ''), 2500);
     }
   });
-  const rememberOwn = $(async () => {
-    if (captureState.value === 'saving') return;
-    captureState.value = 'saving';
-    try {
-      const { addAuthoredNote } = await import('../utils/memory');
-      await addAuthoredNote(props.message.content.trim());
-      captureState.value = 'saved-note';
-    } catch (e) {
-      console.warn('[ChatMessage] remembering the message failed:', e);
-      captureState.value = 'error';
-      setTimeout(() => (captureState.value = ''), 2500);
-    }
+  const declineRule = $(async () => {
+    const text = (offeredRule.value ?? props.message.content).trim();
+    const { clearRuleOffer } = await import('../utils/memory');
+    clearRuleOffer(props.message.content);
+    offeredRule.value = null;
+    void answerOffer(text, 'declined');
+  });
+  const keptOwn = useSignal<Kept | null>(null);
+  const keptOwnSelection = useSignal(false);
+  const keepFailed = useSignal('');
+  // "Remember that", said in the chat, kept this message: the same line.
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(({ cleanup }) => {
+    if (props.message.role !== 'user') return;
+    const onKept = (e: Event) => {
+      const d = (e as CustomEvent<KeptEventDetail>).detail;
+      if (d?.messageId && d.messageId === props.message.id) {
+        keptOwn.value = d.kept;
+        keptOwnSelection.value = !!d.selection;
+        captureState.value = 'saved-note';
+      }
+    };
+    window.addEventListener(KEPT_EVENT, onKept);
+    cleanup(() => window.removeEventListener(KEPT_EVENT, onKept));
   });
   const finalText = useSignal('');
   const displayedLineCount = useSignal(0);
@@ -1442,7 +1428,18 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
   if (props.message.role === 'user') {
     const images = props.message.images;
     return (
-      <div class="group flex flex-col items-end mb-4" data-testid="chat-message" data-role="user">
+      <div
+        class="group flex flex-col items-end mb-4"
+        data-testid="chat-message"
+        data-role="user"
+        // Selected words in the person's own message can be kept: the
+        // marks a selection is found by. Plain attributes, each absent
+        // until the AI of the turn is known.
+        data-remember-aiid={props.message.content && props.turnAiId ? props.turnAiId : undefined}
+        data-remember-role={props.message.content && props.turnAiId ? 'user' : undefined}
+        data-remember-id={props.message.content && props.turnAiId ? props.message.id : undefined}
+        data-remember-seq={props.message.content && props.turnAiId && typeof props.message.sequence === 'number' ? String(props.message.sequence) : undefined}
+      >
       <div class="flex justify-end items-start gap-2 w-full">
         <div class="bg-[var(--bg-user-message)] chat-bubble-border text-[var(--text-primary)] text-sm mt-1 py-1.5 px-4 leading-loose tracking-wide font-light max-w-[calc(100%)] rounded-2xl">
           {images && images.length > 0 && (
@@ -1477,36 +1474,40 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
           )}
           {/* As typed: the person's line breaks are theirs (a pasted
               multi-line prompt read as one paragraph, 09-24). */}
-          <span class="whitespace-pre-wrap">{props.message.content}</span>
+          <span class="whitespace-pre-wrap" data-testid="own-message-text">{props.message.content}</span>
         </div>
       </div>
-      {/* One line, never a modal: the offer for an instruction, a quiet
-          Remember for anything else; gone once answered. */}
-      {props.message.content && captureState.value !== 'dismissed' && (
+      {/* One line, never a modal: the offer for an instruction, or what was
+          kept when the person said "remember that"; gone once answered. */}
+      {props.message.content && captureState.value !== 'dismissed' && (captureState.value || offeredRule.value) && (
         <div class="mt-1 pr-1 text-[11px] text-[var(--text-muted)] flex items-center gap-2" data-testid="own-message-capture">
           {captureState.value === 'saved-rule' ? (
-            <span data-testid="rule-kept">Kept as a rule - every AI follows it.</span>
-          ) : captureState.value === 'saved-note' ? (
-            <span>Remembered.</span>
+            <span data-testid="rule-kept" data-for={ruleFor.value}>{ruleKeptWords(ruleFor.value, props.turnAiName || '')}</span>
+          ) : captureState.value === 'saved-note' && keptOwn.value ? (
+            <KeptLine kept={keptOwn} />
           ) : captureState.value === 'error' ? (
-            <span>Could not save it just now.</span>
-          ) : looksLikeInstruction(props.message.content) || offeredRule.value ? (
+            <span>{keepFailed.value || 'Could not save it just now.'}</span>
+          ) : offeredRule.value ? (
             <>
-              <span data-testid="rule-offer">
-                {offeredRule.value && !looksLikeInstruction(props.message.content) ? `Keep this as a rule? "${offeredRule.value}"` : 'Keep this as a rule?'}
-              </span>
-              <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={keepAsRule} disabled={captureState.value === 'saving'}>
-                {captureState.value === 'saving' ? 'Keeping…' : 'Keep'}
+              <span data-testid="rule-offer">You have asked for this twice. Keep it as a rule?</span>
+              {props.turnAiId && (
+                <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-ai" onClick$={() => keepAsRule('ai')} disabled={captureState.value === 'saving'}>
+                  Just {props.turnAiName || 'this AI'}
+                </button>
+              )}
+              <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-keep" onClick$={() => keepAsRule('all')} disabled={captureState.value === 'saving'}>
+                Every AI
               </button>
-              <button type="button" class="hover:text-[var(--text-primary)]" onClick$={() => (captureState.value = 'dismissed')}>
-                Not now
+              {inProject.value && (
+                <button type="button" class="underline hover:text-[var(--text-primary)]" data-testid="rule-offer-project" onClick$={() => keepAsRule('project')} disabled={captureState.value === 'saving'}>
+                  This project
+                </button>
+              )}
+              <button type="button" class="hover:text-[var(--text-primary)]" data-testid="rule-offer-no" onClick$={declineRule}>
+                No
               </button>
             </>
-          ) : (
-            <button type="button" class="opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-[var(--text-primary)] transition-opacity" title="Remember this for your AIs" onClick$={rememberOwn} disabled={captureState.value === 'saving'} data-testid="remember-own">
-              Remember
-            </button>
-          )}
+          ) : null}
         </div>
       )}
       </div>
@@ -1571,7 +1572,7 @@ const ChatMessage = component$<ChatMessageProps>((props) => {
       data-served={props.message.servedBy ?? ""}
       data-stopped={props.message.stopped ? "1" : undefined}
       {...(props.message.role === 'assistant' && props.message.content
-        ? { 'data-remember-aiid': props.message.model }
+        ? { 'data-remember-aiid': props.message.model, 'data-remember-role': 'assistant', 'data-remember-id': props.message.id, ...(typeof props.message.sequence === 'number' ? { 'data-remember-seq': String(props.message.sequence) } : {}) }
         : {})}
     >
       {renderAvatarContent()}

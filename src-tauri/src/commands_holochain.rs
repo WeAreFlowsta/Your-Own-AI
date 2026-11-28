@@ -95,6 +95,8 @@ pub struct TranscriptEntryInfo {
     /// What memory gave the reply (None for replies from before it was
     /// recorded, and for the person's own messages).
     pub given: Option<crate::memory_block::GivenRecord>,
+    /// The health gate's verdict on the turn, when it was recorded.
+    pub health: Option<bool>,
     /// The line the reply gets under it, from that record.
     pub given_line: Option<crate::memory_quotes::ReplyLine>,
     pub agent_log: Option<serde_json::Value>,
@@ -375,6 +377,11 @@ struct MessagePlain {
     /// encrypted plaintext only: no DNA change, old entries read back None.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub given: Option<crate::memory_block::GivenRecord>,
+    /// The health gate's verdict on the turn: the person's message as it
+    /// was judged, and a reply as the message it answers. None: recorded
+    /// before the verdict was, or the gate could not run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<bool>,
     /// The agent turn's working log (steps/narration/thoughts/permission
     /// receipts + stats), opaque JSON owned by the frontend. The plaintext
     /// schema is client-side and encrypted before the zome sees it, so this
@@ -643,8 +650,19 @@ pub async fn record_transcript_entry(
     let memory_content: Option<String> = memory_folder.as_ref().map(|_| content.clone());
 
     // Phase A: message content is encrypted with the user data key.
+    // The project a session's turn is in (a tools session has a working
+    // folder and no project).
+    let in_tools_session = {
+        use tauri::Manager as _;
+        app.state::<crate::agent_bridge::AgentBridgeState>().is_tools_session().await
+    };
+    let folder_for_keeping: Option<String> = folder_path.clone().filter(|f| !f.is_empty() && !is_memory_write && !in_tools_session);
     let prov = provenance.unwrap_or_default();
+    let (given_for_search, stopped_for_search) = (prov.given.as_ref().is_some_and(crate::memory_block::GivenRecord::gave_exchanges), prov.stopped == Some(true));
     let model_hash = crate::model_hash::get(&app, &model);
+    // Every turn is recorded with the health gate's verdict, wherever it
+    // was answered: a marked turn is never given to an online AI later.
+    let health = crate::memory_health::at_record(&app, &conversation_hash, &role, &content).await;
     let plain = MessagePlain {
         role,
         content,
@@ -667,6 +685,7 @@ pub async fn record_transcript_entry(
         routing_task: prov.routing_task,
         stopped: prov.stopped,
         given: prov.given,
+        health,
         agent_log,
         folder_path,
     };
@@ -724,11 +743,24 @@ pub async fn record_transcript_entry(
     let at = now_micros();
     crate::conversation_cache::touch(&app, &conversation_hash, at);
     // Search sees the turn now, without a rebuild.
-    crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at);
+    crate::transcript_search::note_recorded(&app, &conversation_hash, seq_for_search, &role_for_search, &content_for_search, at, given_for_search, stopped_for_search, health == Some(true));
     // Memory's index reads it on its next pass, which this starts.
     if !is_memory_write {
         crate::memory_reading::note_recorded();
     }
+    // A finished reply: its exchange waits to be looked at in idle time,
+    // for whether it settled something worth keeping.
+    crate::memory_keeping::recorded(
+        &app,
+        &crate::memory_keeping::RecordedTurn { role: &role_for_search, stopped: stopped_for_search, own_write: is_memory_write, content: &content_for_search },
+        crate::memory_keeping::Waiting {
+            conversation: conversation_hash.clone(),
+            seq: seq_for_search,
+            ai: founding_key_for(&app, &agent_key),
+            agent: agent_key.clone(),
+            project: folder_for_keeping.as_deref().map(|f| crate::project_identity::project_identity(std::path::Path::new(f))),
+        },
+    );
     Ok(id)
 }
 
@@ -987,7 +1019,14 @@ fn newest_revision(info: &mut ProjectMemoryInfo, entries: Vec<TranscriptEntryInf
     }
 }
 
-async fn project_memory_read_records_info(
+/// Every folder this device knows a project memory for.
+pub(crate) fn project_memory_folders(app: &tauri::AppHandle) -> Vec<String> {
+    let mut folders: Vec<String> = project_memory_index_load(app).into_iter().filter(|(folder, convs)| folder != INDEX_WALKED && !convs.is_empty()).map(|(folder, _)| folder).collect();
+    folders.sort();
+    folders
+}
+
+pub(crate) async fn project_memory_read_records_info(
     app: &tauri::AppHandle,
     folder: &str,
 ) -> Result<ProjectMemoryInfo, String> {
@@ -1871,6 +1910,7 @@ fn entry_info(hash: String, e: MessagePlain) -> TranscriptEntryInfo {
         stopped: e.stopped,
         given_line,
         given: e.given,
+        health: e.health,
         agent_log: e.agent_log,
         folder_path: e.folder_path,
     }
@@ -1947,6 +1987,14 @@ pub struct HistoryArrival {
 
 #[tauri::command]
 pub async fn history_arrival(app: tauri::AppHandle) -> Result<HistoryArrival, String> {
+    // A debug build's UI test (e2e/specs/models/memory-catching-up.e2e.ts):
+    // the count is given, so the lines that show while history arrives are
+    // seen without a second device.
+    if cfg!(debug_assertions) {
+        if let Some(n) = std::env::var("YOAI_TEST_HISTORY_ARRIVING").ok().and_then(|v| v.parse::<u32>().ok()) {
+            return Ok(HistoryArrival { not_here: n, device: Some("Test computer".into()) });
+        }
+    }
     let not_here = NOT_HERE.lock().map(|h| h.values().sum()).unwrap_or(0);
     Ok(HistoryArrival { not_here, device: the_other_device(&app) })
 }
@@ -2417,6 +2465,7 @@ mod size_guard_tests {
             routing_task: None,
             stopped: None,
             given: None,
+            health: None,
             agent_log: log,
             folder_path: None,
         }
@@ -2519,7 +2568,7 @@ mod order_tests {
             hash: hash.into(), role: "user".into(), content: String::new(), sequence: seq, timestamp: ts,
             model: String::new(), model_hash: None, provider_fingerprint: None, thinking: None, tokens: None,
             sources: None, system_prompt: None, mode: None, attachments: None, images: None, grounded: None,
-            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None, given: None, given_line: None,
+            library: None, runtime: None, routing_reason: None, routing_task: None, stopped: None, given: None, given_line: None, health: None,
             agent_log: None, folder_path: None,
         }
     }

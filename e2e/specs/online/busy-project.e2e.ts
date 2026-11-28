@@ -196,7 +196,7 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
     console.log(`e2e: memory has the check command: ${memory.content.includes(`check-${RUN}`)}`);
   });
 
-  it("opens the conversations drawer and the Projects tab quickly with that many conversations", async function () {
+  it("opens the conversations drawer and the project's memory quickly with that many conversations", async function () {
     if (!ready) this.skip();
     this.timeout(300_000);
     await timed("drawer: first conversations shown", 3_000, async () => {
@@ -205,13 +205,15 @@ describe(`online: a busy ${MODEL} agent in a project on an AI with ${BIG} conver
     });
     await shot("online-drawer");
     await browser.keys("Escape");
-    await browser.url("tauri://localhost/memory/");
-    const tab = await $('[data-testid="memory-tab-projects"]');
-    await tab.waitForDisplayed({ timeout: 60_000 });
-    await timed("Projects tab: this project listed", 10_000, async () => {
-      await tab.click();
-      await (await $(`[data-testid="project-item"][data-folder="${FOLDER}"]`)).waitForExist({ timeout: 10_000 });
+    // "Project memory", from the project's own menu, opens Memory on it.
+    const leaf = FOLDER.split("/").filter(Boolean).pop()!;
+    await (await $('[data-testid="project-pill"]')).click();
+    await timed("Project memory: Memory opens on this project", 10_000, async () => {
+      await (await $('[data-testid="open-project-memory"]')).click();
+      const line = await $('[data-testid="memory-project-line"]');
+      await line.waitForDisplayed({ timeout: 10_000 });
+      expect(await line.getText()).toContain(leaf);
     });
-    await shot("online-projects-tab");
+    await shot("online-project-memory");
   });
 });

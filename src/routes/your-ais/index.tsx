@@ -34,6 +34,7 @@ import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import AiFormModal from "../../components/AiFormModal";
 import DeleteAiModal from "../../components/DeleteAiModal";
+import { aiKeptWords } from "../../utils/memoryDeleteWords";
 import ConfirmModal from "../../components/ConfirmModal";
 import LastActiveAiModal from "../../components/LastActiveAiModal";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
@@ -375,6 +376,19 @@ export default component$(() => {
 
   // Archived-AI purge goes through a styled confirm (not the native dialog).
   const archivedToPurge = useSignal<UserDefinedAI | null>(null);
+  /** What the AI about to be deleted kept: how much stays and how much goes. */
+  const purgeKept = useSignal<{ stay: number; go: number } | null>(null);
+  // eslint-disable-next-line qwik/no-use-visible-task
+  useVisibleTask$(async ({ track }) => {
+    const archived = track(() => archivedToPurge.value);
+    const asked = track(() => aiToDelete.value?.id);
+    const ai = archived ?? (asked ? aiData.userDefinedAis.find((a) => a.id === asked) : undefined);
+    purgeKept.value = null;
+    const founding = ai ? ai.foundingKey || ai.agentPubKey || "" : "";
+    if (!founding) return;
+    const { invoke } = await import("@tauri-apps/api/core");
+    purgeKept.value = await invoke<{ stay: number; go: number }>("memory_ai_delete_preview", { founding }).catch(() => null);
+  });
 
   const handlePurgeArchivedAi = $((ai: UserDefinedAI) => {
     archivedToPurge.value = ai;
@@ -630,9 +644,8 @@ export default component$(() => {
                       <LiquidMetalButton
                         variant="secondary"
                         onClick$={() => {
-                          sessionStorage.setItem("memory-ai-id", ai.id);
-                          sessionStorage.setItem("memory-agent-key", ai.agentPubKey || "");
-                          nav("/memory/");
+                          sessionStorage.setItem("memory-view-ai", ai.id);
+                          nav("/your-memory/");
                         }}
                         title="Memory"
                         class="px-3 py-1.5 transition-colors duration-150 flex items-center gap-1.5 rounded-full text-xs"
@@ -807,6 +820,7 @@ export default component$(() => {
         onArchive$={handleArchiveConfirm}
         onPurge$={handlePurgeConfirm}
         aiName={aiToDelete.value?.name || ""}
+        keptWords={aiKeptWords(aiToDelete.value?.name || "It", purgeKept.value)}
         busyAction={deleteBusyAction.value}
       />
 
@@ -825,7 +839,7 @@ export default component$(() => {
         isOpen={!!archivedToPurge.value}
         variant="danger"
         title={`Permanently delete ${archivedToPurge.value?.name ?? "this AI"}?`}
-        message="This erases its signed conversations and everything it learned about you. It can't be undone."
+        message={`This erases ${archivedToPurge.value?.name ?? "this AI"}'s conversations. ${aiKeptWords(archivedToPurge.value?.name ?? "It", purgeKept.value)}It can't be undone.`}
         confirmLabel="Delete permanently"
         busy={!!archivedToPurge.value && deletingAiId.value === archivedToPurge.value?.id}
         onConfirm$={doPurgeArchivedAi}

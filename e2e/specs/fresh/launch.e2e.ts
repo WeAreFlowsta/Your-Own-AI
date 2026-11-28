@@ -118,6 +118,16 @@ describe("step 2: meet your AIs", () => {
     for (const n of names) expect(n.length).toBeGreaterThan(0);
   });
 
+  it("says once, in plain words, what memory does and where it happens", async () => {
+    const said = await browser.execute(() => [...document.querySelectorAll('[data-testid="welcome-memory-sentence"]')].map((p) => (p as HTMLElement).innerText.replace(/\s+/g, " ").trim()));
+    expect(said.length).toBe(1);
+    expect(said[0]).toContain("Your AIs can look through your past conversations.");
+    expect(said[0]).toContain("on this computer");
+    expect(said[0]).toContain("you can turn that off");
+    // Nothing on the step asks about memory: no switch, no box to answer.
+    expect(await $('[data-testid="memory-download"]').isExisting()).toBe(false);
+  });
+
   it("shows the Work set first, applied by itself, and swaps the AIs on pick", async () => {
     const cards = () =>
       browser.execute(() =>

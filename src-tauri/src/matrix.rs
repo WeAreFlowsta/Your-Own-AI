@@ -367,6 +367,14 @@ async fn spawn_bench_server(
 ) -> Result<KillOnDrop, String> {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
+    // A bench engine answers one-off questions; none comes back. Left alone
+    // the engine keeps the states of past prompts in memory, up to 8 GB of
+    // them: a long leg (36 questions of a model that writes at length) grew
+    // past 6 GB and was stopped for memory. It keeps none here.
+    let mut args = args;
+    if !args.iter().any(|a| a == "--cache-ram") {
+        args.extend(["--cache-ram".to_string(), "0".to_string()]);
+    }
     let child = bench_command(bin, &args)
         .current_dir(work_dir)
         .stdout(Stdio::null())
@@ -832,6 +840,204 @@ pub(crate) fn score_quality(case: &QualityCase, answer: &str) -> (u8, Vec<String
 /// slow for this machine (not a failure).
 const QUALITY_MODEL_BUDGET: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// What a model did on the harder questions.
+struct Harder {
+    right: usize,
+    asked: usize,
+    written: u64,
+    seconds: u64,
+    missed: Vec<String>,
+}
+
+/// The harder set, put to the model the bench engine is serving, the way
+/// it is put to online models: one checkable answer each, read from the
+/// last "Answer:" line. At most an hour.
+async fn ask_harder(client: &reqwest::Client, dir: &Path, model: &str) -> Harder {
+    use std::time::Duration;
+    let started = std::time::Instant::now();
+    let mut out = Harder { right: 0, asked: 0, written: 0, seconds: 0, missed: Vec::new() };
+    for (i, case) in QUALITY_HARD.iter().enumerate() {
+        if cancelled() || started.elapsed() > Duration::from_secs(3600) {
+            break;
+        }
+        let mut body = serde_json::json!({
+            "model": model,
+            "messages": [{"role": "system", "content": HARD_SYSTEM}, {"role": "user", "content": case.ask}],
+            "max_tokens": 2000, "temperature": 0.0, "stream": false,
+            "stop": crate::llm::chat_stop_strings(model),
+        });
+        crate::llm::apply_no_think(&mut body, dir, model);
+        let v: Result<serde_json::Value, String> = async {
+            client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(600)).send().await
+                .map_err(|e| format!("request: {e}"))?.json().await.map_err(|e| format!("json: {e}"))
+        }.await;
+        out.asked += 1;
+        match v {
+            Ok(v) => {
+                out.written += v["usage"]["completion_tokens"].as_u64().unwrap_or(0);
+                if score_hard(case, &crate::llm::completion_text(&v)) {
+                    out.right += 1;
+                } else {
+                    out.missed.push(format!("q{}", i + 1));
+                }
+            }
+            Err(e) => out.missed.push(format!("q{} no answer ({})", i + 1, e.chars().take(40).collect::<String>())),
+        }
+    }
+    out.seconds = started.elapsed().as_secs();
+    out
+}
+
+/// The chat models in the models folder: not an embedding model, a vision
+/// projector or the document reader.
+fn chat_models_in(dir: &Path) -> Vec<String> {
+    let mut models: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().to_str().map(String::from))
+                .filter(|n| n.ends_with(".gguf") && !n.to_lowercase().contains("mmproj") && !crate::doc_reader::is_reader_file(n))
+                .filter(|n| crate::gguf::read_meta(&dir.join(n)).map(|m| !m.is_embedding()).unwrap_or(false))
+                .collect()
+        })
+        .unwrap_or_default();
+    models.sort();
+    models.dedup();
+    models
+}
+
+/// The bench engine's arguments for one model, as the quality leg starts it.
+fn bench_args_for(bin: &Path, dir: &Path, model: &str) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
+        "--no-webui".into(), "--reasoning".into(), "off".into(),
+        "--ctx-size".into(), "4096".into(), "--fit".into(), "off".into(),
+        "--model".into(), model.to_string(),
+    ];
+    if let Ok(meta) = crate::gguf::read_meta(&dir.join(model)) {
+        let size = std::fs::metadata(dir.join(model)).map(|m| m.len()).unwrap_or(0);
+        if let Some(n) = moe_decision(&meta, size, 4096, free_vram_gb(bin)) {
+            if n > 0 {
+                if (n as usize) < meta.expert_bytes_per_layer.len() {
+                    args.push("--n-cpu-moe".into());
+                    args.push(n.to_string());
+                } else {
+                    args.push("--cpu-moe".into());
+                }
+            }
+        }
+    }
+    args
+}
+
+/// Model grading: each chat model in the folder, one at a time with
+/// nothing else loaded, is put the harder questions and the built-in
+/// memory check (three runs, the examples shuffled). A model whose result
+/// came with this release is skipped unless `redo`. The result goes in the
+/// report's figures, named by the file and its hash, so a report sent to
+/// us can be added to the next release. A result belongs to the file, not
+/// to this computer.
+pub async fn leg_grade(app: &AppHandle, bin: &Path, dir: &Path, redo: bool, sink: Sink<'_>) -> Vec<String> {
+    let mut failures = Vec::new();
+    let models = chat_models_in(dir);
+    let memory_set = crate::memory_check::set_version();
+    // A result is for the exact file: its hash is made now when it is not
+    // yet known (a model added a moment ago), so a file that came with a
+    // result is not graded a second time and every figure names its file.
+    let mut hashes: std::collections::HashMap<String, Option<String>> = std::collections::HashMap::new();
+    for m in &models {
+        hashes.insert(m.clone(), crate::model_hash::ensure(app, m).await);
+    }
+    let todo: Vec<String> = models
+        .iter()
+        .filter(|m| {
+            let hash = hashes.get(*m).cloned().flatten();
+            let have = crate::local_results::for_file(m);
+            let has_questions = have.and_then(|r| r.questions.as_ref()).is_some_and(|q| q.set == QUALITY_HARD_SET);
+            let has_memory = crate::local_results::memory_for(m, hash.as_deref(), memory_set).is_some();
+            redo || !(has_questions && has_memory)
+        })
+        .cloned()
+        .collect();
+    if models.is_empty() {
+        sink("no chat model to grade".into());
+        return failures;
+    }
+    sink(format!(
+        "{} chat model(s) here; {} already graded in this release; grading {}, one at a time, about half an hour each",
+        models.len(),
+        models.len() - todo.len(),
+        todo.len()
+    ));
+    let client = crate::llm::local_http();
+    for model in todo {
+        if cancelled() {
+            break;
+        }
+        let started = std::time::Instant::now();
+        let _guard = match spawn_bench_server(bin, dir, bench_args_for(bin, dir, &model)).await {
+            Ok(g) => g,
+            Err(e) => {
+                sink(format!("grade: {model}: could not load here ({e}); not graded"));
+                continue;
+            }
+        };
+        let hard = ask_harder(&client, dir, &model).await;
+        if cancelled() {
+            break;
+        }
+        let mut runs: Vec<crate::memory_check::Verdict> = Vec::new();
+        let mut broke = None;
+        for seed in 1..=3u64 {
+            if cancelled() {
+                break;
+            }
+            match crate::memory_check::run_at(bench_port(), dir, &model, seed).await {
+                Ok(v) => runs.push(v),
+                Err(e) => {
+                    broke = Some(e);
+                    break;
+                }
+            }
+        }
+        if cancelled() {
+            break;
+        }
+        let hash = hashes.get(&model).cloned().flatten();
+        let memory = if runs.len() == 3 { crate::memory_check::settled(&runs, hash.clone(), 0) } else { None };
+        let words = |b: bool| if b { "yes" } else { "no" };
+        match &memory {
+            Some(m) => sink(format!(
+                "grade: {model}: {} of {} harder questions right | memory: keeps {}, closes {}, replaces {} | {} s",
+                hard.right,
+                QUALITY_HARD.len(),
+                words(m.may_keep),
+                words(m.may_close),
+                words(m.may_tidy),
+                started.elapsed().as_secs()
+            )),
+            None => {
+                sink(format!(
+                    "grade: {model}: {} of {} harder questions right | memory check not finished ({}) | {} s",
+                    hard.right,
+                    QUALITY_HARD.len(),
+                    broke.as_deref().unwrap_or("stopped"),
+                    started.elapsed().as_secs()
+                ));
+                failures.push(format!("{model}: memory check"));
+            }
+        }
+        figure(serde_json::json!({
+            "kind": "model-grade",
+            "file": model,
+            "sha256": hash,
+            "questions": { "set": QUALITY_HARD_SET, "right": hard.right, "of": QUALITY_HARD.len(), "asked": hard.asked, "seconds": hard.seconds },
+            "memory": memory.as_ref().map(|m| serde_json::json!({ "set": m.set, "may_keep": m.may_keep, "may_close": m.may_close, "may_tidy": m.may_tidy, "judge_right": m.judge_right, "runs": m.runs })),
+            "engine": bin.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+        }));
+    }
+    failures
+}
+
 pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sink<'_>) -> Vec<String> {
     use std::time::Duration;
     let mut failures = Vec::new();
@@ -887,6 +1093,10 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
                 continue;
             }
         };
+        // A measuring run asks for the harder questions as well
+        // (`YOAI_QUALITY_HARD`): the plain ones top out, so they do not
+        // tell one local model from another. Such a run is given its time.
+        let harder_too = std::env::var("YOAI_QUALITY_HARD").is_ok();
         let started = std::time::Instant::now();
         let mut points = 0u32;
         let mut per: Vec<String> = Vec::new();
@@ -900,7 +1110,7 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
             // A model that thinks at length on a small card took 8 minutes for
             // ten questions with nothing on the screen (10-20, Linux): a time
             // limit per model, and a line when a question runs long.
-            if started.elapsed() > QUALITY_MODEL_BUDGET {
+            if started.elapsed() > QUALITY_MODEL_BUDGET && !harder_too {
                 too_slow = true;
                 break;
             }
@@ -978,6 +1188,19 @@ pub async fn leg_quality(bin: &Path, dir: &Path, loaded: Option<&str>, sink: Sin
         ));
         for n in notes.iter().take(8) {
             sink(n.clone());
+        }
+        if harder_too {
+            let hard = ask_harder(&client, dir, &model).await;
+            figure(serde_json::json!({"kind": "quality-hard", "model": model, "right": hard.right, "of": QUALITY_HARD.len(), "asked": hard.asked, "seconds": hard.seconds}));
+            sink(format!(
+                "quality hard: {model}: {} of {} right ({} asked) | registry overall {registry} | {} tokens in {} s | missed: {}",
+                hard.right,
+                QUALITY_HARD.len(),
+                hard.asked,
+                hard.written,
+                hard.seconds,
+                if hard.missed.is_empty() { "none".to_string() } else { hard.missed.join(", ") }
+            ));
         }
         // Under half the points is a model that is not answering plain questions here.
         if points * 2 < max_points {
@@ -1623,7 +1846,7 @@ pub async fn leg_components(app: &AppHandle, dir: &Path, sink: Sink<'_>) -> Vec<
             if cancelled() {
                 break;
             }
-            match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12).await {
+            match crate::llm::utility_chat(app.clone(), st.clone(), HELPER_FILE.to_string(), BASE.to_string(), q.to_string(), Some(GRAMMAR.to_string()), 12, None).await {
                 Ok(out) => {
                     let verdict = out.trim().to_uppercase();
                     let mut words = verdict.split_whitespace();
@@ -2344,6 +2567,239 @@ pub async fn leg_first_reply(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<Stri
                 "read_tps": read_tps.round(),
             }));
         }
+    }
+    Vec::new()
+}
+
+/// Does the part that searches work on this computer as it does on ours?
+/// The built-in made-up history's messages and its questions are put
+/// through the search model here, with the words a real search puts in
+/// front of each, and the messages are ordered by closeness as the search
+/// orders them. For each question the history can answer, the exchange
+/// that holds the answer must stand in the first 12. The times are
+/// reported. It fails when the search model does not answer, or when an
+/// answer falls outside the first 12: the same file gives the same order
+/// on every computer unless its engine here is at fault.
+pub async fn leg_memory_search(app: &AppHandle, state: tauri::State<'_, crate::llm::LLMState>, sink: Sink<'_>) -> Vec<String> {
+    use crate::embedding_model::{DOC_PREFIX, FILE, QUERY_PREFIX};
+    use crate::memory_reply_check::{place_of_answer, set};
+    let mut failures = Vec::new();
+    if !crate::inference_memory::search_part_is_here(app) {
+        sink("memory search: not tried - the part that searches is not on this computer".into());
+        return failures;
+    }
+    let the_set = set();
+    let (of, texts): (Vec<String>, Vec<String>) = the_set.messages().into_iter().map(|(id, t)| (id, format!("{DOC_PREFIX}{t}"))).unzip();
+    let begun = std::time::Instant::now();
+    let vectors = match crate::llm::embed_texts(app.clone(), state.clone(), texts, FILE.to_string()).await {
+        Ok(v) if v.len() == of.len() && v.iter().all(|x| !x.is_empty()) => v,
+        Ok(v) => {
+            sink(format!("memory search: the search model answered for {} of {} messages", v.len(), of.len()));
+            failures.push("memory search: the search model did not answer for every message".into());
+            return failures;
+        }
+        Err(e) => {
+            sink(format!("memory search: the search model did not answer ({e})"));
+            failures.push("memory search: the search model did not answer".into());
+            return failures;
+        }
+    };
+    let read_ms = begun.elapsed().as_millis();
+    let (mut first_3, mut first_12, mut answerable, mut slowest_ms) = (0usize, 0usize, 0usize, 0u128);
+    for q in &the_set.questions {
+        if cancelled() {
+            sink("cancelled".into());
+            return failures;
+        }
+        let asked = std::time::Instant::now();
+        let query = match crate::llm::embed_texts(app.clone(), state.clone(), vec![format!("{QUERY_PREFIX}{}", q.ask)], FILE.to_string()).await {
+            Ok(mut v) if v.first().is_some_and(|x| !x.is_empty()) => v.remove(0),
+            _ => {
+                sink(format!("memory search: {} | the search model did not answer", q.id));
+                failures.push(format!("memory search: no answer from the search model for \"{}\"", q.id));
+                continue;
+            }
+        };
+        let ms = asked.elapsed().as_millis();
+        slowest_ms = slowest_ms.max(ms);
+        let scores: Vec<f32> = vectors.iter().map(|v| crate::router::cosine(&query, v)).collect();
+        let top = scores.iter().cloned().fold(0f32, f32::max);
+        if q.answer_in.is_empty() {
+            sink(format!("memory search: {} | the history has no answer | closest {top:.3} | {ms} ms", q.id));
+            continue;
+        }
+        answerable += 1;
+        let place = place_of_answer(q, &of, &scores);
+        if place.is_some_and(|p| p <= 3) {
+            first_3 += 1;
+        }
+        if place.is_some_and(|p| p <= 12) {
+            first_12 += 1;
+        } else {
+            failures.push(format!("memory search: the answer to \"{}\" is at place {} of {}, outside the first 12", q.id, place.map_or("none".to_string(), |p| p.to_string()), of.len()));
+        }
+        sink(format!("memory search: {} | the answer's exchange at place {} of {} | closest {top:.3} | {ms} ms", q.id, place.map_or("none".to_string(), |p| p.to_string()), of.len()));
+    }
+    sink(format!("memory search: TOTAL the answer in the first 3 for {first_3} of {answerable}, in the first 12 for {first_12} | {} messages read in {read_ms} ms | slowest question {slowest_ms} ms", of.len()));
+    figure(serde_json::json!({
+        "kind": "memory_search", "set": the_set.v, "answerable": answerable, "first_3": first_3, "first_12": first_12,
+        "messages": of.len(), "read_ms": read_ms as u64, "slowest_question_ms": slowest_ms as u64,
+    }));
+    failures
+}
+
+/// The most a reply may hold in the memory-reply leg: an answer with its
+/// quotation is a few sentences.
+const MEMORY_REPLY_MAX_TOKENS: u32 = 400;
+/// Each question is asked this many times, with the app's own sampling.
+const MEMORY_REPLY_RUNS: u64 = 2;
+
+/// Does each model answer from what memory gives it, and how long does
+/// reading it take here? Per downloaded model, where the app would put it:
+/// its reading speed is measured, then the built-in made-up history's
+/// questions are asked twice each, with the results ahead of the
+/// question exactly as a real turn carries them (the same block, held to
+/// the same wait for this computer's reading speed, the same line marking
+/// the person's message) and the app's own sampling. Each reply is marked
+/// on its words alone (`memory_reply_check`). The search is not measured
+/// here: every question comes with its results already in order.
+/// Nothing fails: these are the figures that say which model answers best
+/// about the past, and on which computers. Each is named by the model's
+/// file and its hash, so a report from any computer adds to what the next
+/// release knows about that file. They hold no one's own history.
+pub async fn leg_memory_reply(app: &AppHandle, bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+    use crate::memory_reply_check::{mark, set, Mark};
+    use std::time::Duration;
+    let client = crate::llm::local_http();
+    let card = free_vram_gb(bin);
+    let the_set = set();
+    // The wait the block is held to, and the mark it is read against.
+    let mark_s = if card.is_some() { 10.0 } else { 30.0 };
+    for name in chat_models_in(dir) {
+        if cancelled() {
+            sink("cancelled".into());
+            break;
+        }
+        let path = dir.join(&name);
+        let Ok(meta) = crate::gguf::read_meta(&path) else { continue };
+        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        let free_now = crate::llm::grading_memory_bytes();
+        if free_now > 0 && free_now < load_room_needed(size, false) {
+            sink(format!("memory reply: {name}: not tried - {:.1} GB of memory free", free_now as f64 / 1024f64.powi(3)));
+            continue;
+        }
+        let ctx = 8192u64;
+        let mut args: Vec<String> = vec![
+            "--port".into(), bench_port().to_string(), "--host".into(), "127.0.0.1".into(),
+            "--no-webui".into(), "--reasoning".into(), "off".into(),
+            "--ctx-size".into(), ctx.to_string(), "--fit".into(), "off".into(),
+            "--model".into(), name.clone(),
+        ];
+        if card.is_some() {
+            if let Some(n) = moe_decision(&meta, size, ctx, card).filter(|n| *n > 0) {
+                if (n as usize) < meta.expert_bytes_per_layer.len() {
+                    args.extend(["--n-cpu-moe".to_string(), n.to_string()]);
+                } else {
+                    args.push("--cpu-moe".into());
+                }
+            }
+        } else {
+            args.extend(["--device".to_string(), "none".into(), "-ngl".into(), "0".into()]);
+        }
+        if meta.surfaces_special_tokens() {
+            args.push("--special".into());
+        }
+        let _guard = match spawn_bench_server(bin, dir, args).await {
+            Ok(g) => g,
+            Err(_) => {
+                sink(format!("memory reply: {name}: did not load"));
+                continue;
+            }
+        };
+        let ask = |messages: serde_json::Value, max_tokens: u32, seed: u64| {
+            let mut body = serde_json::json!({
+                "model": name, "messages": messages, "max_tokens": max_tokens, "stream": false,
+                "temperature": 0.7, "top_p": 0.9, "top_k": 40, "repeat_penalty": 1.1, "seed": seed,
+                "stop": crate::llm::chat_stop_strings(&name),
+            });
+            crate::llm::apply_no_think(&mut body, dir, &name);
+            let client = client.clone();
+            async move {
+                let v: serde_json::Value = client.post(format!("http://127.0.0.1:{}/v1/chat/completions", bench_port())).json(&body).timeout(Duration::from_secs(600)).send().await
+                    .map_err(|_| "no reply in 600 s".to_string())?.json().await.map_err(|_| "an unreadable reply".to_string())?;
+                Ok::<serde_json::Value, String>(v)
+            }
+        };
+        // How fast it reads here: a text of about 500 tokens, one word back.
+        let speed = match ask(serde_json::json!([{"role": "system", "content": the_set.system}, {"role": "user", "content": format!("{}\n\nSay OK and nothing else.", first_reply_instructions())}]), 8, 1).await {
+            Ok(v) => v["timings"]["prompt_per_second"].as_f64().filter(|t| t.is_finite() && *t > 0.0),
+            Err(e) => {
+                sink(format!("memory reply: {name}: {e}"));
+                continue;
+            }
+        };
+        let Some(read_tps) = speed else {
+            sink(format!("memory reply: {name}: the engine gave no reading speed"));
+            continue;
+        };
+        let wait_chars = crate::read_speed::wait_chars(read_tps);
+        let mut tally: std::collections::HashMap<Mark, usize> = std::collections::HashMap::new();
+        let (mut asked, mut good, mut slowest, mut shown_least, mut shown_most) = (0usize, 0usize, 0f64, usize::MAX, 0usize);
+        'runs: for run in 1..=MEMORY_REPLY_RUNS {
+            for q in &the_set.questions {
+                if cancelled() {
+                    break 'runs;
+                }
+                let (turn, shown, found) = crate::memory_reply_check::turn(&the_set, q, wait_chars);
+                // The UI harness measures what the line marking the person's
+                // message is worth: a debug build may be told to leave it
+                // out. A release build never reads it.
+                #[cfg(debug_assertions)]
+                let turn = if std::env::var("YOAI_TEST_NO_MESSAGE_MARK").is_ok() { turn.replace(&format!("{}\n", crate::memory_block::THEIR_MESSAGE), "") } else { turn };
+                let v = match ask(serde_json::json!([{"role": "system", "content": the_set.system}, {"role": "user", "content": turn}]), MEMORY_REPLY_MAX_TOKENS, run).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        sink(format!("memory reply: {name} | {} | {e}", q.id));
+                        *tally.entry(Mark::Nothing).or_default() += 1;
+                        asked += 1;
+                        continue;
+                    }
+                };
+                let reply = v["choices"][0]["message"]["content"].as_str().unwrap_or_default().to_string();
+                let read_s = v["timings"]["prompt_ms"].as_f64().unwrap_or(0.0) / 1000.0;
+                let m = mark(q, &shown, &reply);
+                *tally.entry(m).or_default() += 1;
+                asked += 1;
+                if m.good() {
+                    good += 1;
+                }
+                slowest = slowest.max(read_s);
+                shown_least = shown_least.min(shown.len());
+                shown_most = shown_most.max(shown.len());
+                let said: String = reply.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(180).collect();
+                sink(format!(
+                    "memory reply: {name} | {} | {} | shown {} of {} | read {} tokens in {read_s:.1} s | {said}",
+                    q.id, m.word(), shown.len(), found, v["timings"]["prompt_n"].as_u64().unwrap_or(0)
+                ));
+            }
+        }
+        if asked == 0 {
+            continue;
+        }
+        let n = |m: Mark| tally.get(&m).copied().unwrap_or(0);
+        sink(format!(
+            "memory reply: {name} | TOTAL {good} of {asked} as the question called for (right {}, said it was not there {}) | stale {} | wrong {} | missed {} | answered anyway {} | off the question {} | unclear {} | nothing {} | reads {read_tps:.0} tok/s, shown {shown_least} to {shown_most} of 12, slowest read before the first word {slowest:.1} s (mark {mark_s:.0} s{})",
+            n(Mark::Right), n(Mark::SaidNotThere), n(Mark::Stale), n(Mark::Wrong), n(Mark::Missed), n(Mark::AnsweredAnyway), n(Mark::OffTheQuestion), n(Mark::Unclear), n(Mark::Nothing),
+            if slowest > mark_s { ", OVER" } else { "" }
+        ));
+        let sha256 = crate::model_hash::ensure(app, &name).await;
+        figure(serde_json::json!({
+            "kind": "memory_reply", "model": name, "sha256": sha256, "set": the_set.v, "engine": bin.file_name().and_then(|n| n.to_str()).unwrap_or(""), "place": if card.is_some() { "card" } else { "processor" },
+            "read_tps": read_tps.round(), "shown_least": shown_least, "shown_most": shown_most,
+            "slowest_read_s": (slowest * 10.0).round() / 10.0, "mark_s": mark_s,
+            "asked": asked, "good": good, "right": n(Mark::Right), "said_not_there": n(Mark::SaidNotThere), "stale": n(Mark::Stale), "wrong": n(Mark::Wrong), "missed": n(Mark::Missed),
+            "answered_anyway": n(Mark::AnsweredAnyway), "off_the_question": n(Mark::OffTheQuestion), "unclear": n(Mark::Unclear), "nothing": n(Mark::Nothing),
+        }));
     }
     Vec::new()
 }
@@ -3106,10 +3562,29 @@ pub async fn matrix_run(
         }
         sink(String::new());
     }
+    if !cancelled() && want("memory-search") {
+        sink("== Memory's search (a made-up history through the search model here: is each answer among the closest) ==".into());
+        failures.extend(leg_memory_search(&app, state.clone(), sink).await);
+        sink(String::new());
+    }
+    if !cancelled() && want("memory-reply") {
+        sink("== Replies from memory (a made-up history, its questions twice, per model: answered from what was shown, and the wait to read it) ==".into());
+        failures.extend(leg_memory_reply(&app, &bin, &dir, sink).await);
+        sink(String::new());
+    }
     if !cancelled() && want("quality") {
         sink("== Answer quality (eight plain questions, a rubric, per model; registry score beside it) ==".into());
         for f in leg_quality(&bin, &dir, loaded_before.as_deref(), sink).await {
             failures.push(format!("quality: {f}"));
+        }
+        sink(String::new());
+    }
+    // Model grading runs only when it is asked for by name: it takes about
+    // half an hour a model, far longer than the rest of the matrix.
+    if !cancelled() && legs.iter().any(|l| l == "grade" || l == "grade-all") {
+        sink("== Model grading (our harder questions and the memory check, per model, one at a time) ==".into());
+        for f in leg_grade(&app, &bin, &dir, legs.iter().any(|l| l == "grade-all"), sink).await {
+            failures.push(format!("grade: {f}"));
         }
         sink(String::new());
     }
@@ -3364,6 +3839,10 @@ pub(crate) struct HardCase {
 
 /// Sent as the system text with each harder question.
 pub(crate) const HARD_SYSTEM: &str = "Work the problem out, then end with one line that starts with \"Answer:\" followed by the answer only.";
+
+/// The version of the harder set: a result is for one version, and a
+/// changed set does not read results of another.
+pub(crate) const QUALITY_HARD_SET: u32 = 1;
 
 pub(crate) const QUALITY_HARD: &[HardCase] = &[
     HardCase { ask: "A shop sells pens at 3 for $4. I buy 21 pens and pay with a $50 note. How much change do I get, in dollars?", accept: &["22", "22.00"], reject: &[] },

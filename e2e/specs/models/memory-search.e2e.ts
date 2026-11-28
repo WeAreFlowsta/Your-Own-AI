@@ -66,6 +66,7 @@ async function recorded(): Promise<{ role: string; content: string; given?: any 
 
 let ai = { id: "", name: "", agent: "" };
 const DELIVERY = "What is the free delivery threshold?";
+const SPEC_BEGAN = Date.now();
 
 describe("memory's search, on the made-up history", () => {
   it("a first message on an empty profile carries no search wording", async () => {
@@ -143,7 +144,8 @@ describe("memory's search, on the made-up history", () => {
     const { request } = await dev("GET", "last-chat-request");
     const sent = lastUserText(request);
     expect(sent.startsWith("[From memory. A search of all their conversations was run for this question. It returned the ")).toBe(true);
-    expect(sent.endsWith(`]\n\n${DELIVERY}`)).toBe(true);
+    // The person's message is marked, so a short question is not lost after a long block.
+    expect(sent.endsWith(`]\n\n[That is all from memory. Their message now, which is what to answer:]\n${DELIVERY}`)).toBe(true);
     expect(sent).toContain("Rule for questions about their past work: answer only from a line you can quote");
     expect(sent).toContain("$60");
     expect(sent).not.toContain("[User question]");
@@ -190,12 +192,31 @@ describe("memory's search, on the made-up history", () => {
     await shot("memory-given-panel");
     expect(await checked.getAttribute("data-checked")).toBe("exact");
     expect(await checked.getText()).toContain("This is exactly what");
+    // The first three are shown; the rest are one press away.
+    const more = await $('[data-testid="given-show-all"]');
+    if (await more.isExisting()) await more.click();
     const passages = await $$('[data-testid="given-passage"]');
-    expect(passages.length).toBeGreaterThanOrEqual(1);
+    expect(passages.length).toBeGreaterThanOrEqual(4);
     const text = await browser.execute(() => (document.querySelector('[data-testid="given-panel"]') as HTMLElement).innerText);
     expect(text).toContain("$60");
     expect(text).toContain("Also given");
     for (const s of secrets) expect(text).not.toContain(s);
+    // "Do not use this" on a passage: that message is kept out of memory
+    // from now on, the panel says so, and "Use again" puts it back.
+    type Use = { started_at: number; private?: boolean; excluded?: number[] };
+    const notUsed = () => invoke<Use[]>("memory_conversations_not_used");
+    expect((await notUsed()).length).toBe(0);
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="given-do-not-use"]'));
+    await (await $('[data-testid="given-not-used"]')).waitForExist({ timeout: 30_000 });
+    const held = await notUsed();
+    console.log(`e2e: not used after the press: ${JSON.stringify(held)}`);
+    expect(held.length).toBe(1);
+    expect(held[0].excluded?.length).toBe(1);
+    expect(held[0].private ?? false).toBe(false);
+    await shot("memory-given-do-not-use");
+    await browser.execute((e) => (e as HTMLElement).click(), await $('[data-testid="given-use-again"]'));
+    await (await $('[data-testid="given-not-used"]')).waitForExist({ reverse: true, timeout: 30_000 });
+    expect((await notUsed()).length).toBe(0);
   });
 
   it("a short follow-up is searched together with the question before it", async () => {
@@ -223,6 +244,25 @@ describe("memory's search, on the made-up history", () => {
     expect(lastUserText(request)).toContain("No conversation anywhere mentions: Rosedale.");
     const line = await $('[data-testid="given-line"]');
     if (await line.isExisting()) console.log(`e2e: line: ${await line.getText()}`);
+  });
+
+  it("a reply that reported a search is not found again as a source", async () => {
+    // The delivery question was answered in the chat from what memory
+    // found. Once that turn is read into the index, asking again finds
+    // the first places, never the reply that quoted them.
+    const began = Date.now();
+    await invoke("memory_read_now", { on: true });
+    await browser.waitUntil(async () => {
+      const s = await invoke<any>("memory_reading_status");
+      return s.total > 0 && s.read >= s.total && s.levelAt > began;
+    }, { timeout: 300_000, interval: 5_000, timeoutMsg: "the new turns were not read into the index" });
+    const r = await dev("GET", "memory-search", { q: DELIVERY, limit: "40" });
+    const found = r.found as { started_at: number; role: string; flags: number }[];
+    const fromThisRun = found.filter((f) => f.started_at >= SPEC_BEGAN * 1000);
+    console.log(`e2e: asked again: ${found.length} found, ${fromThisRun.length} from this run's own chat (${fromThisRun.map((f) => f.role).join(", ")})`);
+    expect(fromThisRun.length).toBeGreaterThan(0);
+    expect(fromThisRun.every((f) => f.role === "user")).toBe(true);
+    expect(found.every((f) => (f.flags & 2) === 0)).toBe(true);
   });
 
   it("a deleted source can no longer be shown, and the reply stays", async () => {

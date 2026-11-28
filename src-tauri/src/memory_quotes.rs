@@ -149,6 +149,54 @@ pub(crate) fn check(reply: &str, given: &[String]) -> QuoteCheck {
     QuoteCheck { quoted, not_given, quotes: quotes.len() }
 }
 
+/// A quotation shorter than this (letters and figures, folded) keeps
+/// nothing: a few words are not a decision or a detail.
+const KEEP_AT_LEAST: usize = 20;
+
+/// Are these words, wherever they stand in the conversation, a question
+/// that was asked there? A question repeated back settles nothing and is
+/// not kept: what is kept is read later as something that is so.
+fn only_asked(needle: &[char], said: &[char]) -> bool {
+    if needle.last() == Some(&'?') {
+        return true;
+    }
+    let mut found = false;
+    for at in 0..=said.len().saturating_sub(needle.len()) {
+        if said[at..].starts_with(needle) {
+            found = true;
+            let after = said[at + needle.len()..].iter().find(|c| !matches!(c, '"' | '\'' | ' ' | ')' | '*' | '_'));
+            if after != Some(&'?') {
+                return false;
+            }
+        }
+    }
+    found
+}
+
+/// What a reply's quotations keep: for each exchange it was given and
+/// quoted word for word (no slip at all), the longest such quotation and
+/// the place of the found message. The words must be the conversation's
+/// own: a quotation of the passage's heading (its date and title) keeps
+/// nothing.
+pub(crate) fn quoted_exactly(reply: &str, given: &GivenRecord, texts: &[String]) -> Vec<(crate::memory_block::Ptr, String)> {
+    let quotes = quotations(reply);
+    let mut out = Vec::new();
+    for (e, text) in given.exchanges.iter().zip(texts) {
+        let said = fold(text.split_once('\n').map_or(text.as_str(), |(_, lines)| lines));
+        let best = quotes
+            .iter()
+            .filter(|q| {
+                let needle = fold(q);
+                needle.len() >= KEEP_AT_LEAST && found_within(&needle, &said, 0) && !only_asked(&needle, &said)
+            })
+            .max_by_key(|q| q.chars().count());
+        if let Some(q) = best {
+            out.push((e.hit, q.clone()));
+        }
+    }
+    out
+}
+
 /// The page's door to the check, when a reply finishes.
 #[tauri::command]
 pub fn memory_check_quotes(reply: String, given: Vec<String>) -> QuoteCheck {
@@ -163,21 +211,81 @@ pub struct Checked {
     pub check: QuoteCheck,
     pub given: Option<GivenRecord>,
     pub line: Option<ReplyLine>,
+    /// Offer "Look further": only the closest results were given, and
+    /// the reply used none of them.
+    pub look_further: bool,
+}
+
+/// Is "Look further" worth offering under this reply? Only the closest
+/// of what was found was given (to keep the wait short), and either the
+/// reply says the answer is not there (it was told to say so, and that
+/// they can ask to look further), or it used none of what it was given.
+pub(crate) fn offer_further(given: Option<&GivenRecord>, check: &QuoteCheck, reply: &str) -> bool {
+    let Some(g) = given.filter(|g| g.search.ran && g.search.closest_only) else { return false };
+    let said: String = fold(reply).into_iter().collect();
+    let says_so = ["look further", "closest results", "closest result", "look deeper", "search further"].iter().any(|p| said.contains(p));
+    let used = check.quoted.iter().any(|q| *q) || g.more.get("used").and_then(serde_json::Value::as_bool) == Some(true);
+    says_so || !used
 }
 
 /// The page's door when a reply finishes. `texts` are the passages as the
 /// model saw them: one per exchange of the record, then the dated lines.
 #[tauri::command]
-pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Vec<String>) -> Checked {
+pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Vec<String>, question: Option<String>) -> Checked {
     let check = check(&reply, &texts);
-    let line = line_for(given.as_ref(), &check, &reply);
+    // An answer in the reply's own words that carries a figure or names
+    // from what it was given is from memory too: recorded, so the line is
+    // the same when the conversation is opened again.
+    let took = took_from(&reply, question.as_deref().unwrap_or(""), &texts);
     let given = given.map(|mut g| {
         for (e, q) in g.exchanges.iter_mut().zip(&check.quoted) {
             e.quoted = *q;
         }
+        if took {
+            g.more.insert("used".into(), serde_json::Value::Bool(true));
+        }
         g
     });
-    Checked { check, given, line }
+    let line = line_for(given.as_ref(), &check, &reply);
+    let look_further = offer_further(given.as_ref(), &check, &reply);
+    Checked { check, given, line, look_further }
+}
+
+/// The words of a text that could only have come from somewhere: figures
+/// ("$60", "12.5", "2019") and names (a capital inside a sentence, four
+/// letters or more), folded.
+fn telling_words(text: &str) -> (std::collections::BTreeSet<String>, std::collections::BTreeSet<String>) {
+    let (mut figures, mut names) = (std::collections::BTreeSet::new(), std::collections::BTreeSet::new());
+    let mut starts_sentence = true;
+    for raw in text.split_whitespace() {
+        let word: String = raw.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        let ends = raw.ends_with(['.', '!', '?', ':']);
+        if !word.is_empty() {
+            let letters_and_figures = word.chars().filter(|c| c.is_alphanumeric()).count();
+            if word.chars().any(|c| c.is_ascii_digit()) && letters_and_figures >= 2 {
+                figures.insert(word.to_lowercase());
+            } else if !starts_sentence && word.chars().next().is_some_and(char::is_uppercase) && word.chars().count() >= 4 && word.chars().all(|c| c.is_alphabetic() || c == '\'' || c == '-') {
+                names.insert(word.to_lowercase());
+            }
+        }
+        starts_sentence = ends || word.is_empty() && starts_sentence;
+    }
+    (figures, names)
+}
+
+/// Did the reply take its answer from what it was given, without quoting
+/// it? It did when it carries a figure, or two names, that stand in a
+/// passage's own lines and that the question did not already hold.
+pub(crate) fn took_from(reply: &str, question: &str, texts: &[String]) -> bool {
+    let (figures, names) = telling_words(reply);
+    if figures.is_empty() && names.len() < 2 {
+        return false;
+    }
+    let asked = question.to_lowercase();
+    // The passage's own lines: its heading (date, title) is the app's, not the conversation's.
+    let said: Vec<String> = texts.iter().map(|t| t.split_once('\n').map_or(t.as_str(), |(_, lines)| lines).to_lowercase()).collect();
+    let stands = |w: &String| !asked.contains(w.as_str()) && said.iter().any(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '.' || c == '\'' || c == '-')).any(|x| x.trim_matches('.') == w));
+    figures.iter().any(stands) || names.iter().filter(|n| stands(n)).count() >= 2
 }
 
 /// The line a recorded reply gets when its conversation is opened again:
@@ -237,7 +345,7 @@ pub(crate) fn line_for(given: Option<&GivenRecord>, check: &QuoteCheck, reply: &
     if s.given < s.found {
         return Some(ReplyLine::DidNotFit { given: s.given, found: s.found });
     }
-    if check.quoted.iter().any(|q| *q) {
+    if check.quoted.iter().any(|q| *q) || (s.given > 0 && g.more.get("used").and_then(serde_json::Value::as_bool) == Some(true)) {
         return Some(ReplyLine::Given { passages: s.given });
     }
     if s.given > 0 && reports_a_search(reply) {
@@ -264,6 +372,48 @@ mod tests {
 
     fn ran(found: u32, given: u32) -> SearchReport {
         SearchReport { ran: true, found, given, read_share: 1.0, ..Default::default() }
+    }
+
+    #[test]
+    fn look_further_is_offered_when_only_the_closest_were_given_and_none_was_used() {
+        let closest = |quoted: Vec<bool>| (record(SearchReport { closest_only: true, ..ran(12, 3) }), QuoteCheck { quoted, not_given: Vec::new(), quotes: 0 });
+        let (g, c) = closest(vec![false, false, false]);
+        assert!(offer_further(Some(&g), &c, "The oven goes on the left."));
+        // The reply quoted one of them: it had what it needed.
+        let (g, c) = closest(vec![false, true, false]);
+        assert!(!offer_further(Some(&g), &c, "On 2026-01-12 you said \"the oven goes on the left\"."));
+        // It quoted what it found and says the answer is not among it.
+        assert!(offer_further(Some(&g), &c, "The answer is not in the closest results. I did find \"the oven goes on the left\". You can ask me to look further."));
+        // Marked as used in the reply's own words.
+        let (mut g, c) = closest(vec![false, false, false]);
+        g.more.insert("used".into(), serde_json::Value::Bool(true));
+        assert!(!offer_further(Some(&g), &c, "The oven goes on the left."));
+        // Everything found was given: there is nothing further to look at.
+        let all = record(ran(3, 3));
+        assert!(!offer_further(Some(&all), &QuoteCheck { quoted: vec![false; 3], not_given: Vec::new(), quotes: 0 }, "You can ask me to look further."));
+        // No search ran, or no record.
+        assert!(!offer_further(None, &QuoteCheck { quoted: Vec::new(), not_given: Vec::new(), quotes: 0 }, "x"));
+    }
+
+    #[test]
+    fn an_answer_in_the_replys_own_words_is_from_memory_when_it_carries_a_figure_or_names_from_it() {
+        let g = given();
+        assert!(took_from("The free delivery threshold is $60, effective from Monday, March 9.", "What is the free delivery threshold?", &g));
+        assert!(took_from("You went with Hartwell Mills in the end, over Dunmore Grain.", "which supplier did we pick?", &g), "two names from a passage");
+        assert!(!took_from("A sourdough starter needs feeding every day.", "how do I keep a starter?", &g), "an ordinary answer");
+        assert!(!took_from("Yes, $60 is a common threshold.", "is $60 a normal threshold?", &g), "a figure the question already held is not from memory");
+        assert!(!took_from("It is 2026 now.", "what year is it?", &g), "a passage's heading (its date and title) is the app's, not the conversation's");
+        assert!(!took_from("I would ask Hartwell about it.", "who should I ask?", &g), "one name by itself is not enough");
+        assert!(!took_from("", "anything", &g));
+        // Recorded on the reply's record, the line is the same when the conversation is opened again.
+        let none = QuoteCheck { quoted: vec![false, false], ..Default::default() };
+        let mut used = record(ran(2, 2));
+        assert_eq!(line_for(Some(&used), &none, "x"), None);
+        used.more.insert("used".into(), serde_json::Value::Bool(true));
+        assert_eq!(line_for(Some(&used), &none, "x"), Some(ReplyLine::Given { passages: 2 }));
+        assert_eq!(line_from_record(Some(&used), "x"), Some(ReplyLine::Given { passages: 2 }));
+        let checked = memory_reply_checked("The threshold is $60.".into(), Some(record(ran(2, 2))), g, Some("What is the free delivery threshold?".into()));
+        assert_eq!(checked.line, Some(ReplyLine::Given { passages: 2 }));
     }
 
     #[test]
@@ -341,19 +491,19 @@ mod tests {
         let ptr = |s: u32| Ptr { c: 1, s, t: 2, a: 0, b: 10 };
         let mut rec = record(ran(2, 2));
         rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }];
-        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some(rec), given());
+        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some(rec), given(), None);
         let g = done.given.unwrap();
         assert_eq!((g.exchanges[0].quoted, g.exchanges[1].quoted), (false, true));
         assert_eq!(done.line, Some(ReplyLine::Given { passages: 2 }));
         // More texts than exchanges (a saved note rode along): the record keeps its own length.
         let mut rec = record(ran(3, 3));
         rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }];
-        let done = memory_reply_checked("\"Free delivery starts at $60 from Monday March 9.\"".into(), Some(rec), given());
+        let done = memory_reply_checked("\"Free delivery starts at $60 from Monday March 9.\"".into(), Some(rec), given(), None);
         assert_eq!(done.given.unwrap().exchanges.len(), 1);
         assert_eq!(done.check.quoted, vec![false, true]);
-        assert!(memory_reply_checked("no record".into(), None, vec![]).line.is_none());
+        assert!(memory_reply_checked("no record".into(), None, vec![], None).line.is_none());
         // Opened again later: the same line, from the record alone.
-        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some({ let mut r = record(ran(2, 2)); r.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }]; r }), given());
+        let done = memory_reply_checked("As you said: \"Set: $60 from Monday March 9.\"".into(), Some({ let mut r = record(ran(2, 2)); r.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }]; r }), given(), None);
         assert_eq!(line_from_record(done.given.as_ref(), "As you said..."), done.line);
         assert_eq!(line_from_record(None, "x"), None);
     }
@@ -365,5 +515,37 @@ mod tests {
         assert!(!found_within(&fold("hartwel mils"), &fold("we go with Hartwell Mills now"), 1));
         assert!(!found_within(&fold("a much longer needle than the hay"), &fold("short hay"), 2));
         assert_eq!((slips_for(15), slips_for(25), slips_for(60), slips_for(400)), (0, 1, 2, 3));
+    }
+
+    #[test]
+    fn only_a_word_for_word_quotation_of_the_conversation_keeps_its_exchange() {
+        use crate::memory_block::{GivenExchange, Ptr};
+        let ptr = |s: u32| Ptr { c: 1, s, t: 2, a: 0, b: 10 };
+        let mut rec = record(ran(2, 2));
+        rec.exchanges = vec![GivenExchange { before: None, hit: ptr(2), after: None, score: 0.7, quoted: false }, GivenExchange { before: None, hit: ptr(0), after: None, score: 0.6, quoted: false }];
+        let texts = given();
+        // Word for word, from the second passage: kept, by its found message.
+        let kept = quoted_exactly("You set it in March: \"Set: $60 from Monday March 9.\"", &rec, &texts);
+        assert_eq!(kept, vec![(ptr(0), "Set: $60 from Monday March 9".to_string())]);
+        // One letter off is still a quotation for the line under the reply, and keeps nothing.
+        assert!(check("As you said: \"Set: $60 from Monday Marsh 9.\"", &texts).quoted[1]);
+        assert!(quoted_exactly("As you said: \"Set: $60 from Monday Marsh 9.\"", &rec, &texts).is_empty());
+        // A few words keep nothing; neither does a reply with no quotation.
+        assert!(quoted_exactly("You said \"from Monday\" I think.", &rec, &texts).is_empty());
+        assert!(quoted_exactly("The threshold is $60.", &rec, &texts).is_empty());
+        // A question that was asked there, repeated back, keeps nothing;
+        // the same words also said as a statement do.
+        let asked = vec!["[2026-03-03, conversation \"Van\"]\nThey asked: \u{201C}did the free delivery threshold go up?\u{201D}\nAI: Not yet.".to_string()];
+        let mut q = record(ran(1, 1));
+        q.exchanges = vec![GivenExchange { before: None, hit: ptr(6), after: None, score: 0.7, quoted: false }];
+        assert!(quoted_exactly("You asked \"did the free delivery threshold go up\" on March 3.", &q, &asked).is_empty());
+        assert!(quoted_exactly("You asked \"did the free delivery threshold go up?\" on March 3.", &q, &asked).is_empty());
+        let both = vec![format!("{}\nThey said: the free delivery threshold go up, yes.", asked[0])];
+        assert_eq!(quoted_exactly("\"the free delivery threshold go up\"", &q, &both).len(), 1);
+        // Words that are only in a passage's heading are not the conversation's.
+        let headed = vec!["[2026-03-03, conversation \"Delivery threshold for the van\"]\nThey said: raise it".to_string()];
+        let mut one = record(ran(1, 1));
+        one.exchanges = vec![GivenExchange { before: None, hit: ptr(4), after: None, score: 0.7, quoted: false }];
+        assert!(quoted_exactly("In \"Delivery threshold for the van\" you raised it.", &one, &headed).is_empty());
     }
 }
