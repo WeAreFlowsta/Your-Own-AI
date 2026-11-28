@@ -260,19 +260,23 @@ test("the person's turn is put together in one order, with one marker", async ()
   const ts = (await import("typescript")).default;
   const src = readFileSync(join(repo, "src", "utils", "turnWire.ts"), "utf8");
   const js = ts.transpileModule(src, { compilerOptions: { module: "ESNext", target: "ES2020" } }).outputText;
-  const { assembleUserTurn } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+  const { assembleUserTurn, THEIR_MESSAGE } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
   const q = "Which mill do we use?";
   assert.equal(assembleUserTurn({ question: q }), q, "nothing rides along: the question as typed");
   assert.equal(assembleUserTurn({ question: q, before: "", after: "  " }), q);
-  // The memory block alone: the measured form, no marker.
-  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]" }), `[From memory. x]\n\n${q}`);
-  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]", after: "[From memory, the state record y]" }), `[From memory. x]\n\n${q}\n\n[From memory, the state record y]`);
+  // The memory block alone: one line marks the person's message, so a
+  // short question is not lost after a long block. The backend writes the
+  // same line (`turn_text`).
+  assert.equal(THEIR_MESSAGE, "[That is all from memory. Their message now, which is what to answer:]");
+  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]" }), `[From memory. x]\n\n${THEIR_MESSAGE}\n${q}`);
+  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]", after: "[From memory, the state record y]" }), `[From memory. x]\n\n${THEIR_MESSAGE}\n${q}\n\n[From memory, the state record y]`);
   // A file alone is what it was before memory came beside it.
   assert.equal(assembleUserTurn({ question: q, file: "[file]" }), `[file]\n\n[User question]\n${q}`);
   // Everything: file, pages, document passages, memory, the marker once, the question, the note.
   const all = assembleUserTurn({ file: "[file]", pages: "[pages]", docs: "[docs]", before: "[From memory. x]", question: q, after: "[note]" });
   assert.equal(all, `[file]\n\n[pages]\n\n[docs]\n\n[From memory. x]\n\n[User question]\n${q}\n\n[note]`);
   assert.equal(all.split("[User question]").length, 2, "the marker stands once");
+  assert.ok(!all.includes(THEIR_MESSAGE), "one marker, never two");
   assert.ok(all.indexOf("[From memory. x]") < all.indexOf(q) && all.indexOf(q) < all.indexOf("[note]"));
 });
 
