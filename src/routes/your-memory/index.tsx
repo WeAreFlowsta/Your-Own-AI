@@ -7,7 +7,7 @@
  */
 import { component$, useSignal, useVisibleTask$ } from "@builder.io/qwik";
 import { type DocumentHead, useNavigate } from "@builder.io/qwik-city";
-import { LuArrowLeft, LuBrain } from "@qwikest/icons/lucide";
+import { LuArrowLeft } from "@qwikest/icons/lucide";
 import AppHeader from "../../components/AppHeader";
 import { useHeaderWorkspace } from "../../hooks/useHeaderWorkspace";
 import LiquidMetalButton from "../../components/LiquidMetalButton";
@@ -106,18 +106,9 @@ export default component$(() => {
               <LuArrowLeft class="w-5 h-5" />
             </LiquidMetalButton>
 
-            <div class="w-11 h-11 rounded-full bg-gradient-to-br from-purple-500 to-indigo-600 flex items-center justify-center text-white">
-              <LuBrain class="w-5 h-5" />
-            </div>
-
-            <div class="min-w-0 flex-1">
-              <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela leading-tight">
-                Memory
-              </h2>
-              <p class="text-sm text-[var(--text-secondary)]">
-                What your AIs can use, kept encrypted on this device.
-              </p>
-            </div>
+            <h2 class="text-2xl font-bold text-[var(--text-primary)] font-varela">
+              Memory
+            </h2>
           </div>
 
           <RestoreNote class="mb-6" />
