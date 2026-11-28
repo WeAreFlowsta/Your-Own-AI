@@ -144,7 +144,8 @@ describe("memory's search, on the made-up history", () => {
     const { request } = await dev("GET", "last-chat-request");
     const sent = lastUserText(request);
     expect(sent.startsWith("[From memory. A search of all their conversations was run for this question. It returned the ")).toBe(true);
-    expect(sent.endsWith(`]\n\n${DELIVERY}`)).toBe(true);
+    // The person's message is marked, so a short question is not lost after a long block.
+    expect(sent.endsWith(`]\n\n[That is all from memory. Their message now, which is what to answer:]\n${DELIVERY}`)).toBe(true);
     expect(sent).toContain("Rule for questions about their past work: answer only from a line you can quote");
     expect(sent).toContain("$60");
     expect(sent).not.toContain("[User question]");

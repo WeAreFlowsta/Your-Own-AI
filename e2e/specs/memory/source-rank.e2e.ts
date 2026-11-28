@@ -25,7 +25,13 @@ type Source = { title: string; lo: number; hi: number; date: string | null };
 type Q = { n: number; kind: string; question: string; sources: Source[] };
 type Found = { conversation: string; started_at: number; title: string | null; seq: number; at: number; role: string; score: number };
 
-const sameTitle = (a: string | null, b: string) => (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+// A long title may be given cut short (ending "..."), or stored cut short.
+const sameTitle = (a: string | null, b: string) => {
+  const x = (a ?? "").trim().toLowerCase().replace(/(\.\.\.|…)$/, "");
+  const y = b.trim().toLowerCase().replace(/(\.\.\.|…)$/, "");
+  if (x === y) return true;
+  return Math.min(x.length, y.length) >= 30 && (x.startsWith(y) || y.startsWith(x));
+};
 // A message of the answer's passage, or right beside it (the reply to it).
 const fromSource = (f: Found, s: Source) => sameTitle(f.title, s.title) && f.seq >= s.lo - 1 && f.seq <= s.hi + 1;
 

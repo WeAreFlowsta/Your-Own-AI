@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(msgs[0], before_wrap[0], "an earlier prompt carries no block");
         assert_eq!(msgs[1], before_wrap[1]);
         let text = msgs[2]["content"].as_str().unwrap();
-        assert!(text.starts_with("[From memory. ...]\n\n<user_query>\nAnd the oven?"));
+        assert!(text.starts_with(&format!("[From memory. ...]\n\n{}\n<user_query>\nAnd the oven?", crate::memory_block::THEIR_MESSAGE)));
         assert!(text.ends_with("[From memory, the state record ...]"));
     }
 

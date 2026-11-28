@@ -773,13 +773,21 @@ pub(crate) fn leave_out_replaced(found: Vec<Exchange>, replaced_sources: &[(i64,
     found.into_iter().partition(|e| !replaced_sources.contains(&(e.conversation, e.hit.seq)))
 }
 
-/// The person's turn as it is sent: the block, the question exactly as
-/// typed, and the state note, in that order (the order is measured).
+/// Stands between a block and the person's message. After several
+/// thousand characters of what memory found, a short question with nothing
+/// to mark it is lost on a small model, which then answers nothing asked.
+pub(crate) const THEIR_MESSAGE: &str = "[That is all from memory. Their message now, which is what to answer:]";
+
+/// The person's turn as it is sent: the block, the line that marks their
+/// message, the question exactly as typed, and the state note, in that
+/// order (the order is measured).
 pub(crate) fn turn_text(before_question: Option<&str>, question: &str, after_question: Option<&str>) -> String {
     let mut out = String::new();
     if let Some(b) = before_question.filter(|b| !b.is_empty()) {
         out.push_str(b);
         out.push_str("\n\n");
+        out.push_str(THEIR_MESSAGE);
+        out.push('\n');
     }
     out.push_str(question);
     if let Some(a) = after_question.filter(|a| !a.is_empty()) {
@@ -1000,7 +1008,7 @@ mod tests {
              They said: Free delivery starts at $60 from March 9.\n\
              AI: Set: $60 from Monday March 9.]"
         );
-        assert_eq!(turn_text(Some(&b.text), "Which mill do we use?", None), format!("{}\n\nWhich mill do we use?", b.text));
+        assert_eq!(turn_text(Some(&b.text), "Which mill do we use?", None), format!("{}\n\n{THEIR_MESSAGE}\nWhich mill do we use?", b.text));
         // A name no conversation mentions is said before the rule.
         let about = About { absent_names: vec!["Bellamy".into(), "Crest Bank".into()], ..Default::default() };
         let b = block(&[mill()], &about, 12, 42_000, None, Wording::measured());
@@ -1148,7 +1156,7 @@ mod tests {
         let note = "[From memory, the state record for this, current as of 2026-03-09: Free delivery starts at $60. Anything older that disagrees is history.]";
         let question = "What is the free delivery threshold?";
         let turn = turn_text(Some(&b.text), question, Some(note));
-        assert_eq!(turn, format!("{}\n\n{question}\n\n{note}", b.text));
+        assert_eq!(turn, format!("{}\n\n{THEIR_MESSAGE}\n{question}\n\n{note}", b.text));
         let (at_block, at_question, at_note) = (turn.find("[From memory. ").unwrap(), turn.find(question).unwrap(), turn.find("[From memory, the state record").unwrap());
         assert!(at_block == 0 && at_block + b.text.len() < at_question && at_question + question.len() < at_note);
         // With no memory at all the turn is the question as typed.
@@ -1300,8 +1308,8 @@ mod tests {
     #[test]
     fn fingerprint_is_of_the_exact_wire_text() {
         let turn = turn_text(Some("[From memory. x]"), "Which mill?", None);
-        assert_eq!(fingerprint(&turn), fingerprint("[From memory. x]\n\nWhich mill?"));
-        assert_ne!(fingerprint(&turn), fingerprint("[From memory. x]\n\nWhich mill? "));
+        assert_eq!(fingerprint(&turn), fingerprint(&format!("[From memory. x]\n\n{THEIR_MESSAGE}\nWhich mill?")));
+        assert_ne!(fingerprint(&turn), fingerprint(&format!("[From memory. x]\n\n{THEIR_MESSAGE}\nWhich mill? ")));
         assert_eq!(fingerprint("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 

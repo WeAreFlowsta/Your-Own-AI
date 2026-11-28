@@ -39,6 +39,7 @@ mod memory_use;
 mod memory_notes;         // notes in memory: the line that answered, following the file, "Do not use this" and its reach
 mod memory_rules;         // when an instruction becomes an offer to keep it as a rule
 mod memory_check;         // the built-in check's marks: may this model do memory's judging
+mod memory_reply_check;   // a made-up history and questions: does a model answer from what memory gives it
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)

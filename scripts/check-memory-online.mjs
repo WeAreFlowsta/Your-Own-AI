@@ -20,7 +20,9 @@ const ALLOWED = {
   "kept_about_them(": ["memory_prompt.rs"],
   "about_them_text(": ["memory_prompt.rs"],
   "for_turn(": ["memory_prompt.rs", "inference_server.rs"],
-  "turn_text(": ["memory_block.rs", "memory_session.rs", "inference_server.rs"],
+  // memory_reply_check.rs builds turns from its own made-up history, for
+  // the truth matrix's local bench model: no one's memory passes through it.
+  "turn_text(": ["memory_block.rs", "memory_session.rs", "inference_server.rs", "memory_reply_check.rs"],
   "state_note(": ["memory_block.rs", "memory_state.rs"],
 };
 

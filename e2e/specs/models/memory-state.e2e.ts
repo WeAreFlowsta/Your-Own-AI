@@ -164,7 +164,7 @@ describe("what memory holds now, on the made-up history", () => {
     const { request } = await dev("GET", "last-chat-request");
     const sent = lastUserText(request);
     expect(sent.startsWith("[From memory. A search of all their conversations was run for this question.")).toBe(true);
-    expect(sent).toContain(`]\n\n${DELIVERY}\n\n[From memory, the state record for this, current as of 2026-03-03: `);
+    expect(sent).toContain(`]\n\n[That is all from memory. Their message now, which is what to answer:]\n${DELIVERY}\n\n[From memory, the state record for this, current as of 2026-03-03: `);
     expect(sent.endsWith(" Anything older that disagrees is history.]")).toBe(true);
     expect(reply.text).toContain("60");
     // The bubble keeps the question as typed.
