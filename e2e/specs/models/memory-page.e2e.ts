@@ -107,10 +107,15 @@ describe("the Memory page", () => {
     await shot("memory-page-keep-out-button");
     // The button shows it at once; the record of it is saved a moment later.
     await browser.waitUntil(async () => (await invoke<{ private: boolean }>("memory_conversation_use", { startedAt: started })).private === true, { timeout: 30_000, timeoutMsg: "the conversation was not recorded as kept out of memory" });
+    // One page at a time: the second address is given once the first has arrived.
     await browser.url("tauri://localhost/chat/");
+    await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
     await browser.url("tauri://localhost/your-memory/#recently");
     const row = await $('[data-testid="not-used-row"]');
-    await row.waitForDisplayed({ timeout: 60_000 });
+    await row.waitForDisplayed({ timeout: 60_000 }).catch(async (e) => {
+      console.log(`e2e: Not used did not show; the address is ${await browser.execute(() => location.href)}`);
+      throw e;
+    });
     const words = (await browser.execute((e) => (e as HTMLElement).innerText, row)) as string;
     console.log(`e2e: not used: ${JSON.stringify(words)}`);
     expect(words).toContain("Kept out of memory. It is never searched and nothing is kept from it.");
