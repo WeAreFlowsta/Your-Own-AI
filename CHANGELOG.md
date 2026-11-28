@@ -3,9 +3,16 @@
 All notable changes to Your Own AI are documented here. The release workflow
 extracts the entry matching the pushed tag into the GitHub release notes.
 
-## [0.9.1] - 2026-11-09
+## [0.9.5] - 2026-11-28
 
 ### Highlights
+- **Memory is rebuilt: your AIs can search every conversation you have
+  had.** When you ask something, Your Own AI searches all your
+  conversations on this computer and gives the AI the closest messages
+  with your question, so it answers from what was said, with the date. A
+  line under the reply opens exactly what memory gave it. What you choose
+  to keep sits on a map, by subject, where you can correct it, move it or
+  forget it. (Memory)
 - **Your Own AI updates itself.** It looks for a new version when it
   starts and every few hours, downloads it in the background, checks that
   it is the file Flowsta signed, and installs it when you choose Restart
@@ -28,6 +35,54 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   names the computer that still holds conversations; choose "is gone:
   restore here" and it restores what that computer backed up to your
   Vault. (Devices)
+
+### Memory
+- **Every conversation can be found.** Your conversations are read into
+  an index on this computer, newest first, and Memory says how far it has
+  got. Each question is searched before the AI answers, a short follow-up
+  together with the question before it, and the closest messages are given
+  to the AI with their dates.
+- **You can see what memory gave.** The line under a reply opens the
+  messages that were given for it, each in its conversation.
+- **When memory holds nothing on it, the AI says so.** It can then look
+  further: press Look further, or say it, and everything the search found
+  is given.
+- **Remember, where you are.** Press Remember under a reply, select words
+  and keep only those, or say "remember that" in the chat. A Kept line
+  shows what was kept, with Undo. "Forget that" and "that's right" work the
+  same way.
+- **An AI can keep what you settle.** When you state a decision, the AI
+  may keep it. What an AI kept is marked as its own until you confirm it,
+  and it is listed in Recently with Undo. You can turn this off.
+- **The Memory page has four boards.** Map shows what is kept, by
+  subject: press a subject to see what it holds, name it, correct an item,
+  move it, forget it, or see where it came from. Recent lists every
+  change, with Undo. Open lists what conversations left waiting. Rules
+  holds what your AIs are always given.
+- **Open keeps track of what is waiting.** The oldest is first. When a
+  later conversation reports one done, it moves under May already be done
+  and nothing is closed for you: choose Done or Still waiting. Saying
+  "that's done" in the chat marks it done, with Undo.
+- **Rules.** A rule you add is given with every answer. The second time
+  you give the same instruction, Your Own AI offers to make it a rule; No
+  stays No. A rule can be for one AI or for all of them, and a project's
+  rules can be saved as AGENTS.md.
+- **You choose who can use what.** An item or a subject can be for all
+  your AIs, for one AI or for one project, and a conversation for all
+  your AIs or for one. A conversation can be kept out of memory, with the
+  button on it or by saying so; it is listed under Not used, with Use
+  again.
+- **Deleting says what goes.** Deleting a conversation or an AI says how
+  many kept items go with it. Delete all memory takes every kept item and
+  subject and leaves your conversations and rules.
+- Documents and notes in the folders you gave an AI are found by the same
+  search as conversations.
+- Passwords, keys and tokens found in your conversations are masked
+  before anything from memory is given to a model.
+- What you had in memory before this version is carried over when you
+  update.
+- Memory is in your Vault backup and comes back when you restore, and it
+  is the same memory on every computer of yours.
 
 ### Reading documents and pictures
 - **A document reader you can add.** An optional 1.4 GB download
@@ -250,6 +305,9 @@ extracts the entry matching the pushed tag into the GitHub release notes.
   Before, only agent mode honored it.
 
 ### Diagnostics
+- The truth matrix checks memory on a made-up history: that the search
+  finds each answer, and, for each offline model, whether it answers from
+  what it was shown and how long it takes to read it.
 - The truth matrix asks twenty-four quality questions (was ten), measures
   each model's first reply, and ends its report with the figures and the
   kind of computer it ran on. The text beside it in Settings is shorter.
