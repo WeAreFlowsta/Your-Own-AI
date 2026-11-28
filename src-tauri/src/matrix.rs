@@ -2572,7 +2572,7 @@ pub async fn leg_first_reply(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<Stri
 }
 
 /// Does the part that searches work on this computer as it does on ours?
-/// The built-in made-up history's 36 messages and its questions are put
+/// The built-in made-up history's messages and its questions are put
 /// through the search model here, with the words a real search puts in
 /// front of each, and the messages are ordered by closeness as the search
 /// orders them. For each question the history can answer, the exchange
@@ -2657,15 +2657,17 @@ const MEMORY_REPLY_RUNS: u64 = 2;
 /// Does each model answer from what memory gives it, and how long does
 /// reading it take here? Per downloaded model, where the app would put it:
 /// its reading speed is measured, then the built-in made-up history's
-/// eight questions are asked twice each, with the results ahead of the
+/// questions are asked twice each, with the results ahead of the
 /// question exactly as a real turn carries them (the same block, held to
 /// the same wait for this computer's reading speed, the same line marking
 /// the person's message) and the app's own sampling. Each reply is marked
 /// on its words alone (`memory_reply_check`). The search is not measured
 /// here: every question comes with its results already in order.
-/// Nothing fails: these are the figures that say which models can answer
-/// about the past on which computers, and they hold no one's own history.
-pub async fn leg_memory_reply(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
+/// Nothing fails: these are the figures that say which model answers best
+/// about the past, and on which computers. Each is named by the model's
+/// file and its hash, so a report from any computer adds to what the next
+/// release knows about that file. They hold no one's own history.
+pub async fn leg_memory_reply(app: &AppHandle, bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<String> {
     use crate::memory_reply_check::{mark, set, Mark};
     use std::time::Duration;
     let client = crate::llm::local_http();
@@ -2786,15 +2788,16 @@ pub async fn leg_memory_reply(bin: &Path, dir: &Path, sink: Sink<'_>) -> Vec<Str
         }
         let n = |m: Mark| tally.get(&m).copied().unwrap_or(0);
         sink(format!(
-            "memory reply: {name} | TOTAL {good} of {asked} as the question called for (right {}, said it was not there {}) | stale {} | missed {} | answered anyway {} | off the question {} | unclear {} | nothing {} | reads {read_tps:.0} tok/s, shown {shown_least} to {shown_most} of 12, slowest read before the first word {slowest:.1} s (mark {mark_s:.0} s{})",
-            n(Mark::Right), n(Mark::SaidNotThere), n(Mark::Stale), n(Mark::Missed), n(Mark::AnsweredAnyway), n(Mark::OffTheQuestion), n(Mark::Unclear), n(Mark::Nothing),
+            "memory reply: {name} | TOTAL {good} of {asked} as the question called for (right {}, said it was not there {}) | stale {} | wrong {} | missed {} | answered anyway {} | off the question {} | unclear {} | nothing {} | reads {read_tps:.0} tok/s, shown {shown_least} to {shown_most} of 12, slowest read before the first word {slowest:.1} s (mark {mark_s:.0} s{})",
+            n(Mark::Right), n(Mark::SaidNotThere), n(Mark::Stale), n(Mark::Wrong), n(Mark::Missed), n(Mark::AnsweredAnyway), n(Mark::OffTheQuestion), n(Mark::Unclear), n(Mark::Nothing),
             if slowest > mark_s { ", OVER" } else { "" }
         ));
+        let sha256 = crate::model_hash::ensure(app, &name).await;
         figure(serde_json::json!({
-            "kind": "memory_reply", "model": name, "set": the_set.v, "place": if card.is_some() { "card" } else { "processor" },
+            "kind": "memory_reply", "model": name, "sha256": sha256, "set": the_set.v, "engine": bin.file_name().and_then(|n| n.to_str()).unwrap_or(""), "place": if card.is_some() { "card" } else { "processor" },
             "read_tps": read_tps.round(), "shown_least": shown_least, "shown_most": shown_most,
             "slowest_read_s": (slowest * 10.0).round() / 10.0, "mark_s": mark_s,
-            "asked": asked, "good": good, "right": n(Mark::Right), "said_not_there": n(Mark::SaidNotThere), "stale": n(Mark::Stale), "missed": n(Mark::Missed),
+            "asked": asked, "good": good, "right": n(Mark::Right), "said_not_there": n(Mark::SaidNotThere), "stale": n(Mark::Stale), "wrong": n(Mark::Wrong), "missed": n(Mark::Missed),
             "answered_anyway": n(Mark::AnsweredAnyway), "off_the_question": n(Mark::OffTheQuestion), "unclear": n(Mark::Unclear), "nothing": n(Mark::Nothing),
         }));
     }
@@ -3565,8 +3568,8 @@ pub async fn matrix_run(
         sink(String::new());
     }
     if !cancelled() && want("memory-reply") {
-        sink("== Replies from memory (a made-up history, eight questions twice, per model: answered from what was shown, and the wait to read it) ==".into());
-        failures.extend(leg_memory_reply(&bin, &dir, sink).await);
+        sink("== Replies from memory (a made-up history, its questions twice, per model: answered from what was shown, and the wait to read it) ==".into());
+        failures.extend(leg_memory_reply(&app, &bin, &dir, sink).await);
         sink(String::new());
     }
     if !cancelled() && want("quality") {

@@ -1,6 +1,10 @@
 //! Does a model on this computer answer from what memory gives it?
 //!
-//! A made-up history and eight questions about it, marked here. The search
+//! A made-up history and questions about it, marked here. The questions
+//! are the kinds a real history makes hard: a figure that was proposed and
+//! not taken, a state changed twice, an answer that needs two exchanges, a
+//! question in other words than the answer's, and questions the history
+//! comes near and does not answer. The search
 //! is not what is measured: each question comes with its results already in
 //! order, and the block is built and sized by the same code a real turn
 //! uses, for the reading speed this computer showed. What is marked is the
@@ -48,7 +52,18 @@ pub(crate) struct Question {
     /// Each group needs one of its strings in the reply (lowercase).
     pub right: Vec<Vec<String>>,
     /// Strings of the older state a later exchange replaced.
+    #[serde(default)]
     pub stale: Vec<String>,
+    /// Strings of something beside the answer: a figure proposed and not
+    /// taken, the other person, the other item.
+    #[serde(default)]
+    pub wrong: Vec<String>,
+    /// For a question the history comes near and cannot answer: words of
+    /// the near thing it does say (a price "left where it is"). A reply
+    /// that gives them, and none of `wrong`, has said what is there and
+    /// invented nothing.
+    #[serde(default)]
+    pub fine: Vec<String>,
 }
 
 pub(crate) fn set() -> Set {
@@ -126,7 +141,16 @@ pub(crate) fn turn(set: &Set, q: &Question, wait_chars: usize) -> (String, Vec<S
         about.closest_only = true;
         b = mb::block(&given, &about, 12, 42_000, room, wording);
     }
-    let shown: Vec<String> = b.given.iter().filter_map(|g| ids.iter().find(|(c, _)| *c == g.hit.c).map(|(_, id)| id.clone())).collect();
+    let mut shown: Vec<String> = b.given.iter().filter_map(|g| ids.iter().find(|(c, _)| *c == g.hit.c).map(|(_, id)| id.clone())).collect();
+    // Held to the wait, an exchange may be shown as its found message
+    // alone, without the message before or after it. When the answer's
+    // own words are then not in the block, the exchange that holds the
+    // answer does not count as shown: a model is marked on what it could
+    // read, never on what the wait left out.
+    let text = b.text.to_lowercase();
+    if !q.right.is_empty() && !q.right.iter().all(|group| group.iter().any(|w| text.contains(w.as_str()))) {
+        shown.retain(|id| !q.answer_in.contains(id));
+    }
     (mb::turn_text(Some(&b.text), &q.ask, None), shown, b.found)
 }
 
@@ -140,6 +164,9 @@ pub(crate) enum Mark {
     /// The answer was not among what it was shown, or is not in the
     /// history at all, and the reply said it was not there.
     SaidNotThere,
+    /// Something beside the answer: a figure that was proposed and not
+    /// taken, the other person, the other item.
+    Wrong,
     /// The answer was shown and the reply said it was not there.
     Missed,
     /// The answer was not there and the reply answered anyway.
@@ -158,6 +185,7 @@ impl Mark {
             Mark::Right => "right",
             Mark::Stale => "stale",
             Mark::SaidNotThere => "said it was not there",
+            Mark::Wrong => "wrong",
             Mark::Missed => "missed it",
             Mark::AnsweredAnyway => "answered anyway",
             Mark::OffTheQuestion => "off the question",
@@ -172,8 +200,10 @@ impl Mark {
 }
 
 const NOT_THERE: &[&str] = &[
-    "not in the closest", "nothing that answers", "found nothing", "did not find", "didn't find", "could not find", "couldn't find", "can't find", "cannot find", "do not have", "don't have", "no record", "no mention", "not mentioned",
-    "does not say", "doesn't say", "do not see", "don't see", "none of the", "not among", "isn't in", "is not in", "not in the exchanges", "not in these", "no information", "look further", "nothing about", "not covered", "no exchange",
+    "not in the closest", "nothing that answers", "found nothing", "found no ", "did not find", "didn't find", "could not find", "couldn't find", "can't find", "cannot find", "do not have", "don't have", "no record", "no mention",
+    "not mentioned", "wasn't mentioned", "was not mentioned", "does not say", "doesn't say", "do not say", "don't say", "do not see", "don't see", "none of the", "none of these", "not among", "isn't in", "is not in", "not in the exchanges", "not in these",
+    "no information", "look further", "nothing about", "nothing on ", "nothing in ", "nothing here", "not covered", "no exchange", "no prior", "no direct", "no decision", "no figure", "no price", "no date", "not stated", "not specified", "not given", "not recorded",
+    "does not state", "doesn't state", "does not give", "doesn't give", "does not mention", "doesn't mention", "do not mention", "don't mention", "do not show", "don't show", "does not appear", "doesn't appear", "never set", "was never",
 ];
 
 /// A reply to a greeting nobody gave: short, opens like one, and says
@@ -194,6 +224,7 @@ pub(crate) fn mark(q: &Question, shown: &[String], reply: &str) -> Mark {
     }
     let has_right = !q.right.is_empty() && q.right.iter().all(|group| group.iter().any(|s| r.contains(s.as_str())));
     let has_stale = q.stale.iter().any(|s| r.contains(s.as_str()));
+    let has_wrong = q.wrong.iter().any(|s| r.contains(s.as_str()));
     let not_there = NOT_THERE.iter().any(|p| r.contains(p));
     let answer_shown = !q.answer_in.is_empty() && q.answer_in.iter().all(|a| shown.contains(a));
     if answer_shown {
@@ -204,6 +235,9 @@ pub(crate) fn mark(q: &Question, shown: &[String], reply: &str) -> Mark {
         if has_stale {
             return Mark::Stale;
         }
+        if has_wrong {
+            return Mark::Wrong;
+        }
         if greets(reply) {
             return Mark::OffTheQuestion;
         }
@@ -213,13 +247,13 @@ pub(crate) fn mark(q: &Question, shown: &[String], reply: &str) -> Mark {
     if greets(reply) {
         return Mark::OffTheQuestion;
     }
-    if not_there {
+    if not_there || (q.answer_in.is_empty() && !has_wrong && q.fine.iter().any(|s| r.contains(s.as_str()))) {
         return Mark::SaidNotThere;
     }
     // Anything else is an answer where none could be given from what was
     // shown (the older state, shown without the exchange that replaced
     // it, is counted here too).
-    let _ = (has_right, has_stale);
+    let _ = (has_right, has_stale, has_wrong);
     Mark::AnsweredAnyway
 }
 
@@ -238,9 +272,13 @@ mod tests {
     #[test]
     fn the_set_is_whole() {
         let s = set();
-        assert_eq!(s.v, 1);
-        assert_eq!(s.exchanges.len(), 12);
-        assert_eq!(s.questions.len(), 8);
+        assert_eq!(s.v, 2);
+        assert_eq!(s.exchanges.len(), 18);
+        assert_eq!(s.questions.len(), 23);
+        let mut days: Vec<&str> = s.exchanges.iter().map(|e| e.date.as_str()).collect();
+        days.sort();
+        days.dedup();
+        assert_eq!(days.len(), 18, "an exchange is told from another by its day");
         for question in &s.questions {
             assert_eq!(question.order.len(), 12, "{}", question.id);
             let mut ids = question.order.clone();
@@ -252,65 +290,71 @@ mod tests {
                 assert!(question.order.contains(a));
             }
             assert_eq!(question.answer_in.is_empty(), question.right.is_empty(), "{}", question.id);
-            for group in &question.right {
-                for w in group {
-                    assert_eq!(w, &w.to_lowercase());
-                }
+            for w in question.right.iter().flatten().chain(&question.stale).chain(&question.wrong) {
+                assert_eq!(w, &w.to_lowercase());
             }
+            // The answer's own words are in the exchanges that hold it
+            // (their days count: a question may ask when).
+            let text: String = s.exchanges.iter().filter(|e| question.answer_in.contains(&e.id)).map(|e| format!("{} {} {} {} ", e.date, e.before, e.hit, e.after)).collect::<String>().to_lowercase();
+            assert!(question.right.iter().all(|g| g.iter().any(|w| text.contains(w.as_str()))), "{}", question.id);
         }
-        assert!(s.questions.iter().filter(|q| q.answer_in.is_empty()).count() >= 2, "questions the history cannot answer");
-        assert!(s.questions.iter().filter(|q| !q.stale.is_empty()).count() >= 2, "questions with an older state");
+        assert_eq!(s.questions.iter().filter(|q| q.answer_in.is_empty()).count(), 4, "questions the history cannot answer");
+        assert!(s.questions.iter().filter(|q| !q.stale.is_empty()).count() >= 6, "questions with an older state");
+        assert!(s.questions.iter().filter(|q| q.answer_in.len() > 1).count() >= 1, "a question that needs two exchanges");
     }
 
     #[test]
-    fn the_whole_block_is_the_size_that_loses_a_short_question() {
-        // The fault this check exists to catch showed with about 6,500
-        // characters ahead of a one-line question.
+    fn a_whole_block_is_long_and_no_message_is_cut() {
         let s = set();
-        let question = &s.questions[0];
-        let b = mb::block(&s.found(question), &mb::About::default(), 12, 42_000, None, mb::Wording::shipped());
-        assert_eq!(b.shown, 12);
-        let n = b.text.chars().count();
-        assert!((6_000..12_000).contains(&n), "{n}");
-        // An answer's own words are in the exchange that holds it.
-        for question in s.questions.iter().filter(|q| !q.answer_in.is_empty()) {
-            for e in s.exchanges.iter().filter(|e| question.answer_in.contains(&e.id)) {
-                let text = format!("{} {} {}", e.before, e.hit, e.after).to_lowercase();
-                assert!(question.right.iter().all(|g| g.iter().any(|w| text.contains(w.as_str()))), "{} in {}", question.id, e.id);
-            }
+        for question in &s.questions {
+            let b = mb::block(&s.found(question), &mb::About::default(), 12, 42_000, None, mb::Wording::shipped());
+            assert_eq!(b.shown, 12, "{}", question.id);
+            let n = b.text.chars().count();
+            assert!((7_000..12_000).contains(&n), "{}: {n}", question.id);
+        }
+        // Whole messages: an answer is never lost to the block's own cut.
+        for e in &s.exchanges {
+            assert!(e.hit.chars().count() <= 600 && e.before.chars().count() <= 1_200 && e.after.chars().count() <= 1_200, "{}", e.id);
         }
     }
 
     #[test]
     fn a_turn_is_held_to_the_wait_and_marks_the_message() {
         let s = set();
-        let deposit = q("deposit");
+        let reader = q("card-reader");
         // A fast reader is shown everything found.
-        let (text, shown, found) = turn(&s, &deposit, 60_000);
+        let (text, shown, found) = turn(&s, &reader, 60_000);
         assert_eq!((shown.len(), found), (12, 12));
-        assert_eq!(shown, deposit.order);
-        assert!(text.ends_with(&format!("{}\n{}", mb::THEIR_MESSAGE, deposit.ask)));
+        assert_eq!(shown, reader.order);
+        assert!(text.ends_with(&format!("{}\n{}", mb::THEIR_MESSAGE, reader.ask)));
         assert!(!text.contains("Only the closest results"));
         // A slow one is shown the closest only, told so, and here the
-        // exchange with the answer (sixth) is not among them.
-        let (text, shown, found) = turn(&s, &deposit, 900);
+        // exchange with the answer (ninth) is not among them.
+        let (text, shown, found) = turn(&s, &reader, 1_500);
         assert_eq!(found, 12);
-        assert!(!shown.is_empty() && shown.len() < 6, "{}", shown.len());
-        assert_eq!(shown[..], deposit.order[..shown.len()]);
+        assert!(!shown.is_empty() && shown.len() < 9, "{}", shown.len());
+        assert_eq!(shown[..], reader.order[..shown.len()]);
         assert!(text.contains("Only the closest results of the search are shown here"));
-        assert!(!shown.contains(&"rental-deposit".to_string()));
+        assert!(!shown.contains(&"card-reader".to_string()));
         // The best result is given whatever the speed.
-        assert_eq!(turn(&s, &deposit, 1).1, vec!["tuneup".to_string()]);
+        assert_eq!(turn(&s, &reader, 1).1, vec!["tuneup".to_string()]);
+        // An answer that stands in the message after the found one: shown
+        // whole it counts, and shown as the found message alone it does not.
+        let members = q("tuneup-members");
+        assert!(turn(&s, &members, 60_000).1.contains(&"tuneup-members".to_string()));
+        let (text, shown, _) = turn(&s, &members, 1_200);
+        assert!(text.contains("members go back to the old price") && !text.contains("$70"), "the found message alone");
+        assert!(!shown.contains(&"tuneup-members".to_string()));
     }
 
     #[test]
     fn the_answers_place_among_the_messages() {
         let s = set();
         let of: Vec<String> = s.messages().into_iter().map(|(id, _)| id).collect();
-        assert_eq!(of.len(), 36);
+        assert_eq!(of.len(), 54);
         let tune = q("tuneup-price");
         // The three messages of "tuneup" come first in the set.
-        let mut scores = vec![0.1f32; 36];
+        let mut scores = vec![0.1f32; 54];
         scores[20] = 0.9;
         scores[1] = 0.8;
         assert_eq!(place_of_answer(&tune, &of, &scores), Some(2));
@@ -328,7 +372,10 @@ mod tests {
     #[test]
     fn a_reply_is_marked_on_what_it_says() {
         let tune = q("tuneup-price");
-        assert_eq!(mark(&tune, &all(&tune), "On 2026-02-09 you said: \"the standard tune-up goes to $85 from the first of March.\""), Mark::Right);
+        assert_eq!(mark(&tune, &all(&tune), "On 2026-02-09 you said: \"call it 85 from march 1st\"."), Mark::Right);
+        // The figure that was proposed and not taken.
+        assert_eq!(mark(&tune, &all(&tune), "The tune-up went to $90."), Mark::Wrong);
+        assert_eq!(mark(&tune, &all(&tune), "$85 for walk-ins (I had suggested $90)."), Mark::Right);
         assert_eq!(mark(&tune, &all(&tune), "Hello. I am doing fine, thank you. What can I help you with today?"), Mark::OffTheQuestion);
         assert_eq!(mark(&tune, &all(&tune), "The answer is not in the closest results. You can ask me to look further."), Mark::Missed);
         assert_eq!(mark(&tune, &all(&tune), "It was raised a little in the spring."), Mark::Unclear);
@@ -341,22 +388,46 @@ mod tests {
 
     #[test]
     fn the_older_state_is_stale_only_when_the_newer_one_was_shown() {
-        let tubes = q("tube-supplier");
-        assert_eq!(mark(&tubes, &all(&tubes), "Brightwell, since 2026-01-14."), Mark::Stale);
-        assert_eq!(mark(&tubes, &all(&tubes), "Calder Parts now; you dropped Brightwell on 2026-04-21."), Mark::Right);
+        let tubes = q("tubes-26");
+        assert_eq!(mark(&tubes, &all(&tubes), "Calder Parts, since 2026-04-21."), Mark::Stale);
+        assert_eq!(mark(&tubes, &all(&tubes), "Northgate Wholesale for now; Calder are out until late July."), Mark::Right);
         let pickup = q("pickup-radius");
         assert_eq!(mark(&pickup, &all(&pickup), "Free pickup is within 5 km."), Mark::Stale);
         assert_eq!(mark(&pickup, &all(&pickup), "Within 12 km from June (it was 5 km before)."), Mark::Right);
+        let members = q("tuneup-members");
+        assert_eq!(mark(&members, &all(&members), "Members pay $85 like everyone."), Mark::Stale);
+        assert_eq!(mark(&members, &all(&members), "Members are back on the old $70; walk-ins pay $85."), Mark::Right);
         // Shown the older exchange alone, the older state is all it could say.
         assert_eq!(mark(&tubes, &["tubes-old".to_string()], "Brightwell."), Mark::AnsweredAnyway);
     }
 
     #[test]
-    fn a_question_the_history_cannot_answer() {
+    fn an_answer_that_needs_two_exchanges() {
+        let desk = q("late-desk");
+        assert_eq!(desk.answer_in.len(), 2);
+        assert_eq!(mark(&desk, &all(&desk), "Petra: the late evening is Wednesday now, and she has the desk every Wednesday."), Mark::Right);
+        assert_eq!(mark(&desk, &all(&desk), "Imogen covers the front desk."), Mark::Wrong);
+        // Shown only one of the two, it cannot be answered.
+        assert_eq!(mark(&desk, &["front-desk".to_string()], "The closest results do not say which evening is the late one."), Mark::SaidNotThere);
+        let both = q("late-evening");
+        assert_eq!(mark(&both, &all(&both), "Wednesday, until 7:30pm."), Mark::Right);
+        assert_eq!(mark(&both, &all(&both), "Wednesday."), Mark::Unclear);
+        assert_eq!(mark(&both, &all(&both), "Thursday until 8pm."), Mark::Stale);
+    }
+
+    #[test]
+    fn a_question_the_history_comes_near_and_cannot_answer() {
+        let overhaul = q("overhaul-price");
+        assert_eq!(mark(&overhaul, &all(&overhaul), "No figure for the overhaul is in these exchanges: on 2026-02-09 you said to leave it where it is."), Mark::SaidNotThere);
+        assert_eq!(mark(&overhaul, &all(&overhaul), "The full overhaul is $140."), Mark::AnsweredAnyway);
+        // What the history does say, with nothing invented.
+        assert_eq!(mark(&overhaul, &all(&overhaul), "On 2026-02-09 you said: \"leave the full overhaul where it is\"."), Mark::SaidNotThere);
+        assert_eq!(mark(&overhaul, &all(&overhaul), "It stays as it is, so $85 like the tune-up."), Mark::AnsweredAnyway);
+        let class = q("september-class");
+        assert_eq!(mark(&class, &all(&class), "Nothing in this conversation history answers that. I found the July and August classes."), Mark::SaidNotThere);
         let marlow = q("second-workshop");
-        assert_eq!(mark(&marlow, &all(&marlow), "I searched your conversations and found nothing that answers this. I did find the late opening on Thursday."), Mark::SaidNotThere);
-        assert_eq!(mark(&marlow, &all(&marlow), "You decided to open it in September."), Mark::AnsweredAnyway);
+        assert_eq!(mark(&marlow, &all(&marlow), "No prior decision about a second workshop was mentioned in these exchanges."), Mark::SaidNotThere);
         assert_eq!(mark(&marlow, &all(&marlow), "Hi. I'm doing fine, thanks for asking. What can I help you with today?"), Mark::OffTheQuestion);
-        assert!(Mark::SaidNotThere.good() && Mark::Right.good() && !Mark::AnsweredAnyway.good());
+        assert!(Mark::SaidNotThere.good() && Mark::Right.good() && !Mark::AnsweredAnyway.good() && !Mark::Wrong.good());
     }
 }

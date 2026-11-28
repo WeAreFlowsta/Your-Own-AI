@@ -1,5 +1,5 @@
 {
-  "v": 1,
+  "v": 2,
   "note": "A made-up bicycle workshop. Nothing here is anyone's real history.",
   "system": "You are Juno, a clear and steady working partner for the person you talk with. Ground rules: peers, not tool and owner; honest: do not invent facts, and admit when you are unsure; loyal to the person. Voice: straightforward and precise. Say true things plainly, answer what was actually asked and skip the filler. To \"how are you\" you would answer honestly and briefly, then turn to what they came for. Match your length to what is asked. Today is 2026-06-20.",
   "exchanges": [
@@ -7,163 +7,886 @@
       "id": "tuneup",
       "date": "2026-02-09",
       "title": "Service prices for spring",
-      "before": "The standard tune-up takes about fifty minutes of bench time once the bike is on the stand. At the current $70 you are covering labor but nothing for cables and the workshop's share of rent. Shops nearby charge between $80 and $95 for the same list of work.",
-      "hit": "ok that settles it, the standard tune-up goes to $85 from the first of March. keep the full overhaul where it is for now, I don't want to move both in the same month.",
-      "after": "Noted: the standard tune-up is $85 from 1 March, and the full overhaul stays as it is. I have updated the price card draft and left the overhaul line untouched."
+      "before": "The standard tune-up takes about fifty minutes of bench time once the bike is on the stand. At the current $70 you are covering labor but nothing for cables or the workshop's share of the rent. Shops nearby charge between $80 and $95 for the same list of work, so $90 would sit comfortably inside what people already pay around here, and I would suggest going there in one step rather than two.",
+      "hit": "90 feels steep for our street, half of them still think of us as the cheap place. meet me in the middle, call it 85 from march 1st and see who blinks. and leave the full overhaul where it is, I don't want to move both in the same month",
+      "after": "Noted: the standard tune-up is $85 from 1 March, not the $90 I suggested, and the full overhaul stays as it is. I have updated the price card draft and left the overhaul line untouched."
+    },
+    {
+      "id": "tuneup-members",
+      "date": "2026-05-12",
+      "title": "Service prices",
+      "before": "Since March the tune-up count is down by about one in ten against last spring, and nearly all of the drop is among people on the members list. Three of them said at the counter that the new price was the reason. Walk-in numbers are unchanged, and nobody who walked in has remarked on the price at all.",
+      "hit": "ok I hear that. walk-ins stay where they are, they clearly don't mind. but members go back to the old price for a tune-up, they've been with us for years and I'd rather keep them than win ten dollars. start monday",
+      "after": "From Monday members pay the old $70 for a standard tune-up and everyone else stays on the price set in March. I have added a members line to the price card and told Dario so the till matches."
     },
     {
       "id": "tubes-old",
       "date": "2026-01-14",
       "title": "Parts orders",
-      "before": "Three suppliers carry the tube sizes you sell most. Brightwell has the lowest unit price and ships in two days. Calder Parts is a little dearer and ships next day. The third only sells by the pallet.",
-      "hit": "go with Brightwell for inner tubes then, price matters more than a day's wait at this time of year. order the usual mix.",
+      "before": "Three suppliers carry the tube sizes you sell most. Brightwell has the lowest unit price and ships in two days. Calder Parts is a little dearer and ships next day. Northgate Wholesale only sells by the box of two hundred, which is more than you move in a quarter.",
+      "hit": "go with Brightwell for inner tubes then, price matters more than a day's wait at this time of year. order the usual mix",
       "after": "Ordered from Brightwell: the usual mix of 700c and 26 inch tubes, due on Thursday. I have set a reminder to check the count when they arrive."
     },
     {
       "id": "tubes-new",
       "date": "2026-04-21",
       "title": "Parts orders",
-      "before": "That is the second Brightwell delivery this month with split valve stems, eleven tubes out of sixty this time. They have offered a credit note but no explanation.",
-      "hit": "I'm done with them. from now on inner tubes come from Calder Parts, next day delivery is worth it and I can't hand customers tubes that fail in a week. cancel the standing order.",
-      "after": "Done. The standing order with Brightwell is cancelled and inner tubes now come from Calder Parts. The first Calder order arrives tomorrow."
+      "before": "That is the second Brightwell delivery this month with split valve stems, eleven tubes out of sixty this time. They have offered a credit note but no explanation, and the batch numbers are different from the last bad lot, so it is not one bad run.",
+      "hit": "I'm done with them. from now on inner tubes come from Calder Parts, next day is worth it and I can't hand customers tubes that fail in a week. cancel the standing order",
+      "after": "Done. The standing order with Brightwell is cancelled as of today and inner tubes now come from Calder Parts. The first Calder order arrives tomorrow."
+    },
+    {
+      "id": "tubes-third",
+      "date": "2026-06-02",
+      "title": "Parts orders",
+      "before": "Calder Parts wrote this morning: they are out of 26 inch tubes until their container lands, which they put at the end of July. Every other size is in stock with them as normal. Northgate Wholesale has the 26 inch in boxes of two hundred and will now split a box for a small fee. Brightwell also has them, at their usual price.",
+      "hit": "not going back to brightwell whatever they cost. get the 26 inch from northgate until calder have them again, split box is fine. everything else stays exactly as it is",
+      "after": "Ordered a split box of 26 inch tubes from Northgate Wholesale, here on Friday. All other sizes stay with Calder Parts, and I will move the 26 inch back to them when their container is in."
     },
     {
       "id": "late-opening",
       "date": "2026-03-03",
       "title": "Opening hours",
-      "before": "Looking at the door counter for the last eight weeks, the busiest evening hour is on Thursday, when people collect bikes on the way home, and the quietest is Monday. One late evening a week would cover most of the people who asked.",
-      "hit": "then the late opening is Thursday, open until 8pm, starting next week. the other days stay at 5:30. put it on the door sign and the website.",
-      "after": "The late opening is Thursday until 8pm from next week. I have drafted the door sign and the line for the website for you to check."
+      "before": "Looking at the door counter for the last eight weeks, the busiest evening hour is on Thursday, when people collect bikes on the way home. Wednesday is second, not far behind, and Monday is the quietest by a long way. One late evening a week would cover most of the people who asked.",
+      "hit": "then the late opening is thursday, open until 8pm, starting next week. the other days stay at 5:30. put it on the door sign and the website",
+      "after": "The late opening is Thursday until 8pm from next week, with 5:30 on the other days. I have drafted the door sign and the line for the website for you to check."
+    },
+    {
+      "id": "late-moved",
+      "date": "2026-05-28",
+      "title": "Opening hours",
+      "before": "Two things from the last month of late evenings. The cycling club moved its weekly ride to Thursday at 6:30, so Dario has left early three weeks running and the bench has been empty for the last hour. And after 7:30 the door counter shows almost nobody: four people in total across five weeks.",
+      "hit": "right, no point paying for an empty shop. move the late night to wednesday so it doesn't clash with the ride, and close at 7:30 not 8. from next week. thursday goes back to normal hours",
+      "after": "From next week the late evening is Wednesday, closing at 7:30pm, and Thursday is back to 5:30 like the other days. The door sign and the website line are changed."
     },
     {
       "id": "front-desk",
       "date": "2026-05-06",
       "title": "Staff roster",
-      "before": "Saturday is the day the front desk is thinnest. Dario is on the bench all day and cannot leave a wheel build half done to take payments. Imogen has said she can do Saturdays through the summer, and Petra can only do alternate weeks.",
-      "hit": "let's have Imogen cover the front desk on Saturdays through to the end of August. Petra can stay on Wednesdays where she is.",
-      "after": "Set: Imogen covers the front desk on Saturdays until the end of August, and Petra stays on Wednesdays. I have told them both and updated the roster."
+      "before": "Saturday is the day the front desk is thinnest. Dario is on the bench all day and cannot leave a wheel build half done to take payments. Imogen has said she can do Saturdays through the summer. Petra can only do alternate Saturdays, and she is already down for every Wednesday from two until close.",
+      "hit": "let's have Imogen cover the front desk on saturdays through to the end of august. Petra stays on her wednesdays as she is, don't change that",
+      "after": "Set: Imogen covers the front desk on Saturdays until the end of August, and Petra keeps the front desk every Wednesday from two until close. I have told them both and updated the roster."
     },
     {
       "id": "rental-deposit",
       "date": "2026-04-02",
       "title": "Rental bikes",
-      "before": "For the six rental bikes, most shops take a deposit of between $100 and $200 against damage and late returns. A lower deposit brings more casual renters and a higher one means fewer arguments about scratches.",
-      "hit": "make the rental deposit $150, refunded when the bike comes back in the state it left. cash or card hold, either is fine.",
-      "after": "The rental deposit is $150, refunded on return in the same condition, by cash or a card hold. I have added it to the rental form."
+      "before": "For the rental bikes, most shops take a deposit of between $100 and $200 against damage and late returns. A lower deposit brings more casual renters and a higher one means fewer arguments about scratches. The cargo bike is a different case: it cost three times what a city bike did and its parts take weeks to arrive.",
+      "hit": "150 for the five city bikes, refunded when the bike comes back in the state it left. the cargo bike needs more than that, make it 250. cash or card hold, either is fine",
+      "after": "The deposit is $150 on each city bike and $250 on the cargo bike, refunded on return in the same condition, by cash or a card hold. Both are on the rental form now."
     },
     {
       "id": "pickup-old",
       "date": "2026-02-24",
       "title": "Pickup and delivery",
-      "before": "With one van and one driver two mornings a week, a pickup round of about ninety minutes is realistic. That covers most addresses within 5 km of the workshop.",
-      "hit": "ok free pickup within 5 km to start with, we'll see how the van copes. anything further is a flat $15.",
+      "before": "With one van and one driver two mornings a week, a pickup round of about ninety minutes is realistic. That covers most addresses within 5 km of the workshop. Beyond that each stop adds roughly a quarter of an hour.",
+      "hit": "ok free pickup within 5 km to start with, we'll see how the van copes. anything further is a flat $15",
       "after": "Free pickup is within 5 km for now, and $15 flat beyond that. I will keep a tally of the rounds so you can see how the van copes."
     },
     {
       "id": "pickup-new",
       "date": "2026-05-19",
       "title": "Pickup and delivery",
-      "before": "The tally for twelve weeks: the van finished every round with at least half an hour to spare, and nine people outside the free area asked and then went elsewhere.",
-      "hit": "the van is coping fine. widen free pickup to 12 km from June, and keep the $15 for anything beyond that.",
-      "after": "From June free pickup covers addresses within 12 km, with $15 flat beyond. I have changed the website text and the booking form."
-    },
-    {
-      "id": "newsletter",
-      "date": "2026-03-17",
-      "title": "Newsletter",
-      "before": "Open rates were highest for the two newsletters that led with a repair tip and lowest for the one that led with a sale. Sending monthly kept unsubscribes under one percent.",
-      "hit": "keep it monthly and always start with a repair tip. the next one can be about fixing a slipping seatpost, people ask me that every week.",
-      "after": "Monthly it stays, opening with a repair tip. I have drafted the next issue around a slipping seatpost and put the spring service offer second."
+      "before": "The tally for twelve weeks: the van finished every round with at least half an hour to spare, and nine people outside the free area asked and then went elsewhere. Fuel is up about a third since February, which matters most on the long runs past the ring road.",
+      "hit": "the van is coping fine. widen free pickup to 12 km from june. the long ones are costing us though, so anything beyond that goes up to $20",
+      "after": "From June free pickup covers addresses within 12 km, and beyond that the flat charge is $20, up from $15. I have changed the website text and the booking form."
     },
     {
       "id": "truing-stand",
       "date": "2026-01-28",
       "title": "Workshop tools",
-      "before": "The old truing stand has play in the uprights that a new set of bushings will not fix. A replacement of the same model is $310, and the heavier professional one is $540 and takes thru-axle wheels without an adapter.",
-      "hit": "we're building more thru-axle wheels every month. buy the professional truing stand, it will pay for itself by the summer.",
-      "after": "Ordered: the professional truing stand at $540, arriving next week. I have listed the old one for sale as spares or repair."
+      "before": "The old truing stand has play in the uprights that a new set of bushings will not fix. A replacement of the same model is $310. The heavier professional one is $540 and takes thru-axle wheels without an adapter, and a used one of that kind is listed nearby at $400 with no returns.",
+      "hit": "not buying used with no returns. we're building more thru-axle wheels every month, get the professional one new, it'll pay for itself by summer",
+      "after": "Ordered new: the professional truing stand, arriving next week at the price quoted. I have listed the old stand for sale as spares or repair."
     },
     {
       "id": "kids-class",
       "date": "2026-05-27",
       "title": "Summer classes",
-      "before": "The hall next door is free on the first Sunday morning of each month. Eight children is the most one adult can supervise with tools, and parents asked for something under an hour.",
-      "hit": "run the kids' puncture class on the first Sunday of July, eight places, forty five minutes, free. if it fills we'll do August too.",
-      "after": "The kids' puncture class is on the first Sunday of July: eight places, forty five minutes, no charge. The sign-up sheet is at the front desk."
+      "before": "The hall next door is free on the first Sunday morning of each month through the summer. Eight children is the most one adult can supervise with tools, and the parents who asked wanted something under an hour.",
+      "hit": "run the kids' puncture class in the hall on the first sunday of july, eight places, forty five minutes, free. if it fills we'll do august too",
+      "after": "The kids' puncture class is in the hall next door on the first Sunday of July: eight places, forty five minutes, no charge. The sign-up sheet is at the front desk."
+    },
+    {
+      "id": "kids-class-august",
+      "date": "2026-06-11",
+      "title": "Summer classes",
+      "before": "The July class filled in two days, with five names on the waiting list. For August the hall has been booked by a choir on the first Sunday, so it is not available that morning. The yard behind the workshop is big enough if the two stands are moved inside, and it has shade until about eleven.",
+      "hit": "do august then, same sunday, same length. use the yard since the hall's gone, and offer the waiting list first before it goes on the door",
+      "after": "The August class is on the first Sunday in the yard behind the workshop, forty five minutes, with the five on the waiting list offered places first. July stays in the hall as planned."
     },
     {
       "id": "card-reader",
       "date": "2026-03-30",
       "title": "Payments",
-      "before": "The card reader dropped its connection four times on Saturday, each time in the afternoon when the workshop wifi was busiest. On the phone network it did not drop once during the test this morning.",
-      "hit": "move the card reader onto the phone network permanently then, and leave the wifi for the workshop computers.",
-      "after": "The card reader now uses the phone network only. I will check the Saturday log this week to confirm the drops have stopped."
+      "before": "The card reader dropped its connection four times on Saturday, each time in the afternoon when the workshop wifi was busiest. On the phone network it did not drop once during the test this morning. The supplier also offers a wired dock for $60, which needs a cable run to the counter.",
+      "hit": "no cables across the floor. move the card reader onto the phone network permanently and leave the wifi for the workshop computers",
+      "after": "The card reader now uses the phone network only, with no dock ordered. I will check the Saturday log this week to confirm the drops have stopped."
+    },
+    {
+      "id": "ebikes",
+      "date": "2026-04-15",
+      "title": "Stock ideas",
+      "before": "On stocking e-bikes: the margin per bike is about double a city bike's, and two customers a week ask for them. Against that, warranty work on the motors and batteries has to be done by someone who has passed the maker's battery course, the deposit on a first order is large, and none of us holds that certificate today.",
+      "hit": "not this year then. no e-bikes on the floor until Dario has done the battery course, and I'm not ordering stock on a promise. look at it again in january",
+      "after": "Agreed: no e-bikes until Dario has passed the battery course, with the question back on the list for January. I have told the rep we are not ordering."
+    },
+    {
+      "id": "insurance",
+      "date": "2026-03-10",
+      "title": "Insurance renewal",
+      "before": "Two quotes for the year. Harrow Mutual, the current insurer, is $1,840, up a little on last year, and covers the workshop, the stock and the rental fleet as now. Fenwick is $1,610, which is cheaper, but its policy leaves out the rental bikes altogether, and a separate cover for those would cost more than the difference.",
+      "hit": "fenwick's no good to us if the rentals aren't in it. renew where we are. ask them if paying in one go gets anything off",
+      "after": "Renewed with Harrow Mutual for the year. They take 2 percent off for payment in one go, so I have set it up that way."
+    },
+    {
+      "id": "newsletter",
+      "date": "2026-03-17",
+      "title": "Newsletter",
+      "before": "Open rates were highest for the two newsletters that led with a repair tip and lowest for the one that led with a sale. Sending monthly kept unsubscribes under one percent, and the fortnightly trial last autumn doubled them.",
+      "hit": "keep it monthly and always start with a repair tip. the next one can be about fixing a slipping seatpost, people ask me that every week",
+      "after": "Monthly it stays, opening with a repair tip. I have drafted the next issue around a slipping seatpost and put the spring service offer second."
     }
   ],
   "questions": [
     {
       "id": "tuneup-price",
-      "ask": "what did we settle on for the tune-up price?",
-      "order": ["tuneup", "truing-stand", "rental-deposit", "pickup-old", "newsletter", "tubes-old", "late-opening", "card-reader", "kids-class", "front-desk", "pickup-new", "tubes-new"],
-      "answer_in": ["tuneup"],
-      "right": [["85"]],
-      "stale": []
+      "ask": "what does a walk-in pay for a tune-up?",
+      "order": [
+        "tuneup",
+        "truing-stand",
+        "tuneup-members",
+        "newsletter",
+        "kids-class-august",
+        "tubes-old",
+        "insurance",
+        "rental-deposit",
+        "front-desk",
+        "late-opening",
+        "pickup-new",
+        "pickup-old"
+      ],
+      "answer_in": [
+        "tuneup"
+      ],
+      "right": [
+        [
+          "85"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "$90",
+        "$70",
+        "$95"
+      ],
+      "fine": []
     },
     {
-      "id": "tube-supplier",
-      "ask": "which supplier do our inner tubes come from now?",
-      "order": ["tubes-old", "tubes-new", "truing-stand", "card-reader", "tuneup", "rental-deposit", "newsletter", "pickup-new", "late-opening", "kids-class", "front-desk", "pickup-old"],
-      "answer_in": ["tubes-new"],
-      "right": [["calder"]],
-      "stale": ["brightwell"]
+      "id": "tuneup-members",
+      "ask": "what are members paying for the standard service now?",
+      "order": [
+        "tuneup",
+        "tuneup-members",
+        "card-reader",
+        "kids-class-august",
+        "pickup-old",
+        "ebikes",
+        "rental-deposit",
+        "tubes-old",
+        "pickup-new",
+        "late-opening",
+        "truing-stand",
+        "late-moved"
+      ],
+      "answer_in": [
+        "tuneup-members"
+      ],
+      "right": [
+        [
+          "$70",
+          "70 dollars",
+          " 70"
+        ]
+      ],
+      "stale": [
+        "85"
+      ],
+      "wrong": [
+        "$90"
+      ],
+      "fine": []
     },
     {
-      "id": "late-day",
-      "ask": "which day did we pick for the late opening?",
-      "order": ["front-desk", "kids-class", "late-opening", "newsletter", "card-reader", "tuneup", "pickup-new", "rental-deposit", "tubes-new", "truing-stand", "pickup-old", "tubes-old"],
-      "answer_in": ["late-opening"],
-      "right": [["thursday"]],
-      "stale": []
+      "id": "tubes-26",
+      "ask": "who's sending us the 26 inch tubes at the moment?",
+      "order": [
+        "tubes-new",
+        "tubes-old",
+        "tubes-third",
+        "ebikes",
+        "kids-class-august",
+        "pickup-old",
+        "card-reader",
+        "newsletter",
+        "tuneup",
+        "front-desk",
+        "tuneup-members",
+        "pickup-new"
+      ],
+      "answer_in": [
+        "tubes-third"
+      ],
+      "right": [
+        [
+          "northgate"
+        ]
+      ],
+      "stale": [
+        "calder",
+        "brightwell"
+      ],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "tubes-700c",
+      "ask": "and the 700c tubes, who supplies those?",
+      "order": [
+        "tubes-third",
+        "tubes-old",
+        "tubes-new",
+        "kids-class",
+        "insurance",
+        "rental-deposit",
+        "truing-stand",
+        "newsletter",
+        "kids-class-august",
+        "tuneup",
+        "ebikes",
+        "late-opening"
+      ],
+      "answer_in": [
+        "tubes-third"
+      ],
+      "right": [
+        [
+          "calder"
+        ]
+      ],
+      "stale": [
+        "brightwell"
+      ],
+      "wrong": [
+        "northgate"
+      ],
+      "fine": []
+    },
+    {
+      "id": "brightwell-date",
+      "ask": "when did we drop Brightwell?",
+      "order": [
+        "tubes-old",
+        "tubes-third",
+        "tubes-new",
+        "late-opening",
+        "late-moved",
+        "insurance",
+        "ebikes",
+        "newsletter",
+        "tuneup-members",
+        "pickup-old",
+        "pickup-new",
+        "tuneup"
+      ],
+      "answer_in": [
+        "tubes-new"
+      ],
+      "right": [
+        [
+          "2026-04-21",
+          "april 21",
+          "21 april",
+          "21st of april",
+          "april 21st",
+          "21st april",
+          "21 apr",
+          "apr 21"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "2026-06-02",
+        "2026-01-14"
+      ],
+      "fine": []
+    },
+    {
+      "id": "late-evening",
+      "ask": "which evening do we stay open late these days, and until what time?",
+      "order": [
+        "late-opening",
+        "late-moved",
+        "ebikes",
+        "tuneup-members",
+        "pickup-new",
+        "tubes-new",
+        "rental-deposit",
+        "kids-class",
+        "truing-stand",
+        "front-desk",
+        "insurance",
+        "newsletter"
+      ],
+      "answer_in": [
+        "late-moved"
+      ],
+      "right": [
+        [
+          "wednesday"
+        ],
+        [
+          "7:30",
+          "7.30",
+          "19:30",
+          "half past seven"
+        ]
+      ],
+      "stale": [
+        "thursday"
+      ],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "late-desk",
+      "ask": "who's on the front desk on our late evening?",
+      "order": [
+        "front-desk",
+        "late-opening",
+        "late-moved",
+        "tubes-new",
+        "ebikes",
+        "newsletter",
+        "pickup-new",
+        "card-reader",
+        "tubes-third",
+        "insurance",
+        "kids-class",
+        "truing-stand"
+      ],
+      "answer_in": [
+        "front-desk",
+        "late-moved"
+      ],
+      "right": [
+        [
+          "petra"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "imogen",
+        "dario"
+      ],
+      "fine": []
     },
     {
       "id": "saturday-desk",
-      "ask": "who's on the front desk on saturdays?",
-      "order": ["front-desk", "late-opening", "kids-class", "card-reader", "newsletter", "tuneup", "rental-deposit", "pickup-new", "tubes-new", "truing-stand", "pickup-old", "tubes-old"],
-      "answer_in": ["front-desk"],
-      "right": [["imogen"]],
-      "stale": []
+      "ask": "who has the counter on saturdays?",
+      "order": [
+        "late-moved",
+        "front-desk",
+        "insurance",
+        "kids-class",
+        "pickup-new",
+        "newsletter",
+        "truing-stand",
+        "tubes-third",
+        "ebikes",
+        "kids-class-august",
+        "card-reader",
+        "tuneup-members"
+      ],
+      "answer_in": [
+        "front-desk"
+      ],
+      "right": [
+        [
+          "imogen"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "petra",
+        "dario"
+      ],
+      "fine": []
     },
     {
       "id": "deposit",
-      "ask": "how much is the deposit on a rental bike?",
-      "order": ["tuneup", "truing-stand", "pickup-old", "pickup-new", "card-reader", "rental-deposit", "newsletter", "kids-class", "late-opening", "front-desk", "tubes-new", "tubes-old"],
-      "answer_in": ["rental-deposit"],
-      "right": [["150"]],
-      "stale": []
+      "ask": "how much do we hold on a city bike when someone rents one?",
+      "order": [
+        "pickup-new",
+        "rental-deposit",
+        "tubes-new",
+        "tuneup-members",
+        "late-moved",
+        "pickup-old",
+        "kids-class",
+        "newsletter",
+        "card-reader",
+        "front-desk",
+        "ebikes",
+        "tuneup"
+      ],
+      "answer_in": [
+        "rental-deposit"
+      ],
+      "right": [
+        [
+          "150"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "250",
+        "$100",
+        "$200"
+      ],
+      "fine": []
+    },
+    {
+      "id": "deposit-cargo",
+      "ask": "what's the deposit on the cargo bike?",
+      "order": [
+        "rental-deposit",
+        "pickup-old",
+        "tubes-old",
+        "pickup-new",
+        "insurance",
+        "kids-class",
+        "kids-class-august",
+        "newsletter",
+        "late-opening",
+        "tubes-third",
+        "card-reader",
+        "ebikes"
+      ],
+      "answer_in": [
+        "rental-deposit"
+      ],
+      "right": [
+        [
+          "250"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "150",
+        "$200"
+      ],
+      "fine": []
     },
     {
       "id": "pickup-radius",
       "ask": "how far out is pickup free these days?",
-      "order": ["pickup-old", "pickup-new", "rental-deposit", "tuneup", "late-opening", "card-reader", "kids-class", "newsletter", "front-desk", "truing-stand", "tubes-new", "tubes-old"],
-      "answer_in": ["pickup-new"],
-      "right": [["12 km", "12km", "12 kilomet", "twelve k"]],
-      "stale": ["5 km", "5km", "5 kilomet", "five k"]
+      "order": [
+        "pickup-old",
+        "pickup-new",
+        "kids-class",
+        "late-opening",
+        "tuneup",
+        "tuneup-members",
+        "truing-stand",
+        "tubes-third",
+        "late-moved",
+        "tubes-old",
+        "tubes-new",
+        "newsletter"
+      ],
+      "answer_in": [
+        "pickup-new"
+      ],
+      "right": [
+        [
+          "12 km",
+          "12km",
+          "12 kilomet",
+          "twelve k"
+        ]
+      ],
+      "stale": [
+        "5 km",
+        "5km",
+        "5 kilomet",
+        "five k"
+      ],
+      "wrong": [],
+      "fine": []
     },
     {
-      "id": "second-workshop",
-      "ask": "what did we decide about opening a second workshop in Marlow?",
-      "order": ["late-opening", "kids-class", "truing-stand", "front-desk", "rental-deposit", "pickup-new", "tuneup", "newsletter", "card-reader", "pickup-old", "tubes-new", "tubes-old"],
+      "id": "pickup-fee",
+      "ask": "what do we charge to collect a bike from outside the free area?",
+      "order": [
+        "pickup-old",
+        "rental-deposit",
+        "pickup-new",
+        "newsletter",
+        "tuneup-members",
+        "insurance",
+        "kids-class",
+        "tubes-new",
+        "card-reader",
+        "tuneup",
+        "late-moved",
+        "tubes-old"
+      ],
+      "answer_in": [
+        "pickup-new"
+      ],
+      "right": [
+        [
+          "$20",
+          "20 dollars",
+          "20 flat"
+        ]
+      ],
+      "stale": [
+        "$15",
+        "15 dollars",
+        "15 flat"
+      ],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "stand-cost",
+      "ask": "what did the new truing stand set us back?",
+      "order": [
+        "tuneup",
+        "truing-stand",
+        "rental-deposit",
+        "newsletter",
+        "tuneup-members",
+        "insurance",
+        "tubes-old",
+        "front-desk",
+        "late-moved",
+        "pickup-new",
+        "kids-class-august",
+        "tubes-third"
+      ],
+      "answer_in": [
+        "truing-stand"
+      ],
+      "right": [
+        [
+          "540"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "310",
+        "400"
+      ],
+      "fine": []
+    },
+    {
+      "id": "august-class",
+      "ask": "where is the august kids class being held?",
+      "order": [
+        "kids-class",
+        "kids-class-august",
+        "front-desk",
+        "late-moved",
+        "tuneup-members",
+        "insurance",
+        "tuneup",
+        "late-opening",
+        "tubes-old",
+        "ebikes",
+        "tubes-third",
+        "newsletter"
+      ],
+      "answer_in": [
+        "kids-class-august"
+      ],
+      "right": [
+        [
+          "yard"
+        ]
+      ],
+      "stale": [
+        "hall next door on",
+        "in the hall"
+      ],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "ebikes",
+      "ask": "what has to happen before we put e-bikes on the floor?",
+      "order": [
+        "ebikes",
+        "tubes-third",
+        "pickup-new",
+        "card-reader",
+        "tuneup-members",
+        "front-desk",
+        "late-opening",
+        "newsletter",
+        "kids-class-august",
+        "pickup-old",
+        "kids-class",
+        "tubes-new"
+      ],
+      "answer_in": [
+        "ebikes"
+      ],
+      "right": [
+        [
+          "course",
+          "certif"
+        ]
+      ],
+      "stale": [],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "insurer",
+      "ask": "who did we renew the insurance with?",
+      "order": [
+        "insurance",
+        "newsletter",
+        "tubes-old",
+        "pickup-new",
+        "pickup-old",
+        "rental-deposit",
+        "late-opening",
+        "tuneup-members",
+        "kids-class-august",
+        "kids-class",
+        "tuneup",
+        "card-reader"
+      ],
+      "answer_in": [
+        "insurance"
+      ],
+      "right": [
+        [
+          "harrow"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "fenwick"
+      ],
+      "fine": []
+    },
+    {
+      "id": "insurer-why",
+      "ask": "why didn't we take the cheaper insurance quote?",
+      "order": [
+        "rental-deposit",
+        "insurance",
+        "late-moved",
+        "truing-stand",
+        "ebikes",
+        "pickup-new",
+        "tubes-new",
+        "front-desk",
+        "tuneup",
+        "tuneup-members",
+        "kids-class",
+        "pickup-old"
+      ],
+      "answer_in": [
+        "insurance"
+      ],
+      "right": [
+        [
+          "rental"
+        ]
+      ],
+      "stale": [],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "card-reader",
+      "ask": "what connection is the card machine on?",
+      "order": [
+        "tuneup",
+        "pickup-new",
+        "tuneup-members",
+        "newsletter",
+        "late-opening",
+        "front-desk",
+        "insurance",
+        "pickup-old",
+        "card-reader",
+        "ebikes",
+        "kids-class-august",
+        "truing-stand"
+      ],
+      "answer_in": [
+        "card-reader"
+      ],
+      "right": [
+        [
+          "phone network",
+          "mobile",
+          "cellular",
+          "phone's network",
+          "4g",
+          "lte",
+          "phone data"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "dock",
+        "wifi only"
+      ],
+      "fine": []
+    },
+    {
+      "id": "newsletter",
+      "ask": "what does every newsletter open with?",
+      "order": [
+        "kids-class",
+        "ebikes",
+        "card-reader",
+        "pickup-old",
+        "late-opening",
+        "insurance",
+        "newsletter",
+        "front-desk",
+        "tubes-third",
+        "tubes-old",
+        "late-moved",
+        "tubes-new"
+      ],
+      "answer_in": [
+        "newsletter"
+      ],
+      "right": [
+        [
+          "tip"
+        ]
+      ],
+      "stale": [],
+      "wrong": [
+        "a sale"
+      ],
+      "fine": []
+    },
+    {
+      "id": "overhaul-price",
+      "ask": "what price did we settle on for the full overhaul?",
+      "order": [
+        "tuneup",
+        "tuneup-members",
+        "truing-stand",
+        "kids-class",
+        "pickup-old",
+        "ebikes",
+        "rental-deposit",
+        "pickup-new",
+        "late-opening",
+        "tubes-old",
+        "insurance",
+        "front-desk"
+      ],
       "answer_in": [],
       "right": [],
-      "stale": []
+      "stale": [],
+      "wrong": [
+        "$85",
+        "$90",
+        "$70",
+        "$95"
+      ],
+      "fine": [
+        "where it is",
+        "as it is",
+        "unchanged",
+        "stays the same",
+        "not changed",
+        "was not moved",
+        "wasn't moved"
+      ]
+    },
+    {
+      "id": "september-class",
+      "ask": "what day is the september kids class?",
+      "order": [
+        "kids-class-august",
+        "kids-class",
+        "rental-deposit",
+        "tubes-old",
+        "tuneup",
+        "newsletter",
+        "tuneup-members",
+        "ebikes",
+        "card-reader",
+        "pickup-old",
+        "tubes-new",
+        "front-desk"
+      ],
+      "answer_in": [],
+      "right": [],
+      "stale": [],
+      "wrong": [],
+      "fine": []
     },
     {
       "id": "accountant",
       "ask": "which accountant did we switch to after Pruett?",
-      "order": ["card-reader", "tubes-new", "tuneup", "front-desk", "rental-deposit", "truing-stand", "newsletter", "late-opening", "pickup-new", "kids-class", "pickup-old", "tubes-old"],
+      "order": [
+        "insurance",
+        "card-reader",
+        "late-moved",
+        "newsletter",
+        "ebikes",
+        "rental-deposit",
+        "kids-class-august",
+        "pickup-new",
+        "truing-stand",
+        "kids-class",
+        "late-opening",
+        "tuneup-members"
+      ],
       "answer_in": [],
       "right": [],
-      "stale": []
+      "stale": [],
+      "wrong": [],
+      "fine": []
+    },
+    {
+      "id": "second-workshop",
+      "ask": "what did we decide about opening a second workshop in Marlow?",
+      "order": [
+        "late-moved",
+        "ebikes",
+        "kids-class",
+        "late-opening",
+        "tubes-new",
+        "rental-deposit",
+        "kids-class-august",
+        "tubes-old",
+        "truing-stand",
+        "pickup-old",
+        "front-desk",
+        "tubes-third"
+      ],
+      "answer_in": [],
+      "right": [],
+      "stale": [],
+      "wrong": [],
+      "fine": []
     }
   ]
 }

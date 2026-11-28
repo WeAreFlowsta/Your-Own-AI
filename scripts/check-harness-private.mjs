@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * Build check: the measuring harness and its fixtures hold made-up data
- * only. Fails when a file under tools/ or e2e/fixtures/:
+ * only. Fails when a file under tools/, e2e/fixtures/ or e2e/specs/, or a
+ * set built into the app (a .json under src-tauri/src/):
  *   - names a folder where private question sets or histories are kept, or
  *   - contains a line whose hash is in a list of private lines.
  *
@@ -20,7 +21,12 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ROOTS = ["tools", join("e2e", "fixtures")];
+const ROOTS = ["tools", join("e2e", "fixtures"), join("e2e", "specs")];
+/** The sets built into the app (the memory check, the truth matrix's
+ *  made-up history, the prompt profiles): they ship to every computer and
+ *  appear in reports people send, so they are held to the same rule. */
+const BUILT_IN = join("src-tauri", "src");
+const isBuiltInSet = (name) => name.endsWith(".json");
 /** Folder names that mark a private store. Built from parts so this file
  *  does not trip its own check when it is scanned from another root. */
 const PRIVATE_MARKS = [["flowsta", "kept"].join("-"), ["memory", "exploration"].join("-")];
@@ -57,8 +63,9 @@ const listPath = process.env.YOAI_PRIVATE_LINE_HASHES;
 const privateLines = listPath && existsSync(listPath) ? new Set(readFileSync(listPath, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)) : null;
 
 const problems = [];
-for (const root of ROOTS) {
-  for (const path of files(join(REPO, root))) {
+const scanned = [...ROOTS.flatMap((root) => files(join(REPO, root))), ...files(join(REPO, BUILT_IN)).filter(isBuiltInSet)];
+{
+  for (const path of scanned) {
     const body = text(path);
     if (body === null) continue;
     const rel = relative(REPO, path);
