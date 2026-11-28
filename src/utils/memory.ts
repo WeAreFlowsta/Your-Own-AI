@@ -341,7 +341,12 @@ export interface TurnMemory {
   /** What the reply is given, recorded with it (the search's report and
    *  pointers to the exchanges). Null when memory gave no block. */
   given: Record<string, unknown> | null;
+  /** The passages given, as text (one per exchange of `given`, then any
+   *  dated lines). In memory only, for the quote check and the panel. */
+  givenTexts: string[];
 }
+
+export type { WhyNot, ReplyLine } from "./givenLine";
 
 /** What the search block is sized by, known once the model is chosen. */
 export interface TurnRoom {

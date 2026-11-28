@@ -18,6 +18,9 @@ import CodePanel, { SHELL_LANGUAGES, commandText } from './CodePanel';
 import { AgentWorkingBox } from './AgentWorkingBox';
 import ThemeAwareLottie from './ThemeAwareLottie';
 import LiquidMetalButton from './LiquidMetalButton';
+import GivenPanel from './GivenPanel';
+import { invoke } from '@tauri-apps/api/core';
+import { givenLineWords } from '../utils/givenLine';
 import type { RememberHandle } from '../utils/rememberText';
 import { looksLikeInstruction } from '../utils/memory';
 
@@ -312,7 +315,7 @@ interface ActionBarProps {
 const MIN_THINKING_DISPLAY_CHARS = 100;
 
 const ActionBar = component$<ActionBarProps>((props) => {
-  const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | null>(null);
+  const openSection = useSignal<'tokens' | 'thoughts' | 'sources' | 'model' | 'given' | null>(null);
   /** '' | 'saving' | 'saved' | 'error' - the Remember button's state. Saved is
    *  a TOGGLE: clicking again forgets the save (via the kept handle). */
   const rememberState = useSignal('');
@@ -436,7 +439,7 @@ const ActionBar = component$<ActionBarProps>((props) => {
     return null;
   }
 
-  const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources' | 'model') => {
+  const toggleSection$ = $((section: 'tokens' | 'thoughts' | 'sources' | 'model' | 'given') => {
     openSection.value = openSection.value === section ? null : section;
   });
 
@@ -725,6 +728,33 @@ const ActionBar = component$<ActionBarProps>((props) => {
         )}
       </div>
 
+      {/* The line under a reply: what memory gave it, in one sentence,
+          with the passages one step away. */}
+      {props.message.givenLine && !props.message.isLoading && (() => {
+        const w = givenLineWords(props.message.givenLine!, props.message.aiLabel || 'This AI');
+        return (
+          <div class="px-4 pb-3 -mt-1 text-xs text-[var(--text-secondary)]" data-testid="given-line" data-kind={props.message.givenLine!.kind}>
+            {w.label && <div class="text-[var(--text-muted)]">{w.label}</div>}
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>{w.text}</span>
+              {w.show && !!props.message.given && (
+                <button type="button" class="underline" data-testid="given-show" aria-expanded={openSection.value === 'given'} onClick$={() => toggleSection$('given')}>
+                  {openSection.value === 'given' ? 'Hide' : 'Show'}
+                </button>
+              )}
+              {w.readRest && (
+                <button type="button" class="underline" data-testid="given-read-rest" onClick$={() => invoke('memory_read_now', { on: true })}>
+                  Read the rest now
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+      {openSection.value === 'given' && !!props.message.given && (
+        <GivenPanel given={props.message.given} ai={props.message.aiLabel || 'This AI'} />
+      )}
+
       {openSection.value === 'model' && hasModelInfo && (
         <div class="px-4 pb-4 -mt-2">
           <div class="pt-4 text-sm text-[var(--text-secondary)]">
@@ -741,6 +771,13 @@ const ActionBar = component$<ActionBarProps>((props) => {
             {props.message.memoryLine && (
               <p class="text-xs mt-1.5" data-testid="memory-line" title="What this AI was reminded of for this answer - open Your Memory to change it">
                 {props.message.memoryLine}
+              </p>
+            )}
+            {!!props.message.given && (
+              <p class="text-xs mt-1.5">
+                <button type="button" class="underline" data-testid="given-open" onClick$={() => { openSection.value = 'given'; }}>
+                  What {props.message.aiLabel || 'this AI'} was given
+                </button>
               </p>
             )}
             {!!props.message.skills?.length && (

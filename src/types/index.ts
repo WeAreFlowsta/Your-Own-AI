@@ -245,6 +245,12 @@ export interface Message {
   memoryLine?: string;
   /** What memory gave this reply, as recorded with it. */
   given?: Record<string, unknown>;
+  /** The line this reply gets under it (see `ReplyLine` in utils/memory). */
+  givenLine?: import("../utils/memory").ReplyLine;
+  /** The passages given, as text. In memory only, never recorded. */
+  givenLive?: string[];
+  /** Quotations in the reply that are in nothing it was given. */
+  quotesNotGiven?: string[];
   /** The classified routing task at send time — reused when the user retries
    *  this turn online or on device. */
   routingTask?: string;
@@ -522,6 +528,8 @@ export interface HolochainTranscriptEntry {
   /** What memory gave the reply: the search's report and pointers to the
    *  exchanges (never their text). Null on replies from before it was kept. */
   given?: Record<string, unknown> | null;
+  /** The line the reply gets under it, worked out from that record. */
+  given_line?: import("../utils/memory").ReplyLine | null;
   /** Agent turn: the working log ({ items, stats }) - restores the rail on
    *  resume. Client-side schema; old entries read back null. */
   agent_log?: { items?: AgentLogItem[]; stats?: Message['agentStats']; surface?: 'project' | 'tools' } | null;

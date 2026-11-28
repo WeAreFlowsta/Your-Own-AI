@@ -207,6 +207,43 @@ pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit]) -> Result<(Vec<crate::mem
     Ok((out, hidden))
 }
 
+/// What a reply was given, read again from its record: each pointer
+/// looked up among the conversations on this device, the block rebuilt and
+/// compared with its recorded fingerprint. A conversation is named by its
+/// start (and, where two share one, by the message's own time), which is
+/// the same on every device and after a restore.
+#[tauri::command]
+pub fn memory_given_texts(app: AppHandle, given: crate::memory_block::GivenRecord) -> Result<crate::memory_block::Panel, String> {
+    use crate::memory_block::{Now, Ptr};
+    let cached = crate::transcript_search::cached_conversations(&app)?;
+    let deleted: std::collections::HashSet<i64> = crate::conversation_cache::deleted_ledger(&app).into_iter().map(|d| d.started_at).collect();
+    let read: std::cell::RefCell<std::collections::HashMap<String, Vec<crate::transcript_search::CachedEntry>>> = Default::default();
+    let at = |p: &Ptr| -> Now {
+        let mut gone = if deleted.contains(&p.c) { Now::Deleted } else { Now::NotHere };
+        for c in cached.iter().filter(|c| c.started_at == p.c) {
+            let mut read = read.borrow_mut();
+            let entries = read.entry(c.k.clone()).or_insert_with(|| crate::transcript_search::cached_entries(&app, &c.k, 0).unwrap_or_default());
+            let Some(e) = entries.iter().find(|e| e.seq == p.s) else { continue };
+            let here = Now::Here {
+                by_person: e.role == "user",
+                text: crate::secret_mask::hand_on(&e.content).text,
+                title: c.title.clone().unwrap_or_default(),
+                ai_name: Some(c.ai_name.clone()).filter(|n| !n.is_empty()),
+                project: None,
+                conversation_id: c.hash.clone(),
+            };
+            // The message with this very time is the one; another
+            // conversation with the same start stands in only if none has.
+            if e.at == p.t {
+                return here;
+            }
+            gone = here;
+        }
+        gone
+    };
+    Ok(crate::memory_block::rebuild(&given, &at, crate::memory_block::Wording::shipped()))
+}
+
 /// How many passages the index holds in memory.
 pub(crate) fn passages(app: &AppHandle) -> usize {
     with_index(app, |open, _| Ok(open.cache.passages())).unwrap_or(0)

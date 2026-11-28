@@ -315,6 +315,10 @@ pub(crate) struct TurnMemory {
     pub bare_knowledge: bool,
     /// What the reply is given, to be recorded with it.
     pub given: Option<crate::memory_block::GivenRecord>,
+    /// The passages given, as text, one per exchange in `given` and then
+    /// the dated lines. For this turn only, in memory: the reply's
+    /// quotations are checked against them and the panel shows them.
+    pub given_texts: Vec<String>,
 }
 
 /// `Today is YYYY-MM-DD.` for a date.
@@ -436,14 +440,14 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     });
     let (y, m, d) = local_date();
     let today = date_line(y, m, d);
-    let (before_question, given) = if beside && asked && !input.skip_search {
-        let (text, mut record) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
+    let (before_question, given, given_texts) = if beside && asked && !input.skip_search {
+        let (text, mut record, texts) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
         if let Some(r) = record.as_mut() {
             r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
         }
-        (text, record)
+        (text, record, texts)
     } else {
-        (None, None)
+        (None, None, Vec::new())
     };
     TurnMemory {
         system_part: format!("{text}\n{today}"),
@@ -453,6 +457,7 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         bare_notes: facts.iter().filter(live_note).any(|f| !f.embedding.as_ref().is_some_and(|v| !v.is_empty())),
         bare_knowledge: recall.as_deref().is_some_and(|r| r.iter().any(|e| e.kind == "authored" && e.source.is_none() && e.vector.is_empty())),
         given,
+        given_texts,
     }
 }
 
@@ -492,11 +497,11 @@ async fn found_beside(
     facts: &[crate::memory::MemoryFact],
     recall: Option<&[TranscriptEmbedding]>,
     today: &str,
-) -> (Option<String>, Option<crate::memory_block::GivenRecord>) {
+) -> (Option<String>, Option<crate::memory_block::GivenRecord>, Vec<String>) {
     use crate::memory_block::{self as mb, About, GivenRecord, SearchReport, WhyNot, Wording};
     let wording = Wording::shipped();
     let record = |search: SearchReport| GivenRecord { v: 1, search, mask_version: crate::secret_mask::MASK_VERSION.to_string(), cut_version: mb::CUT_VERSION.to_string(), ..Default::default() };
-    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })));
+    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })), Vec::new());
     if !stores_open {
         return not_run(WhyNot::VaultLocked);
     }
@@ -505,7 +510,7 @@ async fn found_beside(
     let notes: Vec<&crate::memory::MemoryFact> = facts.iter().filter(|f| f.valid_to.is_none() && f.entry_kind == "note" && f.embedding.as_ref().is_some_and(|v| !v.is_empty())).collect();
     let knowledge: Vec<&TranscriptEmbedding> = recall.unwrap_or(&[]).iter().filter(|e| e.kind == "authored" && !e.vector.is_empty()).collect();
     if passages == 0 && reading.total == 0 && notes.is_empty() && knowledge.is_empty() {
-        return (None, None);
+        return (None, None, Vec::new());
     }
     if crate::memory_reading::rebuilding(app) {
         return not_run(WhyNot::IndexRebuilding);
@@ -569,10 +574,12 @@ async fn found_beside(
     let room = input.room_tokens.map(|t| t as usize * 3);
     let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
-    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string() });
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string(), partial_percent: partial });
     rec.exchanges = b.given;
+    rec.lines = b.lines;
+    rec.block = mb::fingerprint(&b.text);
     rec.masked = hidden;
-    (Some(b.text), Some(rec))
+    (Some(b.text), Some(rec), b.texts)
 }
 
 /// The chat page's door to the builder. While the stores are still opening

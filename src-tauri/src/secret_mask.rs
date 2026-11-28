@@ -435,7 +435,11 @@ fn in_word(start: usize, word: &str, found: &mut Vec<Found>) {
 fn token_kind(piece: &str) -> Option<Kind> {
     for (prefix, least) in PREFIXES {
         if let Some(rest) = piece.strip_prefix(prefix) {
-            if rest.len() >= least && rest.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-.".contains(&c)) && !is_wordy(rest) {
+            // "sk-" also starts ordinary names (a package, a slug): there
+            // the rest must not read as words. The other prefixes are
+            // particular enough to stand by themselves.
+            let particular = prefix != "sk-";
+            if rest.len() >= least && rest.bytes().all(|c| c.is_ascii_alphanumeric() || b"_-.".contains(&c)) && (particular || !is_wordy(rest)) {
                 return Some(Kind::PrefixedToken);
             }
         }
@@ -634,6 +638,34 @@ mod tests {
     }
 
     #[test]
+    fn the_secrets_planted_in_the_made_up_history_are_masked() {
+        let history: serde_json::Value = serde_json::from_str(include_str!("../../e2e/fixtures/memory/history.json")).unwrap();
+        let planted: serde_json::Value = serde_json::from_str(include_str!("../../e2e/fixtures/memory/secrets.json")).unwrap();
+        let secrets = planted["secrets"].as_array().unwrap();
+        assert!(secrets.len() >= 2);
+        for s in secrets {
+            let (secret, conv, seq) = (s["text"].as_str().unwrap(), s["in"].as_str().unwrap(), s["seq"].as_u64().unwrap() as usize);
+            let c = history["conversations"].as_array().unwrap().iter().find(|c| c["id"] == conv).expect("the conversation");
+            let text = c["messages"][seq]["text"].as_str().unwrap();
+            assert!(text.contains(secret), "{conv} seq {seq} holds the secret");
+            let m = masked(text);
+            assert!(!m.text.contains(secret) && m.hidden >= 1, "not masked in: {text}");
+            // The words around it are still there.
+            assert!(m.text.len() > HIDDEN.len() + 10, "{}", m.text);
+        }
+        // And nothing else in the made-up history is touched.
+        let mut touched = 0;
+        let mut messages = 0;
+        for c in history["conversations"].as_array().unwrap() {
+            for m in c["messages"].as_array().unwrap() {
+                messages += 1;
+                touched += usize::from(masked(m["text"].as_str().unwrap()).hidden > 0);
+            }
+        }
+        assert_eq!((touched, messages >= 60), (secrets.len(), true), "only the planted secrets are masked");
+    }
+
+    #[test]
     fn recovery_words_are_masked_as_one_phrase() {
         let twelve = "legal winner thank year wave sausage worth useful legal winner thank yellow";
         let m = masked(&format!("My recovery words are {twelve} - keep them safe."));
@@ -720,6 +752,7 @@ mod tests {
             "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
             "\"integrity\": \"sha512-Kq5sNclPz7QV2+lfQIuc6R7oRu0=\"",
             "see src-tauri/src/inference_server.rs:1485 and e2e/specs/models/memory-rules.e2e.ts",
+            "pip install sk-learn-contrib-extensions-toolkit and scikit-image",
             "https://docs.example.com/document/d/1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd/edit",
             "call getUserAccountSettingsById2 then handleConversationImportAdopt3",
             "screenshot_2026-11-24_at_10.11.12_conversation_list.png",
