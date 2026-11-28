@@ -71,6 +71,10 @@ type Held = {
 const items = () => invoke<ItemSeen[]>("memory_items");
 const ruleTexts = async (scope: string) => (await invoke<{ kind: string; text: string }[]>("list_memory_rows", { agentKey: null, scope })).filter((r) => r.kind === "rule" && r.text.startsWith("Replace test")).map((r) => r.text).sort();
 
+// An object written with its keys in order: the same value reads the same
+// whatever order its keys arrived in.
+const sorted = (v: unknown) => JSON.stringify(v, v && typeof v === "object" ? Object.keys(v as object).sort() : undefined);
+
 // Everything memory holds, in a shape that reads the same on both computers.
 async function held(): Promise<Held> {
   const all = (await items()).filter((i) => i.text.startsWith("Replace test"));
@@ -81,7 +85,7 @@ async function held(): Promise<Held> {
     uses.push({ startedAt, private: u.private, excluded: u.excluded ?? [], audience: u.audience ?? null });
   }
   return {
-    items: all.map((i) => ({ id: i.id, text: i.text, savedBy: i.savedBy, state: i.item.state, confirmed: i.item.confirmed?.how ?? null, subject: i.item.subject ?? null, audience: JSON.stringify(i.item.audience ?? null) })).sort((a, b) => a.id.localeCompare(b.id)),
+    items: all.map((i) => ({ id: i.id, text: i.text, savedBy: i.savedBy, state: i.item.state, confirmed: i.item.confirmed?.how ?? null, subject: i.item.subject ?? null, audience: sorted(i.item.audience ?? null) })).sort((a, b) => a.id.localeCompare(b.id)),
     rules: await ruleTexts("person"),
     projectRules: await ruleTexts(`project:${PROJECT}`),
     subjects: map.subjects.map((s) => ({ id: s.id, name: s.name, items: s.items })).sort((a, b) => a.id.localeCompare(b.id)),

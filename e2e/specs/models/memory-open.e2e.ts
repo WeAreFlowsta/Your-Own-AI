@@ -49,7 +49,10 @@ async function openBoard() {
   await (await $('[data-testid="chat-input"]')).waitForDisplayed({ timeout: 60_000 });
   await browser.url("tauri://localhost/your-memory/#open");
   await browser.waitUntil(async () => (await browser.execute(() => location.pathname)) === "/your-memory/", { timeout: 30_000, timeoutMsg: "Memory did not open" });
-  await (await $('[data-testid="open-board"]')).waitForExist({ timeout: 60_000 });
+  await (await $('[data-testid="open-board"]')).waitForExist({ timeout: 60_000 }).catch(async (e) => {
+    console.log(`e2e: the Open board did not show; the address is ${await browser.execute(() => location.href)}`);
+    throw e;
+  });
 }
 
 describe("the Open board", () => {
