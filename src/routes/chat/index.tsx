@@ -1418,9 +1418,15 @@ export default component$(() => {
         !aiModel.startsWith("auto:") &&
         !aiModel.startsWith("online:") &&
         !aiModel.startsWith("external:");
+      // The remembered pick counts only while its file is still on this
+      // computer: a model removed since would load nothing and leave the
+      // chat without one.
+      const remembered = localStorage.getItem("currentModel");
       const targetModel = isLocalFile && models.some((m) => m.name === aiModel)
         ? aiModel
-        : localStorage.getItem("currentModel") || models[0].name;
+        : remembered && models.some((m) => m.name === remembered)
+          ? remembered
+          : models[0].name;
 
       // Check if this model is already loaded and ready (e.g. returning from another page)
       // Verify via Rust state that the model is actually loaded, not just that the server is healthy
