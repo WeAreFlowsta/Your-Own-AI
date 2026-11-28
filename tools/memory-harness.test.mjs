@@ -254,3 +254,24 @@ test("a found message counts when it is at the answer's place, give or take two 
   assert.throws(() => answerPlaces(questions, { conversations: [] }), /conv-b02/);
   assert.deepEqual(findCounts([{ n: 1, rank: 3 }, { n: 2, rank: null }, { n: 4, rank: 12 }, { n: 5, rank: 13 }]), { questions: 4, first3: 1, first12: 2, missed: [2, 5] });
 });
+
+test("the person's turn is put together in one order, with one marker", async () => {
+  // The page's own function, read from its source (it has no other imports).
+  const ts = (await import("typescript")).default;
+  const src = readFileSync(join(repo, "src", "utils", "turnWire.ts"), "utf8");
+  const js = ts.transpileModule(src, { compilerOptions: { module: "ESNext", target: "ES2020" } }).outputText;
+  const { assembleUserTurn } = await import("data:text/javascript;base64," + Buffer.from(js).toString("base64"));
+  const q = "Which mill do we use?";
+  assert.equal(assembleUserTurn({ question: q }), q, "nothing rides along: the question as typed");
+  assert.equal(assembleUserTurn({ question: q, before: "", after: "  " }), q);
+  // The memory block alone: the measured form, no marker.
+  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]" }), `[From memory. x]\n\n${q}`);
+  assert.equal(assembleUserTurn({ question: q, before: "[From memory. x]", after: "[From memory, the state record y]" }), `[From memory. x]\n\n${q}\n\n[From memory, the state record y]`);
+  // A file alone is what it was before memory came beside it.
+  assert.equal(assembleUserTurn({ question: q, file: "[file]" }), `[file]\n\n[User question]\n${q}`);
+  // Everything: file, pages, document passages, memory, the marker once, the question, the note.
+  const all = assembleUserTurn({ file: "[file]", pages: "[pages]", docs: "[docs]", before: "[From memory. x]", question: q, after: "[note]" });
+  assert.equal(all, `[file]\n\n[pages]\n\n[docs]\n\n[From memory. x]\n\n[User question]\n${q}\n\n[note]`);
+  assert.equal(all.split("[User question]").length, 2, "the marker stands once");
+  assert.ok(all.indexOf("[From memory. x]") < all.indexOf(q) && all.indexOf(q) < all.indexOf("[note]"));
+});

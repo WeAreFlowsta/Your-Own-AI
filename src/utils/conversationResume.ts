@@ -193,6 +193,7 @@ export async function loadConversationMessages(
       routingReason: e.routing_reason || undefined,
       stopped: e.stopped || undefined,
       routingTask: e.routing_task || undefined,
+      given: e.given || undefined,
       // What the reply drew on comes back too. It was recorded all along and
       // never restored, so a reopened conversation had no Sources button:
       // web links, quotes tied to an attached file, and the AI's own

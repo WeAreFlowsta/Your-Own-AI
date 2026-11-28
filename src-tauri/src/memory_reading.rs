@@ -168,6 +168,55 @@ pub(crate) fn places(app: &AppHandle, hits: &[Hit]) -> Result<Vec<FoundMessage>,
     Ok(out)
 }
 
+/// The hits of a search as whole exchanges: each found message with the
+/// message before it and the one after, every text with its secrets
+/// hidden. Also answers how many secrets were hidden.
+pub(crate) fn exchanges(app: &AppHandle, hits: &[Hit]) -> Result<(Vec<crate::memory_block::Exchange>, u32), String> {
+    use crate::memory_block::{Exchange, Said};
+    let cached = crate::transcript_search::cached_conversations(app)?;
+    let mut read: std::collections::HashMap<String, Vec<crate::transcript_search::CachedEntry>> = std::collections::HashMap::new();
+    let mut hidden = 0u32;
+    let mut out = Vec::with_capacity(hits.len());
+    for h in hits {
+        let Some(c) = cached.iter().find(|c| c.k == h.k) else { continue };
+        if !read.contains_key(&h.k) {
+            let said: Vec<_> = crate::transcript_search::cached_entries(app, &h.k, 0)?.into_iter().filter(|e| e.role == "user" || e.role == "assistant").collect();
+            read.insert(h.k.clone(), said);
+        }
+        let entries = &read[&h.k];
+        let Some(x) = entries.iter().position(|e| e.seq == h.seq) else { continue };
+        let mut said = |e: &crate::transcript_search::CachedEntry| {
+            let m = crate::secret_mask::hand_on(&e.content);
+            hidden += m.hidden;
+            Said { by_person: e.role == "user", text: m.text, seq: e.seq, at: e.at }
+        };
+        let before = (x > 0).then(|| said(&entries[x - 1]));
+        let hit = said(&entries[x]);
+        let after = entries.get(x + 1).map(&mut said);
+        out.push(Exchange {
+            conversation: c.started_at,
+            title: c.title.clone().unwrap_or_default(),
+            ai_name: Some(c.ai_name.clone()).filter(|n| !n.is_empty()),
+            project: None,
+            before,
+            hit,
+            after,
+            score: h.score,
+        });
+    }
+    Ok((out, hidden))
+}
+
+/// How many passages the index holds in memory.
+pub(crate) fn passages(app: &AppHandle) -> usize {
+    with_index(app, |open, _| Ok(open.cache.passages())).unwrap_or(0)
+}
+
+/// Is the index being built again after it could not be read?
+pub(crate) fn rebuilding(app: &AppHandle) -> bool {
+    with_index(app, |open, _| Ok(open.opened == Opened::Rebuilt && open.cache.passages() == 0)).unwrap_or(false)
+}
+
 #[tauri::command]
 pub fn memory_reading_status() -> Status {
     let mut s = STATUS.lock().unwrap_or_else(|e| e.into_inner()).clone().unwrap_or_default();

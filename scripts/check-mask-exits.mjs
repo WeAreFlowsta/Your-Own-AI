@@ -14,6 +14,10 @@ import { fileURLToPath } from "node:url";
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const EXITS = [
   { what: "what memory adds to a request, on every path", file: "src-tauri/src/memory_prompt.rs", at: "pub(crate) fn block(held: &Held)", call: "secret_mask::hand_on(", within: 4 },
+  { what: "the text embedded for memory's index", file: "src-tauri/src/memory_reading.rs", at: "// What is embedded is what may be found: the masked text.", call: "secret_mask::hand_on(", within: 1 },
+  { what: "found exchanges on their way into a block", file: "src-tauri/src/memory_reading.rs", at: "let mut said = |e: &crate::transcript_search::CachedEntry| {", call: "secret_mask::hand_on(", within: 1 },
+  { what: "saved notes found for a question", file: "src-tauri/src/memory_prompt.rs", at: "for (n, _) in scored.into_iter().take(NOTES_AT_MOST) {", call: "secret_mask::hand_on(", within: 1 },
+  { what: "knowledge given to an AI, found for a question", file: "src-tauri/src/memory_prompt.rs", at: "for text in closest(knowledge.iter().copied(), &question) {", call: "secret_mask::hand_on(", within: 2 },
   { what: "document passages given to a model", file: "src-tauri/src/corpus.rs", at: "out.push(RecallHit {", call: "secret_mask::hand_on(", within: 8 },
   { what: "the digest a resumed session starts from", file: "src/hooks/useAgentSession.ts", at: "buildResumeDigest(props.chatState.messages.slice(0, -2))", call: "maskText(", within: 0 },
   { what: "the session digest kept as memory", file: "src/hooks/useAgentSession.ts", at: "const distillMemory$ = $(async (folderPath: string, rawDigest: string) => {", call: "maskText(rawDigest)", within: 4 },

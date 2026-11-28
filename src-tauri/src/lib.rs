@@ -22,6 +22,7 @@ mod memory_prompt;        // everything memory adds to a request, built in one p
 mod secret_mask;          // passwords and keys are hidden before text leaves its conversation
 mod memory_index;         // memory's search index: vectors and pointers for every conversation, never text
 mod memory_reading;       // the background job that keeps the index level with the conversations
+mod memory_block;         // the search results placed ahead of the question: exchanges, the report, the rule
 mod diagnostics;          // one-click diagnostic report (Settings > Help & diagnostics)
 mod llm;                  // llama-server module
 mod tuning;               // per-model fine-tune overrides (FINE_TUNE_PANEL layer 2)

@@ -13,8 +13,7 @@
 //   YOAI_MEMORY_OUT       folder for replies.jsonl (default: a temp folder)
 //   YOAI_MEMORY_ASK       [{ n, question }] (memory-harness.mjs ask-list)
 //   YOAI_MEMORY_HISTORY   a history file to load ("none" loads nothing)
-//   YOAI_MEMORY_STORES    a stores file to seed; without it the indexes are
-//                         built from the history as the app builds them
+//   YOAI_MEMORY_STORES    a stores file to seed (the facts, an older index)
 //   YOAI_MEMORY_PATHS     "chat,port" (default), or one of them
 //   YOAI_MEMORY_SETUP     the setup name the replies carry (default "today")
 import * as fs from "node:fs";
@@ -103,11 +102,7 @@ describe("memory, asked a question set", () => {
       const loaded = await dev("POST", "memory-fixture-load", { path: path.resolve(HISTORY), all: ai.id, model });
       console.log(`e2e: history: ${loaded.conversations} conversation(s), ${loaded.messages} message(s) written, ${loaded.skipped} already there, ${Math.round((Date.now() - started) / 1000)} s`);
     }
-    const stores = STORES
-      ? await dev("POST", "memory-stores", { do: "seed", path: path.resolve(STORES), all: ai.id })
-      : HISTORY !== "none"
-        ? await dev("POST", "memory-stores", { do: "build", path: path.resolve(HISTORY), all: ai.id })
-        : {};
+    const stores = STORES ? await dev("POST", "memory-stores", { do: "seed", path: path.resolve(STORES), all: ai.id }) : {};
     console.log(`e2e: memory stores: ${JSON.stringify(stores)}`);
     const kept = await dev("POST", "memory-stores", { do: "keep" });
     console.log(`e2e: ${kept.kept} store file(s) kept as the starting state`);

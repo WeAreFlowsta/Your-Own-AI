@@ -273,6 +273,27 @@ pub(crate) struct TurnInput {
     pub question_vector: Option<Vec<f32>>,
     #[serde(default)]
     pub embed_here: bool,
+    /// The window the reply is made in, in tokens, and whether the model
+    /// is an online one: they set how much the search block may hold.
+    #[serde(default)]
+    pub window_tokens: Option<u32>,
+    #[serde(default)]
+    pub online: bool,
+    /// What the turn has left after the system prompt, the history and
+    /// the reply's reserve, when the sender has counted it.
+    #[serde(default)]
+    pub room_tokens: Option<u32>,
+    /// The person's question before this one, in the open conversation.
+    #[serde(default)]
+    pub previous_question: Option<String>,
+    /// The first sequence of the open conversation that is being sent with
+    /// this turn: messages from there on are not "found".
+    #[serde(default)]
+    pub on_wire_from: Option<u32>,
+    /// Build the system part only: no search (the early call of a turn,
+    /// made before the model and its window are known).
+    #[serde(default)]
+    pub skip_search: bool,
 }
 
 /// What memory adds to a turn.
@@ -292,6 +313,8 @@ pub(crate) struct TurnMemory {
     pub bare_notes: bool,
     /// Knowledge given to the AI has no embedding yet.
     pub bare_knowledge: bool,
+    /// What the reply is given, to be recorded with it.
+    pub given: Option<crate::memory_block::GivenRecord>,
 }
 
 /// `Today is YYYY-MM-DD.` for a date.
@@ -394,7 +417,10 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
     let asked = !input.question.trim().is_empty();
     let live_note = |f: &&crate::memory::MemoryFact| f.valid_to.is_none() && f.entry_kind == "note";
     let has_notes = facts.iter().filter(live_note).any(|f| f.embedding.as_ref().is_some_and(|v| !v.is_empty()));
-    let question_vector = match (asked, input.question_vector) {
+    // A turn typed to an AI gets what memory found beside the question; an
+    // agent's step still gets it in the system part.
+    let beside = matches!(input.surface, Surface::Chat | Surface::ApiPersona);
+    let question_vector = match (asked && !beside, input.question_vector.clone()) {
         (false, _) => None,
         (true, Some(v)) => Some(v),
         (true, None) if input.embed_here && (has_notes || recall.is_some()) => crate::inference_memory::embed_question(app, &input.question).await,
@@ -409,14 +435,144 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         conversation: input.conversation.as_deref().filter(|c| !c.is_empty()),
     });
     let (y, m, d) = local_date();
+    let today = date_line(y, m, d);
+    let (before_question, given) = if beside && asked && !input.skip_search {
+        let (text, mut record) = found_beside(app, &input, key.is_some(), &facts, recall.as_deref(), &today).await;
+        if let Some(r) = record.as_mut() {
+            r.also = crate::memory_block::Also { rules: counts.rules as u32, commands: counts.commands as u32, locations: counts.locations as u32, facts: counts.facts as u32 };
+        }
+        (text, record)
+    } else {
+        (None, None)
+    };
     TurnMemory {
-        system_part: format!("{text}\n{}", date_line(y, m, d)),
-        before_question: None,
+        system_part: format!("{text}\n{today}"),
+        before_question,
         after_question: None,
         counts,
         bare_notes: facts.iter().filter(live_note).any(|f| !f.embedding.as_ref().is_some_and(|v| !v.is_empty())),
         bare_knowledge: recall.as_deref().is_some_and(|r| r.iter().any(|e| e.kind == "authored" && e.source.is_none() && e.vector.is_empty())),
+        given,
     }
+}
+
+/// A question short enough to lean on the one before it is also searched
+/// together with that one.
+pub(crate) fn follow_up_query(previous: Option<&str>, question: &str) -> Option<String> {
+    let (prev, q) = (previous.unwrap_or("").trim(), question.trim());
+    if prev.is_empty() || q.is_empty() || q.chars().count() > 200 {
+        return None;
+    }
+    Some(format!("{}\n{q}", prev.chars().take(400).collect::<String>()))
+}
+
+/// Two searches as one: each message once, at its better score, best first.
+pub(crate) fn merge_hits(a: Vec<crate::memory_index::Hit>, b: Vec<crate::memory_index::Hit>, at_most: usize) -> Vec<crate::memory_index::Hit> {
+    let mut all: Vec<crate::memory_index::Hit> = Vec::new();
+    for h in a.into_iter().chain(b) {
+        match all.iter_mut().find(|x| x.k == h.k && x.seq == h.seq) {
+            Some(x) if h.score > x.score => *x = h,
+            Some(_) => {}
+            None => all.push(h),
+        }
+    }
+    all.sort_by(|x, y| y.score.partial_cmp(&x.score).unwrap_or(std::cmp::Ordering::Equal));
+    all.truncate(at_most);
+    all
+}
+
+/// What memory found for the question, as the block that goes ahead of it,
+/// with the record of what was given. No block at all when there is
+/// nothing to search: a first message is answered as if memory were not
+/// there.
+async fn found_beside(
+    app: &tauri::AppHandle,
+    input: &TurnInput,
+    stores_open: bool,
+    facts: &[crate::memory::MemoryFact],
+    recall: Option<&[TranscriptEmbedding]>,
+    today: &str,
+) -> (Option<String>, Option<crate::memory_block::GivenRecord>) {
+    use crate::memory_block::{self as mb, About, GivenRecord, SearchReport, WhyNot, Wording};
+    let wording = Wording::shipped();
+    let record = |search: SearchReport| GivenRecord { v: 1, search, mask_version: crate::secret_mask::MASK_VERSION.to_string(), cut_version: mb::CUT_VERSION.to_string(), ..Default::default() };
+    let not_run = |why: WhyNot| (Some(mb::did_not_run(why, today, wording)), Some(record(SearchReport { ran: false, why_not: Some(why), today: today.to_string(), ..Default::default() })));
+    if !stores_open {
+        return not_run(WhyNot::VaultLocked);
+    }
+    let reading = crate::memory_reading::memory_reading_status();
+    let passages = crate::memory_reading::passages(app);
+    let notes: Vec<&crate::memory::MemoryFact> = facts.iter().filter(|f| f.valid_to.is_none() && f.entry_kind == "note" && f.embedding.as_ref().is_some_and(|v| !v.is_empty())).collect();
+    let knowledge: Vec<&TranscriptEmbedding> = recall.unwrap_or(&[]).iter().filter(|e| e.kind == "authored" && !e.vector.is_empty()).collect();
+    if passages == 0 && reading.total == 0 && notes.is_empty() && knowledge.is_empty() {
+        return (None, None);
+    }
+    if crate::memory_reading::rebuilding(app) {
+        return not_run(WhyNot::IndexRebuilding);
+    }
+    let question = match &input.question_vector {
+        Some(v) => v.clone(),
+        None if input.embed_here => match crate::inference_memory::embed_for_search(app, &input.question).await {
+            Ok(v) => v,
+            Err(why) => return not_run(why),
+        },
+        // The sender embeds the question itself and could not.
+        None => return not_run(WhyNot::DidNotStartInTime),
+    };
+    // The open conversation's own messages are already being sent.
+    let open_k = input.conversation.as_deref().filter(|c| !c.is_empty()).and_then(|c| crate::transcript_search::row_key(app, c).ok());
+    let on_wire_from = input.on_wire_from.unwrap_or(0);
+    let keep = |c: &crate::memory_index::Candidate| crate::memory_index::searched_by_default(c) && !(open_k.as_deref() == Some(c.k) && c.seq >= on_wire_from);
+    let at_most = crate::memory_index::FOUND_AT_MOST;
+    let mut hits = match crate::memory_reading::search(app, &question, at_most, &keep) {
+        Ok(f) => f.hits,
+        Err(_) => return not_run(WhyNot::IndexRebuilding),
+    };
+    let follow_up = follow_up_query(input.previous_question.as_deref(), &input.question);
+    let mut followed = false;
+    if let Some(joined) = &follow_up {
+        if let Ok(v) = crate::inference_memory::embed_for_search(app, joined).await {
+            if let Ok(f) = crate::memory_reading::search(app, &v, at_most, &keep) {
+                hits = merge_hits(hits, f.hits, at_most);
+                followed = true;
+            }
+        }
+    }
+    let (exchanges, mut hidden) = crate::memory_reading::exchanges(app, &hits).unwrap_or_default();
+    // Saved notes and knowledge given to this AI, found by the rule they
+    // were always found by, as dated lines.
+    let mut dated: Vec<String> = Vec::new();
+    let mut scored: Vec<(&crate::memory::MemoryFact, f32)> = notes.iter().map(|n| (*n, cosine(&question, n.embedding.as_deref().unwrap_or(&[])))).filter(|(_, s)| *s >= NOTE_FLOOR).collect();
+    by_score(&mut scored);
+    for (n, _) in scored.into_iter().take(NOTES_AT_MOST) {
+        let m = crate::secret_mask::hand_on(&n.value);
+        hidden += m.hidden;
+        dated.push(mb::dated_line(n.updated_at, "a note they saved", &m.text));
+    }
+    for text in closest(knowledge.iter().copied(), &question) {
+        let at = knowledge.iter().find(|e| e.text == text).map(|e| e.created_at).unwrap_or(0);
+        let m = crate::secret_mask::hand_on(text);
+        hidden += m.hidden;
+        dated.push(mb::dated_line(at, "knowledge they gave this AI", &m.text));
+    }
+    // Names in the question that no conversation mentions. When the
+    // keyword index cannot say, nothing is claimed.
+    let absent = mb::absent_names(
+        &input.question,
+        &|name| crate::transcript_search::mentions(app, name).unwrap_or(true),
+        &|name| crate::transcript_search::has_close_spelling(app, name).unwrap_or(true),
+    );
+    let partial = (reading.total > 0 && reading.read < reading.total).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
+    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld: 0, replaced_left_out: false };
+    let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
+    // About three characters to a token, to stay inside the room.
+    let room = input.room_tokens.map(|t| t as usize * 3);
+    let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld: 0, follow_up: followed, today: today.to_string() });
+    rec.exchanges = b.given;
+    rec.masked = hidden;
+    (Some(b.text), Some(rec))
 }
 
 /// The chat page's door to the builder. While the stores are still opening
@@ -586,6 +742,19 @@ mod tests {
         let (text, _) = block_of(&p);
         assert!(text.contains("- The supplier login: password is [hidden: looks like a password or key], keep it."), "{text}");
         assert!(!text.contains("Fl0ur&Water99"));
+    }
+
+    #[test]
+    fn follow_up_searches_with_the_previous_question() {
+        assert_eq!(follow_up_query(Some("What is the free delivery threshold?"), "and when was that?").as_deref(), Some("What is the free delivery threshold?\nand when was that?"));
+        assert_eq!(follow_up_query(None, "and when was that?"), None);
+        assert_eq!(follow_up_query(Some("  "), "and when was that?"), None);
+        assert_eq!(follow_up_query(Some("a question"), &"long ".repeat(50)), None, "a long question stands alone");
+        assert_eq!(follow_up_query(Some(&"p".repeat(500)), "why?").unwrap().chars().count(), 400 + 1 + 4);
+        let hit = |k: &str, seq: u32, score: f32| crate::memory_index::Hit { k: k.into(), seq, role: 0, score, flags: 0 };
+        let merged = merge_hits(vec![hit("a", 1, 0.5), hit("b", 2, 0.4)], vec![hit("b", 2, 0.7), hit("c", 3, 0.45)], 12);
+        assert_eq!(merged.iter().map(|h| (h.k.as_str(), h.score)).collect::<Vec<_>>(), vec![("b", 0.7), ("a", 0.5), ("c", 0.45)]);
+        assert_eq!(merge_hits(vec![hit("a", 1, 0.5), hit("b", 2, 0.4)], vec![hit("c", 3, 0.45)], 2).len(), 2);
     }
 
     #[test]

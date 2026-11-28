@@ -311,38 +311,6 @@ pub(crate) fn seed_stores(app: &tauri::AppHandle, path: &std::path::Path, profil
     Ok(serde_json::json!({ "facts": stores.facts.as_ref().map(Vec::len), "recall": recall }))
 }
 
-/// Build each AI's index of earlier turns from a history file the way the
-/// app builds it as conversations happen: the person's messages, oldest
-/// first, through the same indexing a turn gets. Needs the embedding model.
-pub(crate) async fn build_recall(app: &tauri::AppHandle, path: &std::path::Path, profile_ais: &[serde_json::Value], names: &HashMap<String, String>, all: Option<&str>) -> Result<serde_json::Value, String> {
-    let raw = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let fixture: Fixture = serde_json::from_slice(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
-    let key = data_key(app)?;
-    let mut turns: Vec<(i64, String, &str, &str)> = Vec::new();
-    for c in &fixture.conversations {
-        let id = store_id_for(profile_ais, names, all, &c.ai)?;
-        let started = c.started_at.micros().ok_or_else(|| format!("{}: its start is not a date", c.id))?;
-        for (i, m) in c.messages.iter().enumerate() {
-            if m.role == "user" {
-                let at = m.at.as_ref().and_then(When::micros).unwrap_or(started + i as i64);
-                turns.push((at, id.clone(), &c.id, &m.text));
-            }
-        }
-    }
-    turns.sort_by_key(|t| t.0);
-    let mut asked = 0usize;
-    for (_, id, conversation, text) in &turns {
-        crate::inference_memory::index_turn(app, id, conversation, text).await;
-        asked += 1;
-    }
-    let mut held = serde_json::Map::new();
-    let ids: HashSet<&String> = turns.iter().map(|t| &t.1).collect();
-    for id in ids {
-        held.insert(id.clone(), serde_json::json!(crate::transcript_memory::read_for(app, &key, id)?.len()));
-    }
-    Ok(serde_json::json!({ "turns": asked, "held": held }))
-}
-
 const STORES_KEPT: &str = "memory-stores-kept";
 
 fn is_store_file(name: &str) -> bool {
