@@ -202,7 +202,7 @@ impl Mark {
 const NOT_THERE: &[&str] = &[
     "not in the closest", "nothing that answers", "found nothing", "found no ", "did not find", "didn't find", "could not find", "couldn't find", "can't find", "cannot find", "do not have", "don't have", "no record", "no mention",
     "not mentioned", "wasn't mentioned", "was not mentioned", "does not say", "doesn't say", "do not say", "don't say", "do not see", "don't see", "none of the", "none of these", "not among", "isn't in", "is not in", "not in the exchanges", "not in these",
-    "no information", "look further", "nothing about", "nothing on ", "nothing in ", "nothing here", "not covered", "no exchange", "no prior", "no direct", "no decision", "no figure", "no price", "no date", "not stated", "not specified", "not given", "not recorded",
+    "no information", "no relevant", "look further", "nothing about", "nothing on ", "nothing in ", "nothing here", "not covered", "no exchange", "no prior", "no direct", "no decision", "no figure", "no price", "no date", "not stated", "not specified", "not given", "not recorded",
     "does not state", "doesn't state", "does not give", "doesn't give", "does not mention", "doesn't mention", "do not mention", "don't mention", "do not show", "don't show", "does not appear", "doesn't appear", "never set", "was never",
 ];
 
@@ -218,7 +218,8 @@ fn greets(reply: &str) -> bool {
 /// The mark for a reply. `shown` holds the ids of the exchanges the block
 /// carried for this question.
 pub(crate) fn mark(q: &Question, shown: &[String], reply: &str) -> Mark {
-    let r = reply.to_lowercase();
+    // A model may write the apostrophe either way; the lists hold one.
+    let r = reply.to_lowercase().replace('\u{2019}', "'");
     if r.trim().is_empty() {
         return Mark::Nothing;
     }
@@ -427,6 +428,8 @@ mod tests {
         assert_eq!(mark(&class, &all(&class), "Nothing in this conversation history answers that. I found the July and August classes."), Mark::SaidNotThere);
         let marlow = q("second-workshop");
         assert_eq!(mark(&marlow, &all(&marlow), "No prior decision about a second workshop was mentioned in these exchanges."), Mark::SaidNotThere);
+        assert_eq!(mark(&marlow, &all(&marlow), "No relevant conversation about opening a second workshop was found in these messages."), Mark::SaidNotThere);
+        assert_eq!(mark(&marlow, &all(&marlow), "The conversation doesn\u{2019}t mention a second workshop."), Mark::SaidNotThere);
         assert_eq!(mark(&marlow, &all(&marlow), "Hi. I'm doing fine, thanks for asking. What can I help you with today?"), Mark::OffTheQuestion);
         assert!(Mark::SaidNotThere.good() && Mark::Right.good() && !Mark::AnsweredAnyway.good() && !Mark::Wrong.good());
     }
