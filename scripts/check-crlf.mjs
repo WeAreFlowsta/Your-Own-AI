@@ -23,6 +23,7 @@ const CHECKS = [
   "check-model-picks.mjs",
   "check-no-project-rewrite.mjs",
   "check-parts-step.mjs",
+  "check-open-offer.mjs",
 ];
 // Every check script must be listed here or named as skipped.
 // check-no-e2e-feature reads Cargo.toml and the workflows, not source with line endings to normalise.

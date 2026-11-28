@@ -9,6 +9,7 @@
  */
 
 import { personAsked } from "../utils/personAsking";
+import { LOOK_FURTHER, takesOffer } from "../utils/openOffer";
 import { onlyADateLine, opensWithADateLine, withAPlainCitation } from "../utils/memoryDateLine";
 import { hearInstruction } from "../utils/ruleOffers";
 import { whereWords } from "../utils/givenLine";
@@ -721,6 +722,13 @@ export function useChat(props: UseChatProps) {
       // Fails soft to null; both consumers degrade exactly as before.
       // Background writing on the helper steps aside for this question.
       personAsked();
+      // The offer open above the message box (under the reply before this
+      // message), when this message takes it: "Look further" pressed, or
+      // said in the person's own words. Memory then looks for the question
+      // that reply answered, with everything it finds.
+      const offered = state.messages.filter((m) => m.role === "assistant" && m.id !== assistantId && !m.isLoading).pop()?.lookFurther;
+      const further = offered && takesOffer(LOOK_FURTHER, userInput) ? offered : null;
+      if (further) uiLog("[memory] look further: the question before is searched again, everything found given");
       const queryVecPromise: Promise<number[] | null> = import(
         "../utils/embeddings"
       )
@@ -1771,15 +1779,18 @@ export function useChat(props: UseChatProps) {
           const before = [...state.messages].reverse().find((m) => m.role === "user" && m.content !== userInput)?.content;
           // What memory finds for this question, sized to the room; the
           // documents get the room it leaves.
-          foundMemory = await memoryForTurn(userInput, {
+          foundMemory = await memoryForTurn(further ? further.question : userInput, {
             aiId: selectedAi.id,
             foundingKey: selectedAi.aiConfig?.foundingKey ?? selectedAi.aiConfig?.agentPubKey ?? null,
             conversationHash: state.conversationHash,
-            queryVec: qvec,
+            // Looking further searches for the earlier question, not for
+            // these words: it is embedded where the search runs.
+            queryVec: further ? undefined : qvec,
             room: {
               windowTokens: roomCtx > 0 ? roomCtx : null,
               roomTokens: Number.isFinite(room) ? Math.floor(room) : null,
               model: isOnlineModel || isExternalModel ? null : preferredModel,
+              further: !!further,
               online: isOnlineModel || isExternalModel,
               memoryShared: await sharedNow,
               previousQuestion: before ?? null,
@@ -2195,15 +2206,19 @@ export function useChat(props: UseChatProps) {
         // model): which passages it quoted, which quotes are in none of
         // them, and the line the reply gets.
         let replyLine: ReplyLine | undefined;
+        let lookFurther: { question: string } | undefined;
         let quotesNotGiven: string[] | undefined;
         if (givenRecord) {
-          const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null }>(
+          const checked = await invoke<{ check: { quoted: boolean[]; notGiven: string[] }; given: Record<string, unknown> | null; line: ReplyLine | null; lookFurther?: boolean }>(
             "memory_reply_checked",
             { reply: displayContent, given: givenRecord, texts: foundMemory?.givenTexts ?? [], question: userInput },
           ).catch(() => null);
           if (checked) {
             if (checked.given) givenRecord = checked.given;
             replyLine = checked.line ?? undefined;
+            // Only the closest results were given and the reply used none:
+            // the one offer above the message box, for this reply only.
+            if (checked.lookFurther) lookFurther = { question: further ? further.question : userInput };
             quotesNotGiven = checked.check.notGiven.length ? checked.check.notGiven : undefined;
             // An exchange the reply quoted word for word answered something
             // the person asked: it is kept, once, with no model involved.
@@ -2295,7 +2310,7 @@ export function useChat(props: UseChatProps) {
         // renders it once the reply finishes).
         state.messages = state.messages.map((m) =>
           m.id === assistantId
-            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven }
+            ? { ...m, servedBy: modelName, routingReason: routedReason, routingTask: routedTask, skills: skillsUsed, memoryLine: memoryLine(turnMemory?.counts) ?? undefined, given: givenRecord, givenLine: replyLine, givenLive: foundMemory?.givenTexts?.length ? foundMemory.givenTexts : undefined, quotesNotGiven, lookFurther }
             : m,
         );
         // The root's copy too: a page that folds this reply in later (it

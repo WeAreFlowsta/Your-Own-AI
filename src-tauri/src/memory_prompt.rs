@@ -346,6 +346,10 @@ pub(crate) struct TurnInput {
     /// knows it: what was found is sized to how fast that model reads here.
     #[serde(default)]
     pub model: Option<String>,
+    /// The person asked memory to look further for this question: what was
+    /// found is not held to the wait before the first word.
+    #[serde(default)]
+    pub further: bool,
     /// The person's question before this one, in the open conversation.
     #[serde(default)]
     pub previous_question: Option<String>,
@@ -584,6 +588,10 @@ pub(crate) async fn for_turn(app: &tauri::AppHandle, input: TurnInput) -> TurnMe
         Some(crate::memory_items::SaidControl::Forget) if input.conversation.as_deref().is_some_and(|c| !c.is_empty()) => Some("[The person asked memory to forget what was just said. The app does that, and shows them a line that says what it did. Do not say that you cannot forget.]"),
         _ => None,
     };
+    // "Look further", pressed or said after a reply that was given only
+    // the closest results: this turn carries everything memory found for
+    // the question before it.
+    let told = if input.further { Some("[The person asked you to look further for their question before this one. Everything memory found for it is given above this time. Answer that question from it.]") } else { told };
     let after_question = match (after_question, told) {
         (Some(note), Some(told)) => Some(format!("{note}\n{told}")),
         (None, Some(told)) => Some(told.to_string()),
@@ -875,7 +883,7 @@ async fn found_beside(
     // index within seconds: its own messages are not "the rest".
     const IN_HAND: i64 = 2;
     let partial = (reading.total > 0 && (reading.total as i64) - (reading.read as i64) > IN_HAND).then(|| ((reading.read.max(0) * 100) / reading.total) as u8);
-    let about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: !left_out.is_empty() };
+    let mut about = About { today: today.to_string(), absent_names: absent.clone(), partial_percent: partial, withheld, replaced_left_out: !left_out.is_empty(), closest_only: false };
     let (count, cap) = mb::budget(input.window_tokens.unwrap_or(4096), input.online);
     // About three characters to a token, to stay inside the room.
     let room = input.room_tokens.map(|t| t as usize * 3);
@@ -883,13 +891,21 @@ async fn found_beside(
     // what is given is held to the wait that reading may add. Before a
     // model's speed has been seen here, the smallest count is given.
     let model = input.model.as_deref().filter(|m| crate::read_speed::is_local_file(m));
-    let speed = if input.online { None } else { model.and_then(|m| crate::read_speed::of(app, m)) };
-    let count = if !input.online && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
+    let speed = if input.online || input.further { None } else { model.and_then(|m| crate::read_speed::of(app, m)) };
+    let count = if !input.online && !input.further && model.is_some() && speed.is_none() { count.min(crate::read_speed::UNKNOWN_SPEED_AT_MOST) } else { count };
+    let held_to_the_wait = speed.is_some() || count < mb::budget(input.window_tokens.unwrap_or(4096), input.online).0;
     let (exchanges, room) = mb::within_wait(exchanges, count, room, speed.map(crate::read_speed::wait_chars), wording);
-    let b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    let mut b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    // Fewer given than found, for the wait: the block says so, and that
+    // the person can ask to look further (its words are not counted in
+    // what the wait allows, so the same exchanges are shown).
+    if held_to_the_wait && b.shown > 0 && b.shown < b.found {
+        about.closest_only = true;
+        b = mb::block_with(&exchanges, &dated, &about, count, cap, room, wording);
+    }
     log::info!("[memory] searched for the turn in {} ms ({}); {} of {} given", begun.elapsed().as_millis(), took.iter().map(|(w, ms)| format!("{w} by {ms}")).collect::<Vec<_>>().join(", "), b.shown, b.found);
     let read_share = if reading.total > 0 { reading.read as f32 / reading.total as f32 } else { 1.0 };
-    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial });
+    let mut rec = record(SearchReport { ran: true, why_not: None, found: b.found, given: b.shown, read_share, absent_names: absent, withheld, follow_up: followed, today: today.to_string(), partial_percent: partial, closest_only: about.closest_only });
     rec.exchanges = b.given;
     rec.lines = b.lines;
     rec.block = mb::fingerprint(&b.text);

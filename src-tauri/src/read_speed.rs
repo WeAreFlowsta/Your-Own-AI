@@ -59,6 +59,12 @@ pub(crate) fn is_local_file(model: &str) -> bool {
 
 /// The reading speed last seen for a model file on this computer.
 pub(crate) fn of(app: &tauri::AppHandle, model: &str) -> Option<f64> {
+    // The UI harness tests what a slow computer is given on a fast one: a
+    // debug build may be told a reading speed. A release build never reads it.
+    #[cfg(debug_assertions)]
+    if let Some(s) = std::env::var("YOAI_TEST_READ_SPEED").ok().and_then(|v| v.trim().parse::<f64>().ok()) {
+        return Some(s);
+    }
     speeds(app).lock().ok()?.get(model).copied()
 }
 

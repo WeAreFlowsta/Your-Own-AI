@@ -1,4 +1,5 @@
 import { MEMORY_SHARED_EVENT, type MemorySharedDetail } from "../../components/memory/SentLine";
+import { LOOK_FURTHER } from "../../utils/openOffer";
 import { lastKnownEntitled } from "../../utils/entitlement";
 import { toggleAgentView } from "../../utils/agentView";
 /**
@@ -1955,7 +1956,20 @@ export default component$(() => {
   // Retry, redo on the other side, or - for an AI that carries tools -
   // "Answer again with tools": the direct reply and its question leave the
   // list (as any retry does) and the same question goes through a session.
-  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "project-online" | "project-local" | "project-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper") => {
+  const retryOrTools$ = $(async (id: string, target?: "online" | "device" | "alt" | "tools" | "web-once" | "web-on" | "web-never" | "live-online" | "live-use-online" | "live-never" | "project-online" | "project-local" | "project-never" | "build-install" | "build-dismiss" | "build-never" | "dig-deeper" | "look-further") => {
+    // An open offer's button: its words go as the person's message, by
+    // the same path as typing them.
+    if (target === "look-further") {
+      if (chatState.isLoading) return;
+      const typed = input.value;
+      input.value = LOOK_FURTHER.say;
+      try {
+        await handleSubmit();
+      } finally {
+        if (typed && !input.value) input.value = typed;
+      }
+      return;
+    }
     if (target === "build-install" || target === "build-dismiss" || target === "build-never") {
       // The offer line under a thin-page reply: the existing install flow
       // (consent given by the press; the header shows progress), or quiet.

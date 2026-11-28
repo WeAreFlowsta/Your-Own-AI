@@ -211,6 +211,21 @@ pub struct Checked {
     pub check: QuoteCheck,
     pub given: Option<GivenRecord>,
     pub line: Option<ReplyLine>,
+    /// Offer "Look further": only the closest results were given, and
+    /// the reply used none of them.
+    pub look_further: bool,
+}
+
+/// Is "Look further" worth offering under this reply? Only the closest
+/// of what was found was given (to keep the wait short), and either the
+/// reply says the answer is not there (it was told to say so, and that
+/// they can ask to look further), or it used none of what it was given.
+pub(crate) fn offer_further(given: Option<&GivenRecord>, check: &QuoteCheck, reply: &str) -> bool {
+    let Some(g) = given.filter(|g| g.search.ran && g.search.closest_only) else { return false };
+    let said: String = fold(reply).into_iter().collect();
+    let says_so = ["look further", "closest results", "closest result", "look deeper", "search further"].iter().any(|p| said.contains(p));
+    let used = check.quoted.iter().any(|q| *q) || g.more.get("used").and_then(serde_json::Value::as_bool) == Some(true);
+    says_so || !used
 }
 
 /// The page's door when a reply finishes. `texts` are the passages as the
@@ -232,7 +247,8 @@ pub fn memory_reply_checked(reply: String, given: Option<GivenRecord>, texts: Ve
         g
     });
     let line = line_for(given.as_ref(), &check, &reply);
-    Checked { check, given, line }
+    let look_further = offer_further(given.as_ref(), &check, &reply);
+    Checked { check, given, line, look_further }
 }
 
 /// The words of a text that could only have come from somewhere: figures
@@ -356,6 +372,27 @@ mod tests {
 
     fn ran(found: u32, given: u32) -> SearchReport {
         SearchReport { ran: true, found, given, read_share: 1.0, ..Default::default() }
+    }
+
+    #[test]
+    fn look_further_is_offered_when_only_the_closest_were_given_and_none_was_used() {
+        let closest = |quoted: Vec<bool>| (record(SearchReport { closest_only: true, ..ran(12, 3) }), QuoteCheck { quoted, not_given: Vec::new(), quotes: 0 });
+        let (g, c) = closest(vec![false, false, false]);
+        assert!(offer_further(Some(&g), &c, "The oven goes on the left."));
+        // The reply quoted one of them: it had what it needed.
+        let (g, c) = closest(vec![false, true, false]);
+        assert!(!offer_further(Some(&g), &c, "On 2026-01-12 you said \"the oven goes on the left\"."));
+        // It quoted what it found and says the answer is not among it.
+        assert!(offer_further(Some(&g), &c, "The answer is not in the closest results. I did find \"the oven goes on the left\". You can ask me to look further."));
+        // Marked as used in the reply's own words.
+        let (mut g, c) = closest(vec![false, false, false]);
+        g.more.insert("used".into(), serde_json::Value::Bool(true));
+        assert!(!offer_further(Some(&g), &c, "The oven goes on the left."));
+        // Everything found was given: there is nothing further to look at.
+        let all = record(ran(3, 3));
+        assert!(!offer_further(Some(&all), &QuoteCheck { quoted: vec![false; 3], not_given: Vec::new(), quotes: 0 }, "You can ask me to look further."));
+        // No search ran, or no record.
+        assert!(!offer_further(None, &QuoteCheck { quoted: Vec::new(), not_given: Vec::new(), quotes: 0 }, "x"));
     }
 
     #[test]

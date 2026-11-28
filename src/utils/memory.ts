@@ -360,6 +360,9 @@ export interface TurnRoom {
   /** The local model file the reply will come from: what is found is
    *  sized to how fast it reads on this computer. */
   model?: string | null;
+  /** The person asked memory to look further: everything found is given,
+   *  whatever the wait. */
+  further?: boolean;
   online: boolean;
   /** The person's question before this one in the open conversation. */
   previousQuestion?: string | null;
@@ -415,6 +418,7 @@ export async function memoryForTurn(
       windowTokens: opts?.room?.windowTokens || null,
       roomTokens: opts?.room?.roomTokens ?? null,
       model: opts?.room?.model ?? null,
+      further: opts?.room?.further ?? false,
       online: opts?.room?.online ?? opts?.sharing?.online ?? false,
       previousQuestion: opts?.room?.previousQuestion ?? null,
       memoryShared: opts?.room?.memoryShared ?? opts?.sharing?.memoryShared ?? null,

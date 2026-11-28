@@ -18,8 +18,9 @@ export type ReplyOffer =
   | { messageId: string; kind: 'live-info'; plan: boolean }
   | { messageId: string; kind: 'dig-deeper'; pages: number }
   | { messageId: string; kind: 'build' }
+  | { messageId: string; kind: 'look-further'; say: string }
   | { messageId: string; kind: 'project-model'; text: string; bigger?: string; plan: boolean };
-export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper';
+export type ReplyOfferTarget = 'web-once' | 'web-on' | 'web-never' | 'live-online' | 'live-use-online' | 'live-never' | 'project-online' | 'project-local' | 'project-never' | 'build-install' | 'build-dismiss' | 'build-never' | 'dig-deeper' | 'look-further';
 
 interface ChatInputBarProps {
   /** See ReplyOffer: at most one, for the last reply, gone on the next message. */
@@ -179,7 +180,21 @@ export const ChatInputBar = component$<ChatInputBarProps>(({
           online model from the {showModelChip.value ? "list at the end of the Ask row" : "model list on each card in Your AIs"}.
         </Callout>
       )}
-      {offer && offerGo && (
+      {/* An open offer (utils/openOffer.ts): its words on a button, no
+          sentence; pressing sends them as the person's message. */}
+      {offer && offerGo && offer.kind === 'look-further' && (
+        <div class="mb-2 flex flex-wrap items-center gap-2 px-1" data-testid="open-offer" data-offer={offer.kind}>
+          <button
+            type="button"
+            class="px-3 py-1.5 text-xs rounded-lg bg-[var(--bg-button-secondary)] hover:bg-[var(--bg-button-secondary-hover)] border border-[var(--border-secondary)] text-[var(--text-button-secondary)] transition-colors"
+            data-testid="open-offer-take"
+            onClick$={() => offerGo(offer.messageId, 'look-further')}
+          >
+            {offer.say}
+          </button>
+        </div>
+      )}
+      {offer && offerGo && offer.kind !== 'look-further' && (
         <Callout intent={offer.kind === 'web-off' || offer.kind === 'live-info' ? 'warning' : 'info'} class="mb-2 !p-3">
           {offer.kind === 'web-off' && (
             <div class="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="web-offer">

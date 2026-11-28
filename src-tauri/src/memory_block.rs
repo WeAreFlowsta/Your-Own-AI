@@ -23,6 +23,9 @@ const TITLE_CHARS: usize = 60;
 const RAN: &str = "A search of all their conversations was run for this question.";
 const RULE: &str = "\nRule for questions about their past work: answer only from a line you can quote from these exchanges, and quote it with its date. If none of them answers the question, say plainly that you searched their conversations and found nothing that answers it, and say what you did find. Never answer about their past from guesswork.";
 /// What the rule is for, and what it leaves alone.
+/// The same rule when only the closest of what was found is given (held
+/// to the wait before the first word): "found nothing" would not be true.
+const RULE_CLOSEST: &str = "\nRule for questions about their past work: answer only from a line you can quote from these exchanges, and quote it with its date. Only the closest results of the search are shown here; it found more. If none of these answers the question, do not say that nothing was found: say plainly that the answer is not in the closest results, say what you did find, and say that they can ask you to look further. Never answer about their past from guesswork.";
 const RULE_SCOPE: &str = " The rule is for claims about what they said or did; general knowledge may be used when you say that it is general.";
 
 /// A message of a conversation, with its secrets already hidden.
@@ -204,6 +207,9 @@ pub(crate) struct About {
     pub withheld: u32,
     /// Older exchanges were left out because memory marks them replaced.
     pub replaced_left_out: bool,
+    /// Fewer were given than found so that the reply starts soon: the
+    /// rule then says so, and that the person can ask to look further.
+    pub closest_only: bool,
 }
 
 /// What was found, held to what the model can read within the wait before
@@ -333,7 +339,7 @@ pub(crate) fn block_with(found: &[Exchange], also_dated: &[String], about: &Abou
     if !about.absent_names.is_empty() {
         report.push_str(&format!(" No conversation anywhere mentions: {}.", about.absent_names.join(", ")));
     }
-    report.push_str(RULE);
+    report.push_str(if about.closest_only && n > 0 { RULE_CLOSEST } else { RULE });
     if wording.rule_scope {
         report.push_str(RULE_SCOPE);
     }
@@ -419,6 +425,10 @@ pub struct SearchReport {
     /// said so.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub partial_percent: Option<u8>,
+    /// Only the closest results were given, to keep the wait short, and
+    /// the block said so (the person can ask to look further).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closest_only: bool,
 }
 
 /// What a reply was given by memory: recorded with the reply, as pointers.
@@ -635,7 +645,7 @@ pub(crate) fn rebuild(record: &GivenRecord, at: &dyn Fn(&Ptr) -> Now, wording: W
         }
     }
     let s = &record.search;
-    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: !record.left_out.is_empty() };
+    let about = About { today: s.today.clone(), absent_names: s.absent_names.clone(), partial_percent: s.partial_percent, withheld: s.withheld, replaced_left_out: !record.left_out.is_empty(), closest_only: s.closest_only };
     // Everything that was given is here: put it together again, as given
     // (no budget: what was given already fit).
     let whole = deleted == 0 && not_here == 0;
@@ -900,6 +910,25 @@ mod tests {
             after: Some(ai(3, "Noted: Hartwell Mills from now on.")),
             score: 0.71,
         }
+    }
+
+    #[test]
+    fn a_block_of_the_closest_results_only_says_so_and_never_found_nothing() {
+        let w = Wording::shipped();
+        let about = About { closest_only: true, ..About::default() };
+        let b = block(&[mill(), mill()], &about, 1, 42_000, None, w);
+        assert_eq!((b.shown, b.found), (1, 2));
+        assert!(b.text.contains("Only the closest results of the search are shown here") && b.text.contains("look further"));
+        assert!(b.text.contains("do not say that nothing was found") && !b.text.contains("found nothing that answers it"));
+        // Everything given: the ordinary rule.
+        let b = block(&[mill()], &About::default(), 12, 42_000, None, w);
+        assert!(b.text.contains("found nothing that answers it") && !b.text.contains("look further"));
+        // Nothing shown at all: the report says none fits; no word of looking further.
+        let b = block(&[mill()], &about, 12, 10, None, w);
+        assert!(b.shown == 0 && !b.text.contains("look further"));
+        // The record carries it, and the panel's rebuild reads it back.
+        assert_eq!(serde_json::to_value(SearchReport { ran: true, ..Default::default() }).unwrap().get("closest_only"), None);
+        assert_eq!(serde_json::to_value(SearchReport { ran: true, closest_only: true, ..Default::default() }).unwrap()["closest_only"], true);
     }
 
     #[test]

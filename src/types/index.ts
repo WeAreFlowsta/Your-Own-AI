@@ -200,6 +200,10 @@ export interface Message {
   buildOffer?: boolean;
   /** Pages were read by the chat itself and the Build helper is installed: "Dig deeper" hands the question to the agent. */
   digDeeper?: boolean;
+  /** Memory gave this reply only the closest of what it found and the
+   *  reply used none of it: "Look further" asks the question (kept here)
+   *  again with everything found. */
+  lookFurther?: { question: string };
   turnMode?: TurnMode; // the mode this message was generated under — drives thinking-window presentation + live-thinking gate
   turnModeAuto?: boolean; // true when turnMode was chosen by the classifier (not a sparkle/default) — for the auto badge
   /** True when this turn routed to a web-search model: it researches for a
